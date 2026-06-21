@@ -18,6 +18,7 @@ openflux/
 ├── transport/
 │   ├── transport.go      # Transport interface
 │   └── yandex/           # Yandex Docs backend
+│   └── oneme/            # MAX Messenger backend
 ├── tunnel/
 │   ├── tunnel.go         # TCP tunnel core
 │   ├── endpoint.go       # Virtual NIC
@@ -55,8 +56,10 @@ Then point your browser to SOCKS5 proxy at localhost:1080.
 |------|---------|-------------|
 | `--client` | | Run as client |
 | `--exit-node` | | Run as exit node |
-| `--url` | `https://localhost` | Document URL |
 | `--socks5` | `:1080` | SOCKS5 listen addr |
+| `--url` | `https://localhost` | Document URL (Yandex Docs) |
+| `--maxToken` | `` | Token (Max) |
+| `--maxUid` | `` | User ID (Max) |
 | `--debug` | `false` | Verbose logging |
 | `--transport` | `yandex` | Transport backend |
 
