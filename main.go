@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+        _ "github.com/wlynxg/anet"
 	"openflux/socks5"
 	"openflux/transport"
 	"openflux/transport/oneme"
@@ -22,7 +23,8 @@ var (
 )
 
 func main() {
-	fmt.Print("written by p1neappleXpress\n")
+	//os.Setenv("GODEBUG", "netdns=go")
+        fmt.Print("written by p1neappleXpress\n")
 
 	exitNode := flag.Bool("exit-node", false, "Run as exit node (needs root)")
 	client := flag.Bool("client", false, "Run as client")
