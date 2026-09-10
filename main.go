@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-
         _ "github.com/wlynxg/anet"
 	"openflux/socks5"
 	"openflux/transport"
