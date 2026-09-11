@@ -133,3 +133,11 @@ sudo ./openflux --exit-node --url "YOUR_YANDEX_DOC_URL" --debug
 ## Дисклеймер
 
 Только для образовательного использования. Тестируйте на собственных машинах и сетях.
+
+## Поддержать проект
+
+**USDT · TRC20**
+
+```
+TXyTj5DqJNcQpd2yWwdVuXdabvQibXgLKC
+```
