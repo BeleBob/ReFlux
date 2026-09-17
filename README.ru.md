@@ -277,9 +277,10 @@ UDP могут использовать команду SOCKS5 `UDP ASSOCIATE`.
   port-unreachable без изменения firewall. Лимит — 256 трансляций; idle timeout —
   2 минуты (15 секунд для DNS). Сохранение исходного порта и endpoint-independent
   NAT/hole-punching не реализованы.
-- Изолированный Linux raw-socket/ICMP тест добавлен в CI, но локально не запускался.
-  До его прохождения используйте L4 для UDP. Для TCP прежние ограничения владения
-  портами и требования подавления RST не изменились.
+- Изолированный Linux raw-socket/ICMP тест проходит в GitHub Actions. Он проверяет
+  loopback в отдельном network namespace, включая конфликт с портом хоста и ложный
+  ICMP port-unreachable, но не заменяет Internet/PMTU canary. Для TCP прежние
+  ограничения владения портами и требования подавления RST не изменились.
 - На iOS non-DNS UDP сохраняет прежний fallback на TCP, пока приложение явно
   не вызовет `OpenFluxTunSetUDPEnabled(1)` для совместимого exit. При переходе
   на старый exit верните `0`. QUIC на физическом устройстве ещё не проверен.

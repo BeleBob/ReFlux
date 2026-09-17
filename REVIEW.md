@@ -33,9 +33,9 @@ prove the absence of bugs.
 1. Wire-v3 handshake is unauthenticated and not session-bound; replay/reconnect,
    downgrade resistance and MTU negotiation are unfinished. Disabled by default.
 2. Raw L3 UDP source-port reservation/translation was implemented on September 18
-   (see below), but the Linux raw-socket/ICMP canary has not run. No local Linux
-   runtime is installed here. Use L4 until that check passes. TCP port ownership
-   and RST suppression are unchanged.
+   (see below). Its isolated Linux raw-socket/ICMP test passes in GitHub Actions,
+   but only over loopback in a disposable network namespace. A real-network PMTU
+   canary has not run. TCP port ownership and RST suppression are unchanged.
 3. L3 fragmentation/ICMP/PMTU, process shutdown, legacy parser hardening, bounded
    legacy PacketTunnel associations and dial cancellation need follow-up.
 4. No physical mobile-device or real document-carrier DNS/QUIC test was run.
@@ -66,7 +66,7 @@ datagrams must pass. This is not a public-network/QUIC validation.
 Final post-review verification: all commands above completed successfully
 (exit 0) on macOS arm64 with Go 1.26.5. This includes the full test suite,
 race detector, vet, all five cross-builds, the iOS arm64 static library and
-whitespace checks. GitHub CI and privileged Linux runtime tests were not run.
+whitespace checks. GitHub CI had not run at the time of this first review.
 
 ## Follow-up — 2026-09-18
 
@@ -101,5 +101,8 @@ sudo unshare --net sh -ec 'ip link set lo up; OPENFLUX_L3_INTEGRATION=1 /tmp/ope
 
 Follow-up verification: full `go test ./... -count=1`, race suite, vet, all five
 cross-builds, iOS arm64 library and `git diff --check` passed (exit 0). The Linux
-integration-test binary also cross-compiled successfully, but was not executed.
-The Linux namespace CI check remains pending; no production-readiness claim.
+integration-test binary also cross-compiled successfully, but was not executed locally.
+Fork GitHub Actions run 35278672089 later passed all six jobs at commit
+`0a25fad`: tests, race detector, vet, five cross-build targets, and the isolated
+Linux raw UDP/ICMP network-namespace test. This closes the namespace-test gate,
+not the real-network, PMTU, fragmentation or physical-device gates.

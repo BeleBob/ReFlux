@@ -274,9 +274,10 @@ SOCKS5 `UDP ASSOCIATE` command.
   ICMP port-unreachable without firewall changes. There are at most 256 mappings;
   idle expiry is 2 minutes (15 seconds for DNS). Source-port preservation and
   endpoint-independent NAT/hole-punching are not provided.
-- The isolated Linux raw-socket/ICMP CI test has been added but not run locally.
-  Use L4 for UDP until that canary passes. TCP's existing raw-port ownership and
-  RST-suppression requirements are unchanged.
+- The isolated Linux raw-socket/ICMP test passes in GitHub Actions. It covers
+  loopback inside a disposable network namespace, including host-port conflicts
+  and false ICMP port-unreachable responses; it is not an Internet/PMTU canary.
+  TCP's existing raw-port ownership and RST-suppression requirements are unchanged.
 - iOS keeps the old TCP fallback for non-DNS UDP unless the app explicitly
   calls `OpenFluxTunSetUDPEnabled(1)` for a known UDP-capable exit. Reset it to
   `0` when switching to an older exit. Physical-device QUIC is not validated.
