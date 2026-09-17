@@ -17,6 +17,7 @@ type L3Exit struct {
 	trans   transport.Transport
 	backend L3Backend
 	ct      *conntrack
+	udp     *udpNAT
 
 	// counters
 	pktFromTransport atomic.Uint64
@@ -42,6 +43,7 @@ func New(trans transport.Transport) (*L3Exit, error) {
 		trans:   trans,
 		backend: backend,
 		ct:      newConntrack(),
+		udp:     newUDPNAT(backend.EgressIP()),
 	}, nil
 }
 
@@ -61,6 +63,7 @@ func (t *L3Exit) Start() error {
 
 func (t *L3Exit) Stop() error {
 	t.ct.Close()
+	t.udp.Close()
 	return t.backend.Close()
 }
 
@@ -85,6 +88,23 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 	if !ok {
 		t.dropNoFlowKey.Add(1)
 		utils.Debugf("[L3] drop: no flow key")
+		return
+	}
+	if k.srcIP != ipU32(clientIPBytes) {
+		t.dropNotForUs.Add(1)
+		return
+	}
+	if k.proto == 17 {
+		if !validUDPChecksums(pkt) {
+			t.dropBadIPv4.Add(1)
+			return
+		}
+		if err := t.udp.send(pkt, k, t.backend.Send); err != nil {
+			t.sendToNetErrors.Add(1)
+			utils.Debugf("[L3] UDP send to network failed: %v", err)
+			return
+		}
+		t.pktToNetwork.Add(1)
 		return
 	}
 	rewriteSNAT(pkt, t.backend.EgressIP())
@@ -134,6 +154,18 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 	k, ok := extractFlowKey(pkt)
 	if !ok {
 		t.dropNoFlowKey.Add(1)
+		return
+	}
+	if k.proto == 17 {
+		if !t.udp.translateReply(pkt, k) {
+			t.dropNoConntrack.Add(1)
+			return
+		}
+		if err := t.trans.Send(pkt); err != nil {
+			t.sendToClientErrs.Add(1)
+			return
+		}
+		t.pktToTransport.Add(1)
 		return
 	}
 	rk := reverseKey(k)

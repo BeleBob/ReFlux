@@ -188,3 +188,22 @@ func transportChecksum(segment []byte, src, dst [4]byte, proto uint8) uint16 {
 	}
 	return uint16(^sum)
 }
+
+// Call only after extractFlowKey validated the IPv4 and UDP lengths. Tunnel
+// input has no checksum-offload metadata, so validate before applying SNAT.
+// Do not apply this to Linux raw receive without accounting for offload (e.g.
+// loopback UDP can arrive with a partial checksum).
+func validUDPChecksums(pkt []byte) bool {
+	ihl := int(pkt[0]&0x0f) * 4
+	if onesComplementSum(pkt[:ihl]) != 0 {
+		return false
+	}
+	udp := pkt[ihl:]
+	if binary.BigEndian.Uint16(udp[6:8]) == 0 {
+		return true // IPv4 explicitly permits an omitted UDP checksum.
+	}
+	var src, dst [4]byte
+	copy(src[:], pkt[12:16])
+	copy(dst[:], pkt[16:20])
+	return transportChecksum(udp[:binary.BigEndian.Uint16(udp[4:6])], src, dst, 17) == 0
+}

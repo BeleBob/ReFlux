@@ -32,9 +32,10 @@ prove the absence of bugs.
 
 1. Wire-v3 handshake is unauthenticated and not session-bound; replay/reconnect,
    downgrade resistance and MTU negotiation are unfinished. Disabled by default.
-2. Raw L3 UDP needs source-port reservation/translation to avoid host collisions
-   and kernel ICMP port-unreachable. No privileged Linux test environment was
-   available here. Use L4 for UDP until this and a Linux canary are complete.
+2. Raw L3 UDP source-port reservation/translation was implemented on September 18
+   (see below), but the Linux raw-socket/ICMP canary has not run. No local Linux
+   runtime is installed here. Use L4 until that check passes. TCP port ownership
+   and RST suppression are unchanged.
 3. L3 fragmentation/ICMP/PMTU, process shutdown, legacy parser hardening, bounded
    legacy PacketTunnel associations and dial cancellation need follow-up.
 4. No physical mobile-device or real document-carrier DNS/QUIC test was run.
@@ -66,3 +67,39 @@ Final post-review verification: all commands above completed successfully
 (exit 0) on macOS arm64 with Go 1.26.5. This includes the full test suite,
 race detector, vet, all five cross-builds, the iOS arm64 static library and
 whitespace checks. GitHub CI and privileged Linux runtime tests were not run.
+
+## Follow-up — 2026-09-18
+
+Added endpoint-dependent UDP NAT with real kernel port reservations (port 0,
+no address-reuse options), reverse translation, 256-flow cap, expiry and Close
+cleanup. Reserves a free host port even when the original client port is occupied.
+Replies must match the exact remote address and port. Invalid tunnel-input UDP
+checksums and source addresses other than the configured tunnel client are dropped.
+Linux raw-receive checksum/offload normalization remains outside this change;
+naively checking raw bytes would reject partial-checksum loopback traffic.
+
+Why reservations are required: Linux delivers packets to both raw sockets and
+the kernel protocol handler, not exclusively to the raw socket
+([raw(7)](https://man7.org/linux/man-pages/man7/raw.7.html)). The UDP handler's
+no-socket path generates ICMP port-unreachable
+([Linux UDP implementation](https://github.com/torvalds/linux/blob/master/net/ipv4/udp.c)).
+The reservation keeps a matching UDP socket alive; its duplicate receive queue
+is bounded to avoid an unbounded queue or a reader goroutine per flow.
+
+Regression checks cover round-trip checksums, endpoint isolation, mapping reuse,
+expiry, resource limits, send/bind failures, actual OS port ownership/release,
+concurrent shutdown and the L3 handler integration. Linux-only `TestLinuxRawUDPNAT`
+adds a real raw/socket echo, an occupied host source port, 32 replies (including
+empty and 1200-byte datagrams), ICMP capture and shutdown. CI runs it as root
+inside a disposable network namespace, without Internet or firewall changes.
+
+Manual Linux invocation after compiling `go test -race -c -o /tmp/openflux-l3.test ./tunnel/l3`:
+
+```sh
+sudo unshare --net sh -ec 'ip link set lo up; OPENFLUX_L3_INTEGRATION=1 /tmp/openflux-l3.test -test.run "^TestLinuxRawUDPNAT$" -test.v -test.timeout=30s'
+```
+
+Follow-up verification: full `go test ./... -count=1`, race suite, vet, all five
+cross-builds, iOS arm64 library and `git diff --check` passed (exit 0). The Linux
+integration-test binary also cross-compiled successfully, but was not executed.
+The Linux namespace CI check remains pending; no production-readiness claim.

@@ -19,6 +19,14 @@ jobs:
       - run: go test ./... -count=1
       - run: go test -race ./... -count=1
       - run: go vet ./...
+      - name: Compile isolated Linux raw UDP test
+        run: go test -race -c -o "$RUNNER_TEMP/openflux-l3.test" ./tunnel/l3
+      - name: Check raw UDP NAT in a disposable network namespace
+        run: |
+          sudo unshare --net sh -ec '
+            ip link set lo up
+            OPENFLUX_L3_INTEGRATION=1 "$1" -test.run "^TestLinuxRawUDPNAT$" -test.v -test.timeout=30s
+          ' sh "$RUNNER_TEMP/openflux-l3.test"
 
   cross-build:
     runs-on: ubuntu-latest

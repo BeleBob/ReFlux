@@ -268,10 +268,15 @@ SOCKS5 `UDP ASSOCIATE` command.
 - The L3 backend drops fragmented IPv4 datagrams. An MTU of 1280 does not
   prevent a large application datagram from being fragmented. Reassembly and
   ICMP/PMTU forwarding are not implemented.
-- Linux raw L3 UDP still needs source-port reservation/translation: receiving
-  a raw packet does not stop the kernel from generating ICMP port-unreachable
-  for an unbound UDP port. Host-port collisions are also unresolved. Use L4
-  for UDP; do not deploy raw L3 UDP before these issues and a Linux canary pass.
+- Linux raw L3 UDP reserves a kernel-selected source port per remote endpoint
+  using a real UDP socket and restores the client's port on return. This avoids
+  taking ports owned by host applications and is intended to prevent kernel
+  ICMP port-unreachable without firewall changes. There are at most 256 mappings;
+  idle expiry is 2 minutes (15 seconds for DNS). Source-port preservation and
+  endpoint-independent NAT/hole-punching are not provided.
+- The isolated Linux raw-socket/ICMP CI test has been added but not run locally.
+  Use L4 for UDP until that canary passes. TCP's existing raw-port ownership and
+  RST-suppression requirements are unchanged.
 - iOS keeps the old TCP fallback for non-DNS UDP unless the app explicitly
   calls `OpenFluxTunSetUDPEnabled(1)` for a known UDP-capable exit. Reset it to
   `0` when switching to an older exit. Physical-device QUIC is not validated.
