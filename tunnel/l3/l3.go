@@ -81,16 +81,19 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 		return
 	}
 
-	rewriteSNAT(pkt, t.backend.EgressIP())
-	fixChecksums(pkt)
-
 	k, ok := extractFlowKey(pkt)
 	if !ok {
 		t.dropNoFlowKey.Add(1)
 		utils.Debugf("[L3] drop: no flow key")
 		return
 	}
-	t.ct.Insert(k)
+	rewriteSNAT(pkt, t.backend.EgressIP())
+	fixChecksums(pkt)
+	k.srcIP = ipU32(t.backend.EgressIP())
+	if !t.ct.Insert(k) {
+		t.dropNoConntrack.Add(1)
+		return
+	}
 	if isTCPClosing(pkt) {
 		t.ct.Touch(k, true)
 	}
@@ -159,7 +162,12 @@ func (t *L3Exit) statsLoop() {
 
 	var lastFromTr, lastToNet, lastFromNet, lastToCli uint64
 
-	for range tick.C {
+	for {
+		select {
+		case <-t.ct.stop:
+			return
+		case <-tick.C:
+		}
 		fromTr := t.pktFromTransport.Load()
 		toNet := t.pktToNetwork.Load()
 		fromNet := t.pktFromNetwork.Load()

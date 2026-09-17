@@ -3,16 +3,20 @@ package l3
 import (
 	"fmt"
 	"net"
+	"sync"
 )
 
 var errBackendUnavailable = fmt.Errorf("l3: no raw packet backend on this platform")
 
 var localIPOverride [4]byte
 var hasLocalIPOverride bool
+var localIPMu sync.Mutex
 
 // SetLocalIP configures the source address used by the L3 backend. Passing an
 // empty string restores automatic egress address detection.
 func SetLocalIP(value string) error {
+	localIPMu.Lock()
+	defer localIPMu.Unlock()
 	if value == "" {
 		hasLocalIPOverride = false
 		localIPOverride = [4]byte{}

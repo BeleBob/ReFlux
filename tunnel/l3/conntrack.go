@@ -11,6 +11,7 @@ const (
 	ctTimeoutUDP         = 2 * time.Minute
 	ctTimeoutDNS         = 15 * time.Second
 	ctSweepInterval      = 30 * time.Second
+	ctMaxEntries         = 65536
 )
 
 type ctEntry struct {
@@ -34,15 +35,24 @@ func newConntrack() *conntrack {
 	return ct
 }
 
-func (c *conntrack) Insert(k flowKey) {
+func (c *conntrack) Insert(k flowKey) bool {
 	now := time.Now()
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.stop:
+		return false
+	default:
+	}
 	if e, ok := c.entries[k]; ok {
 		e.lastSeen = now
 	} else {
+		if len(c.entries) >= ctMaxEntries {
+			return false
+		}
 		c.entries[k] = &ctEntry{lastSeen: now}
 	}
-	c.mu.Unlock()
+	return true
 }
 
 func (c *conntrack) Touch(k flowKey, dying bool) {
@@ -58,7 +68,10 @@ func (c *conntrack) Touch(k flowKey, dying bool) {
 
 func (c *conntrack) Exists(k flowKey) bool {
 	c.mu.RLock()
-	_, ok := c.entries[k]
+	e, ok := c.entries[k]
+	if ok {
+		ok = time.Since(e.lastSeen) <= flowTimeout(k, e)
+	}
 	c.mu.RUnlock()
 	return ok
 }
@@ -86,17 +99,23 @@ func (c *conntrack) sweep() {
 	now := time.Now()
 	c.mu.Lock()
 	for k, e := range c.entries {
-		timeout := ctTimeoutEstablished
-		if k.proto == 17 && (k.srcPort == 53 || k.dstPort == 53) {
-			timeout = ctTimeoutDNS
-		} else if k.proto == 17 {
-			timeout = ctTimeoutUDP
-		} else if e.dying {
-			timeout = ctTimeoutClosing
-		}
+		timeout := flowTimeout(k, e)
 		if now.Sub(e.lastSeen) > timeout {
 			delete(c.entries, k)
 		}
 	}
 	c.mu.Unlock()
+}
+
+func flowTimeout(k flowKey, e *ctEntry) time.Duration {
+	if k.proto == 17 {
+		if k.srcPort == 53 || k.dstPort == 53 {
+			return ctTimeoutDNS
+		}
+		return ctTimeoutUDP
+	}
+	if e.dying {
+		return ctTimeoutClosing
+	}
+	return ctTimeoutEstablished
 }

@@ -119,11 +119,8 @@ func TestBatchedTransportCoalescesBurstIntoOneMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(pkts) != n+1 {
-		t.Fatalf("expected capability record + %d packets in the batch, got %d", n, len(pkts))
-	}
-	if _, _, ok := decodeCapabilityRecord(pkts[0]); !ok {
-		t.Fatal("first packet is not the backwards-safe capability record")
+	if len(pkts) != n {
+		t.Fatalf("expected exactly %d data packets without injected control records, got %d", n, len(pkts))
 	}
 }
 
@@ -145,6 +142,7 @@ func TestBatchedTransportStaysV2WithoutPeerAdvertisement(t *testing.T) {
 }
 
 func TestBatchedTransportUpgradesAfterPeerAdvertisement(t *testing.T) {
+	t.Setenv("OPENFLUX_EXPERIMENTAL_WIRE_V3", "1")
 	inner := &fakeTransport{}
 	bt := NewBatchedTransport(inner)
 	bt.lingerMs = 1

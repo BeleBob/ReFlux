@@ -19,11 +19,15 @@ type rawBackend struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 	recvMu    sync.Mutex
+	fdMu      sync.RWMutex
 }
 
 func newBackend() (L3Backend, error) {
+	localIPMu.Lock()
 	egress := localIPOverride
-	if !hasLocalIPOverride {
+	hasOverride := hasLocalIPOverride
+	localIPMu.Unlock()
+	if !hasOverride {
 		var err error
 		egress, err = detectEgressIPv4()
 		if err != nil {
@@ -56,6 +60,21 @@ func newBackend() (L3Backend, error) {
 		}
 		syscall.SetsockoptInt(recvFd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 16*1024*1024)
 		recvFds = append(recvFds, recvFd)
+		// close(2) alone does not reliably wake a blocking recvfrom on Linux.
+		if err := syscall.SetsockoptTimeval(recvFd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &syscall.Timeval{Sec: 1}); err != nil {
+			for _, fd := range recvFds {
+				_ = syscall.Close(fd)
+			}
+			_ = syscall.Close(sendFd)
+			return nil, fmt.Errorf("l3: receive timeout: %w", err)
+		}
+	}
+	if err := syscall.SetsockoptTimeval(sendFd, syscall.SOL_SOCKET, syscall.SO_SNDTIMEO, &syscall.Timeval{Sec: 1}); err != nil {
+		for _, fd := range recvFds {
+			_ = syscall.Close(fd)
+		}
+		_ = syscall.Close(sendFd)
+		return nil, fmt.Errorf("l3: send timeout: %w", err)
 	}
 
 	b := &rawBackend{
@@ -71,6 +90,18 @@ func newBackend() (L3Backend, error) {
 func (b *rawBackend) EgressIP() [4]byte { return b.egress }
 
 func (b *rawBackend) Send(pkt []byte) error {
+	var ok bool
+	pkt, ok = sliceIPv4(pkt)
+	if !ok {
+		return fmt.Errorf("l3: invalid IPv4 packet")
+	}
+	b.fdMu.RLock()
+	defer b.fdMu.RUnlock()
+	select {
+	case <-b.closed:
+		return net.ErrClosed
+	default:
+	}
 	var dst [4]byte
 	copy(dst[:], pkt[16:20])
 	addr := &syscall.SockaddrInet4{Addr: dst}
@@ -86,12 +117,15 @@ func (b *rawBackend) Recv(cb func([]byte)) {
 func (b *rawBackend) recvLoop(fd int, cb func([]byte)) {
 	buf := make([]byte, 65535)
 	for {
+		b.fdMu.RLock()
 		select {
 		case <-b.closed:
+			b.fdMu.RUnlock()
 			return
 		default:
 		}
 		n, _, err := syscall.Recvfrom(fd, buf, 0)
+		b.fdMu.RUnlock()
 		if err != nil {
 			if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
 				continue
@@ -122,6 +156,8 @@ func (b *rawBackend) recvLoop(fd int, cb func([]byte)) {
 func (b *rawBackend) Close() error {
 	b.closeOnce.Do(func() {
 		close(b.closed)
+		b.fdMu.Lock()
+		defer b.fdMu.Unlock()
 		syscall.Close(b.sendFd)
 		for _, fd := range b.recvFds {
 			syscall.Close(fd)

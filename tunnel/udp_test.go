@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"sync"
@@ -42,6 +43,12 @@ func (p *pairedTransport) IsConnected() bool               { return true }
 func (p *pairedTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
 
 func TestL4UDPDatagramRoundTrip(t *testing.T) {
+	for _, codec := range []string{"raw", "batched", "batched-encrypted", "legacy-encrypted"} {
+		t.Run(codec, func(t *testing.T) { testL4UDPDatagramRoundTrip(t, codec) })
+	}
+}
+
+func testL4UDPDatagramRoundTrip(t *testing.T, codec string) {
 	localIP := testLANIPv4(t)
 
 	echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
@@ -60,11 +67,36 @@ func TestL4UDPDatagramRoundTrip(t *testing.T) {
 		}
 	}()
 
-	clientTransport, exitTransport := newTransportPair()
+	a, b := newTransportPair()
+	wrap := func(inner transport.Transport, exit bool) transport.Transport {
+		switch codec {
+		case "batched", "batched-encrypted":
+			inner = transport.NewBatchedTransport(inner)
+		case "legacy-encrypted":
+			inner = transport.NewCompressedTransport(inner)
+		}
+		if codec == "batched-encrypted" || codec == "legacy-encrypted" {
+			var err error
+			inner, err = transport.NewEncryptedTransport(inner, "integration-test-secret-only", t.Name(), exit)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		return inner
+	}
+	clientTransport, exitTransport := wrap(a, false), wrap(b, true)
 	exit := NewTCPTunnelMode(exitTransport, true, ExitModeL4)
 	client := NewTCPTunnelMode(clientTransport, false, ExitModeL4)
 	defer exit.Close()
 	defer client.Close()
+	if err := exitTransport.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer exitTransport.Stop()
+	if err := clientTransport.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer clientTransport.Stop()
 
 	dest := net.JoinHostPort(localIP.String(), fmt.Sprintf("%d", echo.LocalAddr().(*net.UDPAddr).Port))
 	conn, err := client.DialUDP(dest)
@@ -73,17 +105,19 @@ func TestL4UDPDatagramRoundTrip(t *testing.T) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	want := []byte("openflux-udp")
-	if _, err := conn.Write(want); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	got := make([]byte, 128)
-	n, err := conn.Read(got)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if string(got[:n]) != string(want) {
-		t.Fatalf("got %q, want %q", got[:n], want)
+	for _, size := range []int{0, 12, 1200} {
+		want := bytes.Repeat([]byte{0xa5}, size)
+		if _, err := conn.Write(want); err != nil {
+			t.Fatalf("write %d: %v", size, err)
+		}
+		got := make([]byte, 2048)
+		n, err := conn.Read(got)
+		if err != nil {
+			t.Fatalf("read %d: %v", size, err)
+		}
+		if !bytes.Equal(got[:n], want) {
+			t.Fatalf("datagram %d was corrupted (received %d bytes)", size, n)
+		}
 	}
 }
 

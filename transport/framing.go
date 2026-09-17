@@ -20,6 +20,8 @@ const (
 	batchFlagZstd      = 0x01
 	wireTypeData       = 0x01
 	wireV3HeaderLen    = 20
+	maxFrameBytes      = 1 << 20
+	maxFrameRecords    = 1024
 )
 
 type wireMetadata struct {
@@ -28,10 +30,8 @@ type wireMetadata struct {
 	sequence  uint64
 }
 
-// Capabilities are exchanged in a backwards-safe v2 control record before
-// either peer starts emitting v3 frames. Older peers pass the record to their
-// IP stack, where it is discarded because it is not an IP packet, and the new
-// peer therefore continues using v2 indefinitely.
+// Capabilities belong to the experimental negotiation protocol. They are not
+// authenticated or session-bound; do not enable it on untrusted channels.
 type Capabilities uint32
 
 const (
@@ -137,6 +137,9 @@ func decodeBatch(data []byte) ([][]byte, error) {
 
 func decodeBatchFrame(data []byte) ([][]byte, wireMetadata, error) {
 	var metadata wireMetadata
+	if len(data) > maxFrameBytes+wireV3HeaderLen {
+		return nil, metadata, fmt.Errorf("batch frame exceeds size limit")
+	}
 	if len(data) < 2 {
 		return nil, metadata, fmt.Errorf("batch frame too short: %d bytes", len(data))
 	}
@@ -147,7 +150,7 @@ func decodeBatchFrame(data []byte) ([][]byte, wireMetadata, error) {
 		if len(data) < wireV3HeaderLen {
 			return nil, metadata, fmt.Errorf("v3 frame too short: %d bytes", len(data))
 		}
-		if data[2] != wireTypeData {
+		if data[2] != wireTypeData || data[3] != 0 {
 			return nil, metadata, fmt.Errorf("unknown v3 frame type 0x%02x", data[2])
 		}
 		headerLen = wireV3HeaderLen
@@ -175,8 +178,14 @@ func decodeBatchFrame(data []byte) ([][]byte, wireMetadata, error) {
 		}
 	}
 
+	if len(framed) > maxFrameBytes {
+		return nil, metadata, fmt.Errorf("decoded batch exceeds size limit")
+	}
 	var pkts [][]byte
 	for len(framed) > 0 {
+		if len(pkts) >= maxFrameRecords {
+			return nil, metadata, fmt.Errorf("batch exceeds record limit")
+		}
 		if len(framed) < 2 {
 			return nil, metadata, fmt.Errorf("truncated length prefix")
 		}
@@ -204,7 +213,7 @@ func encodeCapabilityRecord(caps Capabilities, ack bool) []byte {
 }
 
 func decodeCapabilityRecord(p []byte) (Capabilities, bool, bool) {
-	if len(p) != 10 || string(p[:5]) != string(capabilityMagic[:]) {
+	if len(p) != 10 || string(p[:5]) != string(capabilityMagic[:]) || p[5] > 1 {
 		return 0, false, false
 	}
 	return Capabilities(binary.BigEndian.Uint32(p[6:])), p[5]&1 != 0, true

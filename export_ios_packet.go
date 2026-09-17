@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -33,7 +34,7 @@ import (
 // raw IPv4 TCP and UDP packets straight over the transport — no gVisor stack on
 // the client, which keeps the extension well under its memory cap. UDP DNS
 // retains the existing local DNS-over-TLS path for compatibility with older
-// TCP-only exits; all other UDP is forwarded through UDP-capable exits.
+// TCP-only exits. Other UDP requires explicit opt-in for a UDP-capable exit.
 //
 // Uses startOK / start* codes and dotServers from export_ios.go.
 
@@ -106,12 +107,20 @@ func OpenFluxStartPacketTunnel(transportType, url, maxToken, maxUid *C.char) (rc
 	return C.int(startOK)
 }
 
+var ptUDPEnabled atomic.Bool
+
+// OpenFluxTunSetUDPEnabled enables non-DNS UDP for a known UDP-capable exit.
+// Disabled by default: legacy exits otherwise silently blackhole QUIC traffic.
+//
+//export OpenFluxTunSetUDPEnabled
+func OpenFluxTunSetUDPEnabled(enabled C.int) { ptUDPEnabled.Store(enabled != 0) }
+
 // OpenFluxTunWritePacket forwards one device IPv4 TCP or UDP packet.
 //
 //export OpenFluxTunWritePacket
 func OpenFluxTunWritePacket(buf *C.char, length C.int) {
 	defer func() { _ = recover() }() // never let a bad packet crash the extension
-	if buf == nil || length < 20 {
+	if buf == nil || length < 20 || length > 65535 {
 		return
 	}
 	ptMu.Lock()
@@ -125,19 +134,33 @@ func OpenFluxTunWritePacket(buf *C.char, length C.int) {
 	if pkt[0]>>4 != 4 { // IPv4 only
 		return
 	}
+	ihl := int(pkt[0]&0x0f) * 4
+	total := int(binary.BigEndian.Uint16(pkt[2:4]))
+	if ihl < 20 || total < ihl || total > len(pkt) {
+		return
+	}
+	pkt = pkt[:total]
 	switch pkt[9] { // protocol
 	case 6: // TCP
 		t.Send(pkt)
 	case 17: // UDP
-		ihl := int(pkt[0]&0x0f) * 4
-		if len(pkt) < ihl+8 {
+		if len(pkt) < ihl+8 || binary.BigEndian.Uint16(pkt[6:8])&0x3fff != 0 {
+			return
+		}
+		udpLen := int(binary.BigEndian.Uint16(pkt[ihl+4 : ihl+6]))
+		if udpLen < 8 || udpLen > len(pkt)-ihl {
 			return
 		}
 		dstPort := binary.BigEndian.Uint16(pkt[ihl+2 : ihl+4])
 		if dstPort != 53 {
-			t.Send(pkt)
+			if ptUDPEnabled.Load() {
+				_ = t.Send(pkt)
+			} else {
+				sendICMPPortUnreachable(pkt, outQ)
+			}
 			return
 		}
+		pkt = pkt[:ihl+udpLen]
 		select {
 		case dnsSem <- struct{}{}:
 			go func() { defer func() { <-dnsSem }(); handleDNSPacket(pkt, outQ) }()
@@ -148,10 +171,33 @@ func OpenFluxTunWritePacket(buf *C.char, length C.int) {
 
 var dnsSem = make(chan struct{}, 16)
 
+func sendICMPPortUnreachable(orig []byte, outQ chan []byte) {
+	ihl := int(orig[0]&0x0f) * 4
+	quote := orig[:ihl+8]
+	icmp := make([]byte, 8+len(quote))
+	icmp[0], icmp[1] = 3, 3
+	copy(icmp[8:], quote)
+	binary.BigEndian.PutUint16(icmp[2:4], network.IPChecksum(icmp))
+	pkt := make([]byte, 20+len(icmp))
+	pkt[0], pkt[8], pkt[9] = 0x45, 64, 1
+	binary.BigEndian.PutUint16(pkt[2:4], uint16(len(pkt)))
+	copy(pkt[12:16], orig[16:20])
+	copy(pkt[16:20], orig[12:16])
+	binary.BigEndian.PutUint16(pkt[10:12], network.IPChecksum(pkt[:20]))
+	copy(pkt[20:], icmp)
+	select {
+	case outQ <- pkt:
+	default:
+	}
+}
+
 // OpenFluxTunReadPacket blocks for the next packet destined to the device.
 //
 //export OpenFluxTunReadPacket
 func OpenFluxTunReadPacket(buf *C.char, max C.int) C.int {
+	if buf == nil || max <= 0 {
+		return 0
+	}
 	ptMu.Lock()
 	outQ := ptOutQ
 	ctx := ptCtx
@@ -216,9 +262,14 @@ func handleDNSPacket(req []byte, outQ chan []byte) {
 	}
 
 	udpLen := 8 + len(answer)
+	if udpLen > 65535-20 {
+		return
+	}
+	// Build a fresh minimal IPv4 header; do not advertise uncopied options.
+	ihl = 20
 	total := ihl + udpLen
 	resp := make([]byte, total)
-	resp[0] = req[0]
+	resp[0] = 0x45
 	resp[1] = req[1]
 	binary.BigEndian.PutUint16(resp[2:4], uint16(total))
 	resp[8] = 64

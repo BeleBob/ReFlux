@@ -123,12 +123,12 @@ RSTs generated locally by the exit-node kernel.
 - **Batched + zstd codec** - coalesces many tunnel packets into a single
   transport message. Fewer channel messages, higher throughput. See
   `transport/batched.go` and `transport/framing.go`.
-- **IPv4 UDP** - DNS, QUIC and other UDP traffic are supported by both exit
-  backends. SOCKS5 clients use RFC 1928 `UDP ASSOCIATE`.
-- **Negotiated wire v3** - new batched peers advertise capabilities inside a
-  backwards-safe v2 record and switch to v3 only after detecting another v3
-  peer. V3 frames carry a session ID, sequence number and validated payload
-  length. Connections to older batched peers remain on v2.
+- **IPv4 UDP** - L4 forwarding and SOCKS5 `UDP ASSOCIATE` have local echo
+  coverage. Linux raw L3 UDP remains experimental; see the limitations below.
+- **Experimental wire v3** - disabled by default; batched mode sends v2 without
+  capability records. `OPENFLUX_EXPERIMENTAL_WIRE_V3=1` enables the prototype
+  on both peers for isolated tests only. Its handshake is not authenticated or
+  session-bound and does not provide replay protection or safe reconnects.
 - **Two exit backends** - `l3` (raw SNAT/DNAT) and `l4` (gVisor proxy).
   See [Exit-node backends](#exit-node-backends).
 - **macOS utun client** - `--inbound=tun` (default on macOS). Creates a utun
@@ -265,9 +265,16 @@ SOCKS5 `UDP ASSOCIATE` command.
 ### UDP limitations
 
 - UDP is IPv4-only for now.
-- Fragmented IPv4 datagrams are dropped because non-initial fragments do not
-  contain the ports required by conntrack. Keep the tunnel MTU at 1280 until
-  path-MTU discovery/reassembly is implemented.
+- The L3 backend drops fragmented IPv4 datagrams. An MTU of 1280 does not
+  prevent a large application datagram from being fragmented. Reassembly and
+  ICMP/PMTU forwarding are not implemented.
+- Linux raw L3 UDP still needs source-port reservation/translation: receiving
+  a raw packet does not stop the kernel from generating ICMP port-unreachable
+  for an unbound UDP port. Host-port collisions are also unresolved. Use L4
+  for UDP; do not deploy raw L3 UDP before these issues and a Linux canary pass.
+- iOS keeps the old TCP fallback for non-DNS UDP unless the app explicitly
+  calls `OpenFluxTunSetUDPEnabled(1)` for a known UDP-capable exit. Reset it to
+  `0` when switching to an older exit. Physical-device QUIC is not validated.
 - Most document/WebSocket transports are reliable and ordered. UDP works over
   them, but packet loss in the carrier can still cause head-of-line blocking;
   this is not equivalent to a native datagram transport.
@@ -282,9 +289,9 @@ LZ4 codec, pass `--codec=legacy`:
 ./openflux --role=client --codec=legacy ...
 ```
 
-**Important:** batched and legacy LZ4 codecs remain incompatible. Within the
-batched codec, v3 capability negotiation is backwards-compatible with v2 and
-automatically falls back when the peer does not advertise v3.
+**Important:** batched and legacy LZ4 codecs remain incompatible. Default
+batched mode remains v2. Experimental v3 has no verified backward-compatibility
+or reconnect guarantee and must not be enabled on untrusted channels.
 
 ### Encryption (optional)
 

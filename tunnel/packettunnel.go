@@ -129,17 +129,24 @@ func (pt *PacketTunnel) handleUDP(r *udp.ForwarderRequest) bool {
 			return true
 		}
 		utils.SafeGo("pkt.udp", func() {
+			refresh := func() {
+				deadline := time.Now().Add(udpIdleTimeout)
+				_ = conn.SetReadDeadline(deadline)
+				_ = remote.SetReadDeadline(deadline)
+			}
+			refresh()
 			var once sync.Once
 			closeBoth := func() { _ = conn.Close(); _ = remote.Close() }
 			pump := func(dst, src net.Conn) {
 				defer once.Do(closeBoth)
 				buf := make([]byte, 65535)
 				for {
-					_ = src.SetReadDeadline(time.Now().Add(udpIdleTimeout))
 					n, err := src.Read(buf)
 					if err != nil {
 						return
 					}
+					refresh()
+					_ = dst.SetWriteDeadline(time.Now().Add(10 * time.Second))
 					if _, err := dst.Write(buf[:n]); err != nil {
 						return
 					}
@@ -220,7 +227,9 @@ func (pt *PacketTunnel) ReadOutbound(ctx context.Context) []byte {
 	if p == nil {
 		return nil
 	}
-	data := p.ToView().ToSlice()
+	view := p.ToView()
+	data := append([]byte(nil), view.ToSlice()...)
+	view.Release()
 	p.DecRef()
 	return data
 }

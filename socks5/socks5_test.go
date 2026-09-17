@@ -40,6 +40,49 @@ func TestMakeUDPResponse(t *testing.T) {
 	}
 }
 
+func TestIPv6AddressEncoding(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 443}
+	packet := makeUDPResponse(addr, []byte("ipv6"))
+	got, payload, err := parseUDPRequest(packet)
+	if err != nil || got != "[2001:db8::1]:443" || string(payload) != "ipv6" {
+		t.Fatalf("IPv6 roundtrip: %s %q %v", got, payload, err)
+	}
+	var reply bytes.Buffer
+	if err := writeReply(&reply, 0, addr); err != nil {
+		t.Fatal(err)
+	}
+	if reply.Bytes()[3] != 4 || reply.Len() != 22 {
+		t.Fatalf("bad IPv6 reply: %x", reply.Bytes())
+	}
+}
+
+type tcpOnlyDialer struct{}
+
+func (tcpOnlyDialer) DialTCP(address string) (net.Conn, error) { return nil, net.ErrClosed }
+
+func TestTCPOnlyDialerRejectsUDP(t *testing.T) {
+	s := NewSOCKS5Server("", tcpOnlyDialer{})
+	server, client := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() { defer close(done); s.handleConnection(server) }()
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = client.Write([]byte{5, 1, 0})
+	var method [2]byte
+	if _, err := io.ReadFull(client, method[:]); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = client.Write([]byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0})
+	var reply [10]byte
+	if _, err := io.ReadFull(client, reply[:]); err != nil {
+		t.Fatal(err)
+	}
+	if reply[1] != 7 {
+		t.Fatalf("reply=%x", reply)
+	}
+	<-done
+}
+
 func TestUDPAssociateRoundTrip(t *testing.T) {
 	echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

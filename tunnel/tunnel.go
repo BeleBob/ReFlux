@@ -62,6 +62,7 @@ type TCPTunnel struct {
 	packetCount atomic.Uint64
 	stopOnce    sync.Once
 	stopCh      chan struct{}
+	udpFlows    atomic.Int32
 }
 
 // TCP buffer size range for gvisor stacks.
@@ -152,12 +153,17 @@ func (t *TCPTunnel) setupExitNodeProxy(tunnelNIC tcpip.NICID) {
 const udpIdleTimeout = 2 * time.Minute
 
 func (t *TCPTunnel) handleExitUDP(r *udp.ForwarderRequest) bool {
+	if t.udpFlows.Add(1) > 256 {
+		t.udpFlows.Add(-1)
+		return true
+	}
 	id := r.ID()
 	dest := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
 
 	var wq waiter.Queue
 	ep, tErr := r.CreateEndpoint(&wq)
 	if tErr != nil {
+		t.udpFlows.Add(-1)
 		utils.Debugf("[EXIT] UDP CreateEndpoint %s: %v", dest, tErr)
 		return true
 	}
@@ -166,10 +172,18 @@ func (t *TCPTunnel) handleExitUDP(r *udp.ForwarderRequest) bool {
 	if err != nil {
 		utils.Debugf("[EXIT] UDP dial %s failed: %v", dest, err)
 		local.Close()
+		t.udpFlows.Add(-1)
 		return true
 	}
 
 	utils.SafeGo("exit.udp-flow", func() {
+		defer t.udpFlows.Add(-1)
+		refresh := func() {
+			deadline := time.Now().Add(udpIdleTimeout)
+			_ = local.SetReadDeadline(deadline)
+			_ = remote.SetReadDeadline(deadline)
+		}
+		refresh()
 		var once sync.Once
 		closeBoth := func() {
 			_ = local.Close()
@@ -179,19 +193,21 @@ func (t *TCPTunnel) handleExitUDP(r *udp.ForwarderRequest) bool {
 			defer once.Do(closeBoth)
 			buf := make([]byte, 65535)
 			for {
-				_ = src.SetReadDeadline(time.Now().Add(udpIdleTimeout))
 				n, err := src.Read(buf)
 				if err != nil {
 					return
 				}
+				refresh()
 				_ = dst.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if _, err := dst.Write(buf[:n]); err != nil {
 					return
 				}
 			}
 		}
-		go pump(remote, local)
+		done := make(chan struct{})
+		go func() { defer close(done); pump(remote, local) }()
 		pump(local, remote)
+		<-done
 	})
 	return true
 }

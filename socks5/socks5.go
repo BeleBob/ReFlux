@@ -6,12 +6,17 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"openflux/utils"
 )
 
 type Dialer interface {
 	DialTCP(address string) (net.Conn, error)
+}
+
+// UDPDialer is optional, preserving compatibility with TCP-only integrations.
+type UDPDialer interface {
 	DialUDP(address string) (net.Conn, error)
 }
 
@@ -22,10 +27,11 @@ type SOCKS5Server struct {
 	mu       sync.Mutex
 	listener net.Listener
 	closed   bool
+	clients  map[net.Conn]struct{}
 }
 
 func NewSOCKS5Server(addr string, dialer Dialer) *SOCKS5Server {
-	return &SOCKS5Server{listenAddr: addr, dialer: dialer}
+	return &SOCKS5Server{listenAddr: addr, dialer: dialer, clients: make(map[net.Conn]struct{})}
 }
 
 // Bind reserves the listen address so callers can detect "address already in
@@ -82,6 +88,9 @@ func (s *SOCKS5Server) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
+	for conn := range s.clients {
+		_ = conn.Close()
+	}
 	if s.listener != nil {
 		return s.listener.Close()
 	}
@@ -89,6 +98,23 @@ func (s *SOCKS5Server) Close() error {
 }
 
 func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
+	s.mu.Lock()
+	if s.closed || len(s.clients) >= 256 {
+		s.mu.Unlock()
+		_ = clientConn.Close()
+		return
+	}
+	if s.clients == nil {
+		s.clients = make(map[net.Conn]struct{})
+	}
+	s.clients[clientConn] = struct{}{}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.clients, clientConn)
+		s.mu.Unlock()
+	}()
+	_ = clientConn.SetDeadline(time.Now().Add(10 * time.Second))
 	// A malformed request must never crash the host process; contain any
 	// panic to this connection.
 	defer func() {
@@ -122,7 +148,7 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	}
 
 	var request [4]byte
-	if _, err := io.ReadFull(clientConn, request[:]); err != nil || request[0] != 0x05 {
+	if _, err := io.ReadFull(clientConn, request[:]); err != nil || request[0] != 0x05 || request[2] != 0 {
 		return
 	}
 	targetAddr, err := readAddress(clientConn, request[3])
@@ -131,11 +157,12 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		return
 	}
 
+	_ = clientConn.SetDeadline(time.Time{})
 	switch request[1] {
 	case 0x01:
 		s.handleConnect(clientConn, targetAddr)
 	case 0x03:
-		s.handleUDPAssociate(clientConn)
+		s.handleUDPAssociate(clientConn, targetAddr)
 	default:
 		writeReply(clientConn, 0x07, nil)
 	}
@@ -153,7 +180,9 @@ func (s *SOCKS5Server) handleConnect(clientConn net.Conn, targetAddr string) {
 	}
 	defer targetConn.Close()
 
-	writeReply(clientConn, 0x00, targetConn.LocalAddr())
+	if err := writeReply(clientConn, 0x00, targetConn.LocalAddr()); err != nil {
+		return
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -173,7 +202,25 @@ func (s *SOCKS5Server) handleConnect(clientConn net.Conn, targetAddr string) {
 	wg.Wait()
 }
 
-func (s *SOCKS5Server) handleUDPAssociate(control net.Conn) {
+func (s *SOCKS5Server) handleUDPAssociate(control net.Conn, requestedAddr string) {
+	dialer, ok := s.dialer.(UDPDialer)
+	if !ok {
+		_ = writeReply(control, 0x07, nil)
+		return
+	}
+	requestedHost, requestedService, err := net.SplitHostPort(requestedAddr)
+	if err != nil {
+		_ = writeReply(control, 0x08, nil)
+		return
+	}
+	requestedIP := net.ParseIP(requestedHost)
+	var requestedPort int
+	_, _ = fmt.Sscanf(requestedService, "%d", &requestedPort)
+	// Do not resolve the association's source address using local DNS.
+	if requestedIP == nil {
+		_ = writeReply(control, 0x08, nil)
+		return
+	}
 	bindIP := net.ParseIP("127.0.0.1")
 	if host, _, err := net.SplitHostPort(control.LocalAddr().String()); err == nil {
 		if parsed := net.ParseIP(host); parsed != nil {
@@ -186,22 +233,29 @@ func (s *SOCKS5Server) handleUDPAssociate(control net.Conn) {
 		return
 	}
 	defer udpConn.Close()
-	if err := writeReply(control, 0x00, udpConn.LocalAddr()); err != nil {
-		return
-	}
 
 	type udpFlow struct{ conn net.Conn }
 	flows := make(map[string]udpFlow)
 	var flowsMu sync.Mutex
+	var closing bool
 	var clientAddr *net.UDPAddr
 	var clientMu sync.RWMutex
 	expectedIP := net.ParseIP("127.0.0.1")
 	if host, _, err := net.SplitHostPort(control.RemoteAddr().String()); err == nil {
 		expectedIP = net.ParseIP(host)
 	}
+	if expectedIP == nil || (!requestedIP.IsUnspecified() && !requestedIP.Equal(expectedIP)) {
+		_ = writeReply(control, 0x02, nil)
+		return
+	}
+	if err := writeReply(control, 0x00, udpConn.LocalAddr()); err != nil {
+		return
+	}
 	defer func() {
+		_ = udpConn.Close()
 		flowsMu.Lock()
 		defer flowsMu.Unlock()
+		closing = true
 		for _, flow := range flows {
 			_ = flow.conn.Close()
 		}
@@ -214,7 +268,7 @@ func (s *SOCKS5Server) handleUDPAssociate(control net.Conn) {
 			if err != nil {
 				return
 			}
-			if expectedIP != nil && !from.IP.Equal(expectedIP) {
+			if !from.IP.Equal(expectedIP) || (requestedPort != 0 && from.Port != requestedPort) {
 				continue
 			}
 			clientMu.RLock()
@@ -233,38 +287,71 @@ func (s *SOCKS5Server) handleUDPAssociate(control net.Conn) {
 			clientMu.Unlock()
 
 			flowsMu.Lock()
+			if closing {
+				flowsMu.Unlock()
+				return
+			}
 			flow, ok := flows[dest]
 			if !ok {
 				if len(flows) >= 256 {
 					flowsMu.Unlock()
 					continue
 				}
-				conn, err := s.dialer.DialUDP(dest)
+				// Dial outside the lock so shutdown can close existing flows.
+				flowsMu.Unlock()
+				conn, err := dialer.DialUDP(dest)
+				flowsMu.Lock()
 				if err != nil {
 					flowsMu.Unlock()
 					continue
 				}
+				if closing {
+					flowsMu.Unlock()
+					_ = conn.Close()
+					return
+				}
 				flow = udpFlow{conn: conn}
 				flows[dest] = flow
+				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+				flowKey := dest
 				utils.SafeGo("socks5.udp-response", func() {
+					defer func() {
+						_ = conn.Close()
+						flowsMu.Lock()
+						if current, ok := flows[flowKey]; ok && current.conn == conn {
+							delete(flows, flowKey)
+						}
+						flowsMu.Unlock()
+					}()
 					response := make([]byte, 65535)
 					for {
 						n, err := conn.Read(response)
 						if err != nil {
 							return
 						}
+						_ = conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
 						packet := makeUDPResponse(conn.RemoteAddr(), response[:n])
 						clientMu.RLock()
 						to := clientAddr
 						clientMu.RUnlock()
 						if to != nil {
+							_ = udpConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 							_, _ = udpConn.WriteToUDP(packet, to)
 						}
 					}
 				})
 			}
 			flowsMu.Unlock()
-			_, _ = flow.conn.Write(payload)
+			_ = flow.conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+			_ = flow.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if _, err := flow.conn.Write(payload); err != nil {
+				_ = flow.conn.Close()
+				flowsMu.Lock()
+				if current, ok := flows[dest]; ok && current.conn == flow.conn {
+					delete(flows, dest)
+				}
+				flowsMu.Unlock()
+			}
 		}
 	})
 
@@ -307,15 +394,7 @@ func readAddress(r io.Reader, atyp byte) (string, error) {
 }
 
 func writeReply(w io.Writer, code byte, addr net.Addr) error {
-	ip := net.IPv4zero
-	port := 0
-	if host, service, err := net.SplitHostPort(addressString(addr)); err == nil {
-		if parsed := net.ParseIP(host).To4(); parsed != nil {
-			ip = parsed
-		}
-		fmt.Sscanf(service, "%d", &port)
-	}
-	reply := []byte{0x05, code, 0x00, 0x01, ip[0], ip[1], ip[2], ip[3], byte(port >> 8), byte(port)}
+	reply := append([]byte{0x05, code, 0x00}, encodeAddress(addr)...)
 	_, err := w.Write(reply)
 	return err
 }
@@ -351,14 +430,24 @@ func (r *sliceReader) Read(p []byte) (int, error) {
 }
 
 func makeUDPResponse(addr net.Addr, payload []byte) []byte {
-	ip := net.IPv4zero
+	out := append([]byte{0, 0, 0}, encodeAddress(addr)...)
+	return append(out, payload...)
+}
+
+func encodeAddress(addr net.Addr) []byte {
+	ip := net.IPv4zero.To4()
+	atyp := byte(0x01)
 	port := 0
 	if host, service, err := net.SplitHostPort(addressString(addr)); err == nil {
-		if parsed := net.ParseIP(host).To4(); parsed != nil {
-			ip = parsed
+		if parsed := net.ParseIP(host); parsed != nil {
+			if v4 := parsed.To4(); v4 != nil {
+				ip = v4
+			} else {
+				ip, atyp = parsed.To16(), 0x04
+			}
 		}
 		fmt.Sscanf(service, "%d", &port)
 	}
-	out := []byte{0, 0, 0, 0x01, ip[0], ip[1], ip[2], ip[3], byte(port >> 8), byte(port)}
-	return append(out, payload...)
+	out := append([]byte{atyp}, ip...)
+	return append(out, byte(port>>8), byte(port))
 }

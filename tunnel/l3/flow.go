@@ -9,7 +9,9 @@ type flowKey struct {
 }
 
 func extractFlowKey(pkt []byte) (flowKey, bool) {
-	if len(pkt) < 20 || pkt[0]>>4 != 4 {
+	var ok bool
+	pkt, ok = sliceIPv4(pkt)
+	if !ok {
 		return flowKey{}, false
 	}
 	ihl := int(pkt[0]&0x0f) * 4
@@ -28,6 +30,17 @@ func extractFlowKey(pkt []byte) (flowKey, bool) {
 	}
 	if len(pkt) < ihl+minHeader {
 		return flowKey{}, false
+	}
+	if proto == 17 {
+		n := int(binary.BigEndian.Uint16(pkt[ihl+4 : ihl+6]))
+		if n < 8 || n > len(pkt)-ihl {
+			return flowKey{}, false
+		}
+	} else {
+		n := int(pkt[ihl+12]>>4) * 4
+		if n < 20 || n > len(pkt)-ihl {
+			return flowKey{}, false
+		}
 	}
 	return flowKey{
 		srcIP:   binary.BigEndian.Uint32(pkt[12:16]),
@@ -65,6 +78,9 @@ func rewriteDNAT(pkt []byte, newDst [4]byte) {
 }
 
 func isTCPClosing(pkt []byte) bool {
+	if _, ok := extractFlowKey(pkt); !ok || pkt[9] != 6 {
+		return false
+	}
 	ihl := int(pkt[0]&0x0f) * 4
 	if len(pkt) < ihl+14 {
 		return false
@@ -85,7 +101,9 @@ func isTCPRST(pkt []byte) bool {
 }
 
 func fixChecksums(pkt []byte) {
-	if len(pkt) < 20 || pkt[0]>>4 != 4 {
+	var ok bool
+	pkt, ok = sliceIPv4(pkt)
+	if !ok || isFragmentedIPv4(pkt) {
 		return
 	}
 	ihl := int(pkt[0]&0x0f) * 4
@@ -110,6 +128,11 @@ func fixChecksums(pkt []byte) {
 		if len(segment) < 8 {
 			return
 		}
+		n := int(binary.BigEndian.Uint16(segment[4:6]))
+		if n < 8 || n > len(segment) {
+			return
+		}
+		segment = segment[:n]
 		checksumOffset = 6
 		// A zero UDP checksum is valid for IPv4 and must remain disabled.
 		if segment[checksumOffset] == 0 && segment[checksumOffset+1] == 0 {

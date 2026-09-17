@@ -20,7 +20,7 @@ const (
 	defaultMaxBatchBytes = 8192
 	defaultMaxBatchCount = 64
 	defaultLingerMs      = 5
-	batchQueueDepth      = 4096
+	batchQueueDepth      = 256 // At most 16 MiB of queued packet data.
 )
 
 // BatchedTransport replaces the old per-packet CompressedTransport. It queues
@@ -38,6 +38,8 @@ type BatchedTransport struct {
 	maxBatchCount int
 
 	running         atomic.Bool
+	lifecycle       sync.Mutex
+	experimentalV3  bool
 	stopOnce        sync.Once
 	stopCh          chan struct{}
 	sendErrors      atomic.Uint64
@@ -71,27 +73,47 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 		sessionID = 1
 	}
 	return &BatchedTransport{
-		Transport:     inner,
-		queue:         make(chan []byte, batchQueueDepth),
-		lingerMs:      envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
-		maxBatchBytes: envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes),
-		maxBatchCount: envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount),
-		stopCh:        make(chan struct{}),
-		sessionID:     sessionID,
+		experimentalV3: os.Getenv("OPENFLUX_EXPERIMENTAL_WIRE_V3") == "1",
+		Transport:      inner,
+		queue:          make(chan []byte, batchQueueDepth),
+		lingerMs:       envInt("OPENFLUX_BATCH_LINGER_MS", defaultLingerMs),
+		maxBatchBytes:  min(envInt("OPENFLUX_BATCH_BYTES", defaultMaxBatchBytes), maxFrameBytes-65537),
+		maxBatchCount:  min(envInt("OPENFLUX_BATCH_COUNT", defaultMaxBatchCount), maxFrameRecords-1),
+		stopCh:         make(chan struct{}),
+		sessionID:      sessionID,
 	}
 }
 
 func (b *BatchedTransport) Start() error {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	select {
+	case <-b.stopCh:
+		return fmt.Errorf("batched transport is stopped")
+	default:
+	}
+	if b.running.Load() {
+		return nil
+	}
 	if err := b.Transport.Start(); err != nil {
 		return err
 	}
 	b.running.Store(true)
 	go b.flushLoop()
-	go b.capabilityLoop()
+	if b.experimentalV3 {
+		go b.capabilityLoop()
+	}
 	return nil
 }
 
 func (b *BatchedTransport) Stop() error {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	select {
+	case <-b.stopCh:
+		return nil
+	default:
+	}
 	b.running.Store(false)
 	b.stopOnce.Do(func() { close(b.stopCh) })
 	return b.Transport.Stop()
@@ -101,6 +123,11 @@ func (b *BatchedTransport) Stop() error {
 // for batching. A full queue returns an explicit error; TCP may retransmit,
 // while UDP callers must treat it as datagram loss.
 func (b *BatchedTransport) Send(data []byte) error {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	if !b.running.Load() {
+		return fmt.Errorf("batched transport is not running")
+	}
 	if len(data) > 65535 {
 		return fmt.Errorf("packet too large for batch record: %d bytes", len(data))
 	}
@@ -126,12 +153,18 @@ func (b *BatchedTransport) Receive(callback func([]byte)) {
 			return
 		}
 		if metadata.version == wireFormatVersion {
+			if !b.experimentalV3 {
+				return
+			}
 			b.observeWireFrame(metadata)
 		}
 		filtered := pkts[:0]
 		for _, p := range pkts {
 			caps, ack, ok := decodeCapabilityRecord(p)
 			if ok {
+				if !b.experimentalV3 {
+					continue
+				}
 				b.peerCaps.Store(uint32(caps))
 				b.peerSeen.Store(true)
 				if ack {
@@ -193,7 +226,7 @@ func (b *BatchedTransport) capabilityLoop() {
 }
 
 func (b *BatchedTransport) sendBatch(batch [][]byte) {
-	if !b.peerAck.Load() {
+	if b.experimentalV3 && !b.peerAck.Load() {
 		withHello := make([][]byte, 0, len(batch)+1)
 		withHello = append(withHello, encodeCapabilityRecord(DefaultCapabilities, b.peerSeen.Load()))
 		batch = append(withHello, batch...)
