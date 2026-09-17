@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-Network stack research tool. TCP tunnel with pluggable transports,
+Network stack research tool. IPv4 TCP/UDP tunnel with pluggable transports,
 batched+zstd codec, and two exit-node backends (L3 raw forward / L4 gVisor proxy).
 
 # Disclaimer
@@ -67,12 +67,12 @@ Client (any):  macOS (utun) / Linux / Windows / iOS (packet tunnel) / Android
 | macOS / Linux / Windows / iOS / Android | `--mode l3`  | exit on Linux + root  |
 | macOS / Linux / Windows / iOS / Android | `--mode l4`  | nothing               |
 
-In `l3`, the exit node terminates nothing: it forwards raw IP packets with
-SNAT/DNAT (conntrack + egress-IP filter). One TCP connection end-to-end
-between the client and the real server.
+In `l3`, the exit node terminates nothing: it forwards raw TCP and UDP packets
+with SNAT/DNAT (conntrack + egress-IP filter). TCP remains end-to-end between
+the client and the real server.
 
-In `l4`, the exit node terminates TCP in a userspace gVisor stack, then
-re-dials the real server with `net.Dial`. Works on any OS, no root.
+In `l4`, the exit node terminates TCP/UDP in a userspace gVisor stack, then
+re-dials the real server. Works on any OS, no root.
 
 The client terminates TCP locally (gVisor, utun, or NEPacketTunnelProvider),
 then sends raw IP packets into the transport.
@@ -86,7 +86,7 @@ against either.
 | `--mode` | Backend | Forwarding | Requires | Platforms |
 |----------|---------|-----------|----------|-----------|
 | `l3` | Raw L3 | SNAT/DNAT on raw IPv4 via SOCK_RAW + conntrack. No userspace TCP stack. | root / CAP_NET_RAW | Linux only |
-| `l4` (alias `proxy`) | gVisor proxy | Terminates TCP in a userspace gVisor stack, then `net.Dial` to the real server. | nothing | Linux, macOS, Windows |
+| `l4` (alias `proxy`) | gVisor proxy | Terminates TCP/UDP in a userspace gVisor stack, then dials the real server. | nothing | Linux, macOS, Windows |
 
 - `proxy` is a deprecated alias for `l4`; both select the same backend.
   `l4` is the canonical name going forward.
@@ -112,8 +112,8 @@ sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s <egress-ip> -j DROP
 sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP
 ```
 
-The L3 code additionally drops client-originated RSTs before `sendto()`, so
-the kernel rule above is only needed for kernel-generated RSTs.
+Client-originated RSTs are forwarded normally. The rule above is only for
+RSTs generated locally by the exit-node kernel.
 
 ## Highlights
 
@@ -123,6 +123,12 @@ the kernel rule above is only needed for kernel-generated RSTs.
 - **Batched + zstd codec** - coalesces many tunnel packets into a single
   transport message. Fewer channel messages, higher throughput. See
   `transport/batched.go` and `transport/framing.go`.
+- **IPv4 UDP** - DNS, QUIC and other UDP traffic are supported by both exit
+  backends. SOCKS5 clients use RFC 1928 `UDP ASSOCIATE`.
+- **Negotiated wire v3** - new batched peers advertise capabilities inside a
+  backwards-safe v2 record and switch to v3 only after detecting another v3
+  peer. V3 frames carry a session ID, sequence number and validated payload
+  length. Connections to older batched peers remain on v2.
 - **Two exit backends** - `l3` (raw SNAT/DNAT) and `l4` (gVisor proxy).
   See [Exit-node backends](#exit-node-backends).
 - **macOS utun client** - `--inbound=tun` (default on macOS). Creates a utun
@@ -253,7 +259,18 @@ Requires sudo. All traffic except the transport goes through the tunnel.
 ```
 
 Point your browser / app at `127.0.0.1:1080` as a SOCKS5 proxy. This is the
-default inbound on non-macOS platforms.
+default inbound on non-macOS platforms. UDP-capable applications may use the
+SOCKS5 `UDP ASSOCIATE` command.
+
+### UDP limitations
+
+- UDP is IPv4-only for now.
+- Fragmented IPv4 datagrams are dropped because non-initial fragments do not
+  contain the ports required by conntrack. Keep the tunnel MTU at 1280 until
+  path-MTU discovery/reassembly is implemented.
+- Most document/WebSocket transports are reliable and ordered. UDP works over
+  them, but packet loss in the carrier can still cause head-of-line blocking;
+  this is not equivalent to a native datagram transport.
 
 ### Codec selection
 
@@ -265,9 +282,9 @@ LZ4 codec, pass `--codec=legacy`:
 ./openflux --role=client --codec=legacy ...
 ```
 
-**Important:** the batched wire format is NOT compatible with the legacy LZ4
-format. Client and exit node must both use the same codec (both new, or both
-`--codec=legacy`).
+**Important:** batched and legacy LZ4 codecs remain incompatible. Within the
+batched codec, v3 capability negotiation is backwards-compatible with v2 and
+automatically falls back when the peer does not advertise v3.
 
 ### Encryption (optional)
 

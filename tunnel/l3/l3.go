@@ -25,7 +25,7 @@ type L3Exit struct {
 	pktToTransport   atomic.Uint64
 
 	dropBadIPv4      atomic.Uint64
-	dropRST          atomic.Uint64
+	dropFragmented   atomic.Uint64
 	dropNoFlowKey    atomic.Uint64
 	dropNoConntrack  atomic.Uint64
 	dropNotForUs     atomic.Uint64
@@ -75,9 +75,9 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 	}
 	pkt = sl
 
-	if isTCPRST(pkt) {
-		t.dropRST.Add(1)
-		utils.Debugf("[L3] drop: outbound RST")
+	if isFragmentedIPv4(pkt) {
+		t.dropFragmented.Add(1)
+		utils.Debugf("[L3] drop: fragmented IPv4 packet")
 		return
 	}
 
@@ -137,8 +137,8 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 	if !t.ct.Exists(rk) {
 		t.dropNoConntrack.Add(1)
 		if utils.IsVerbose() && t.dropNoConntrack.Load()%1000 == 1 {
-			utils.Debugf("[L3] noct (sampled): %s:%d -> %s:%d flags=0x%02x",
-				ipStr(k.srcIP), k.srcPort, ipStr(k.dstIP), k.dstPort, pkt[33])
+			utils.Debugf("[L3] noct (sampled): %s:%d -> %s:%d proto=%d",
+				ipStr(k.srcIP), k.srcPort, ipStr(k.dstIP), k.dstPort, k.proto)
 		}
 		return
 	}
@@ -165,17 +165,17 @@ func (t *L3Exit) statsLoop() {
 		fromNet := t.pktFromNetwork.Load()
 		toCli := t.pktToTransport.Load()
 		dropBad := t.dropBadIPv4.Load()
-		dropRST := t.dropRST.Load()
+		dropFragmented := t.dropFragmented.Load()
 		dropNoKey := t.dropNoFlowKey.Load()
 		dropNoCt := t.dropNoConntrack.Load()
 		dropNotUs := t.dropNotForUs.Load()
 
-		utils.Debugf("[L3-STATS] fromTr=%d(+%d) toNet=%d(+%d) | fromNet=%d(+%d) toCli=%d(+%d) | drops: bad=%d rst=%d notus=%d nokey=%d noct=%d | errs: toNet=%d toCli=%d",
+		utils.Debugf("[L3-STATS] fromTr=%d(+%d) toNet=%d(+%d) | fromNet=%d(+%d) toCli=%d(+%d) | drops: bad=%d fragmented=%d notus=%d nokey=%d noct=%d | errs: toNet=%d toCli=%d",
 			fromTr, fromTr-lastFromTr,
 			toNet, toNet-lastToNet,
 			fromNet, fromNet-lastFromNet,
 			toCli, toCli-lastToCli,
-			dropBad, dropRST, dropNotUs, dropNoKey, dropNoCt,
+			dropBad, dropFragmented, dropNotUs, dropNoKey, dropNoCt,
 			t.sendToNetErrors.Load(), t.sendToClientErrs.Load())
 
 		lastFromTr, lastToNet = fromTr, toNet
@@ -206,4 +206,3 @@ func sliceIPv4(pkt []byte) ([]byte, bool) {
 	}
 	return pkt[:tot], true
 }
-

@@ -8,6 +8,8 @@ import (
 const (
 	ctTimeoutEstablished = 5 * time.Minute
 	ctTimeoutClosing     = 15 * time.Second
+	ctTimeoutUDP         = 2 * time.Minute
+	ctTimeoutDNS         = 15 * time.Second
 	ctSweepInterval      = 30 * time.Second
 )
 
@@ -85,7 +87,11 @@ func (c *conntrack) sweep() {
 	c.mu.Lock()
 	for k, e := range c.entries {
 		timeout := ctTimeoutEstablished
-		if e.dying {
+		if k.proto == 17 && (k.srcPort == 53 || k.dstPort == 53) {
+			timeout = ctTimeoutDNS
+		} else if k.proto == 17 {
+			timeout = ctTimeoutUDP
+		} else if e.dying {
 			timeout = ctTimeoutClosing
 		}
 		if now.Sub(e.lastSeen) > timeout {

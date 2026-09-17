@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -33,14 +34,17 @@ type TCPDialer interface {
 // TCP locally and forwards each flow through the given dialer. Outbound packets
 // (stack -> device) are read back with ReadOutbound.
 //
-// The transport is TCP-only, so raw UDP is not carried; UDP port 53 is special
-// cased and proxied as DNS-over-TCP through the tunnel so name resolution works
-// (and bypasses local DNS poisoning). Other UDP is dropped.
+// UDP is relayed when the dialer implements UDPDialer. DNS-over-TCP remains a
+// compatibility fallback for older TCP-only dialers.
 type PacketTunnel struct {
 	stack  *stack.Stack
 	ep     *channel.Endpoint
 	dialer TCPDialer
 	nicID  tcpip.NICID
+}
+
+type UDPDialer interface {
+	DialUDP(address string) (net.Conn, error)
 }
 
 // NewPacketTunnel builds the stack and installs TCP + DNS forwarders.
@@ -106,13 +110,8 @@ func (pt *PacketTunnel) handleTCP(r *tcp.ForwarderRequest) {
 	})
 }
 
-// handleUDP only serves DNS (port 53): the query is proxied as DNS-over-TCP
-// through the tunnel. Any other UDP is dropped (TCP-only transport).
 func (pt *PacketTunnel) handleUDP(r *udp.ForwarderRequest) bool {
 	id := r.ID()
-	if id.LocalPort != 53 {
-		return false // not handled -> dropped (only DNS is supported)
-	}
 	var wq waiter.Queue
 	ep, err := r.CreateEndpoint(&wq)
 	if err != nil {
@@ -120,7 +119,41 @@ func (pt *PacketTunnel) handleUDP(r *udp.ForwarderRequest) bool {
 		return true
 	}
 	conn := gonet.NewUDPConn(&wq, ep)
-	dest := fmt.Sprintf("%s:53", id.LocalAddress.String())
+	dest := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
+
+	if dialer, ok := pt.dialer.(UDPDialer); ok {
+		remote, err := dialer.DialUDP(dest)
+		if err != nil {
+			utils.Debugf("[PKT] UDP dial %s: %v", dest, err)
+			conn.Close()
+			return true
+		}
+		utils.SafeGo("pkt.udp", func() {
+			var once sync.Once
+			closeBoth := func() { _ = conn.Close(); _ = remote.Close() }
+			pump := func(dst, src net.Conn) {
+				defer once.Do(closeBoth)
+				buf := make([]byte, 65535)
+				for {
+					_ = src.SetReadDeadline(time.Now().Add(udpIdleTimeout))
+					n, err := src.Read(buf)
+					if err != nil {
+						return
+					}
+					if _, err := dst.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}
+			go pump(remote, conn)
+			pump(conn, remote)
+		})
+		return true
+	}
+	if id.LocalPort != 53 {
+		conn.Close()
+		return true
+	}
 
 	utils.SafeGo("pkt.dns", func() {
 		defer conn.Close()

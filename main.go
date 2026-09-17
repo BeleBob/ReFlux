@@ -360,6 +360,11 @@ DEPRECATED (removed in v2)
 }
 
 func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
+	if exitMode == tunnel.ExitModeL3 {
+		if err := tunnel.SetLocalIP(localIP); err != nil {
+			log.Fatalf("--local-ip: %v", err)
+		}
+	}
 	ex, err := tunnel.NewExitNode(trans, exitMode.String())
 	if err != nil {
 		log.Fatalf("exit node: %v", err)
