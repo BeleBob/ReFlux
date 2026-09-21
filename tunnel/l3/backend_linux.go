@@ -49,7 +49,7 @@ func newBackend() (L3Backend, error) {
 	syscall.SetsockoptInt(sendFd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 16*1024*1024)
 
 	var recvFds []int
-	for _, proto := range []int{syscall.IPPROTO_TCP, syscall.IPPROTO_UDP} {
+	for _, proto := range []int{syscall.IPPROTO_TCP, syscall.IPPROTO_UDP, syscall.IPPROTO_ICMP} {
 		recvFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, proto)
 		if err != nil {
 			for _, fd := range recvFds {
@@ -105,7 +105,31 @@ func (b *rawBackend) Send(pkt []byte) error {
 	var dst [4]byte
 	copy(dst[:], pkt[16:20])
 	addr := &syscall.SockaddrInet4{Addr: dst}
-	return syscall.Sendto(b.sendFd, pkt, 0, addr)
+	err := syscall.Sendto(b.sendFd, pkt, 0, addr)
+	if err == syscall.EMSGSIZE {
+		return &PacketTooBigError{MTU: b.routeMTU(dst)}
+	}
+	return err
+}
+
+// A connected UDP socket queries the kernel route without sending any probe.
+func (b *rawBackend) routeMTU(dst [4]byte) int {
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, syscall.IPPROTO_UDP)
+	if err != nil {
+		return 0
+	}
+	defer syscall.Close(fd)
+	if syscall.Bind(fd, &syscall.SockaddrInet4{Addr: b.egress}) != nil {
+		return 0
+	}
+	if syscall.Connect(fd, &syscall.SockaddrInet4{Addr: dst, Port: 9}) != nil {
+		return 0
+	}
+	mtu, err := syscall.GetsockoptInt(fd, syscall.IPPROTO_IP, syscall.IP_MTU)
+	if err != nil {
+		return 0
+	}
+	return mtu
 }
 
 func (b *rawBackend) Recv(cb func([]byte)) {
@@ -138,7 +162,7 @@ func (b *rawBackend) recvLoop(fd int, cb func([]byte)) {
 			utils.Debugf("[L3/linux] recv: %v", err)
 			continue
 		}
-		if n < 28 || buf[0]>>4 != 4 || (buf[9] != 6 && buf[9] != 17) {
+		if n < 28 || buf[0]>>4 != 4 || (buf[9] != 6 && buf[9] != 17 && buf[9] != 1) {
 			continue
 		}
 		if buf[16] != b.egress[0] || buf[17] != b.egress[1] ||

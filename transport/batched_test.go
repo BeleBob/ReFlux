@@ -141,30 +141,19 @@ func TestBatchedTransportStaysV2WithoutPeerAdvertisement(t *testing.T) {
 	}
 }
 
-func TestBatchedTransportUpgradesAfterPeerAdvertisement(t *testing.T) {
+func TestBatchedTransportRejectsRetiredUnauthenticatedNegotiation(t *testing.T) {
 	t.Setenv("OPENFLUX_EXPERIMENTAL_WIRE_V3", "1")
 	inner := &fakeTransport{}
 	bt := NewBatchedTransport(inner)
 	bt.lingerMs = 1
 	bt.Receive(func([]byte) {})
-	if err := bt.Start(); err != nil {
-		t.Fatalf("start: %v", err)
+	if err := bt.Start(); err == nil {
+		t.Fatal("unsafe prototype was allowed to start")
 	}
 	defer bt.Stop()
 
-	inner.mu.Lock()
-	cb := inner.cb
-	inner.mu.Unlock()
-	cb(encodeBatch([][]byte{encodeCapabilityRecord(DefaultCapabilities, false)}))
-	if caps, ok := bt.PeerCapabilities(); !ok || caps&CapabilityUDP == 0 {
-		t.Fatalf("peer capabilities = %x, %v", caps, ok)
-	}
-	if err := bt.Send([]byte("v3")); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if got := inner.firstSent(); len(got) == 0 || got[0] != wireFormatVersion {
-		t.Fatalf("wire version = %x, want v3", got)
+	if err := bt.Send([]byte("v3")); err == nil || inner.sendCount() != 0 {
+		t.Fatal("unsafe prototype sent data")
 	}
 }
 

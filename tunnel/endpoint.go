@@ -20,6 +20,7 @@ type TunnelLinkEndpoint struct {
 	onOutgoingPacket func([]byte)
 	packetIn         atomic.Uint64
 	packetOut        atomic.Uint64
+	mtu              atomic.Uint32
 }
 
 func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
@@ -58,7 +59,12 @@ func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcp
 	return n, nil
 }
 
-func (e *TunnelLinkEndpoint) MTU() uint32                    { return 1500 }
+func (e *TunnelLinkEndpoint) MTU() uint32 {
+	if m := e.mtu.Load(); m != 0 {
+		return m
+	}
+	return 1500
+}
 func (e *TunnelLinkEndpoint) MaxHeaderLength() uint16        { return 0 }
 func (e *TunnelLinkEndpoint) LinkAddress() tcpip.LinkAddress { return "\x02\x00\x00\x00\x00\x01" }
 func (e *TunnelLinkEndpoint) Capabilities() stack.LinkEndpointCapabilities {
@@ -78,7 +84,11 @@ func (e *TunnelLinkEndpoint) Wait()                                   {}
 func (e *TunnelLinkEndpoint) ARPHardwareType() header.ARPHardwareType { return header.ARPHardwareNone }
 func (e *TunnelLinkEndpoint) AddHeader(*stack.PacketBuffer)           {}
 func (e *TunnelLinkEndpoint) Close()                                  {}
-func (e *TunnelLinkEndpoint) SetMTU(uint32)                           {}
-func (e *TunnelLinkEndpoint) SetLinkAddress(tcpip.LinkAddress)        {}
-func (e *TunnelLinkEndpoint) ParseHeader(*stack.PacketBuffer) bool    { return true }
-func (e *TunnelLinkEndpoint) SetOnCloseAction(func())                 {}
+func (e *TunnelLinkEndpoint) SetMTU(m uint32) {
+	if m >= 1280 && m <= 65000 {
+		e.mtu.Store(m)
+	}
+}
+func (e *TunnelLinkEndpoint) SetLinkAddress(tcpip.LinkAddress)     {}
+func (e *TunnelLinkEndpoint) ParseHeader(*stack.PacketBuffer) bool { return true }
+func (e *TunnelLinkEndpoint) SetOnCloseAction(func())              {}

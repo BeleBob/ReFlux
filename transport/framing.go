@@ -30,8 +30,8 @@ type wireMetadata struct {
 	sequence  uint64
 }
 
-// Capabilities belong to the experimental negotiation protocol. They are not
-// authenticated or session-bound; do not enable it on untrusted channels.
+// Capabilities are shared bit assignments. Only NegotiatedTransport's
+// PeerParameters is authenticated; legacy v3 advertisement records are not.
 type Capabilities uint32
 
 const (

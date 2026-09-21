@@ -1,5 +1,8 @@
 # Local review — 2026-09-17
 
+**Historical snapshot:** the September 21 follow-up at the end supersedes the
+negotiation and fragmentation blockers below. Other unclosed limitations remain.
+
 Scope: local `codex/wire-v3-udp`, starting with `aeeac32`, `aa00cb3`, `09ab7d6`
 on base `9148c63`. No GitHub PR was published or modified.
 
@@ -106,3 +109,29 @@ Fork GitHub Actions run 35278672089 later passed all six jobs at commit
 `0a25fad`: tests, race detector, vet, five cross-build targets, and the isolated
 Linux raw UDP/ICMP network-namespace test. This closes the namespace-test gate,
 not the real-network, PMTU, fragmentation or physical-device gates.
+
+## Follow-up — 2026-09-21 (PR #80)
+
+Added an opt-in authenticated capability envelope inside existing AES-GCM,
+fresh process-session challenge confirmation, role/policy validation, negotiated
+IPv4 packet limits and a bounded sequence replay window. Startup of the old
+unauthenticated wire-v3 mode is now rejected. No key-schedule replacement,
+forward secrecy, automatic downgrade or live process-session replacement is claimed.
+
+Raw L3 now restores ICMP error quotes for active UDP/TCP flows, reports kernel
+EMSGSIZE with the route MTU, fragments non-DF packets, and reassembles incoming
+IPv4 fragments with fixed lifetime/resource budgets and overlap rejection.
+Negotiated limits also apply to the gVisor link and raw return path. Re-review
+covered lost handshake confirmation, reverse-path limits, kernel-assigned IPv4
+IDs in ICMP quotes, and shutdown after negotiation timeout.
+
+Local full tests, race tests, vet, five cross-build targets, iOS Go archive,
+unsigned Xcode app/extension build, and reassembly fuzzing passed. Fuzzing ran
+833410 inputs without a crash. The new Linux namespace CI test uses loopback MTU
+1280 to exercise actual EMSGSIZE, raw fragmentation and kernel UDP unreachable.
+Its result is tracked in the PR; this local machine is macOS.
+
+Remaining: active DPLPMTUD/ICMP-filtered paths, outgoing fragmentation with IP
+options, physical-device and real document-carrier checks, secure live session
+replacement/rekey, IPv6, and the unrelated legacy/shutdown items listed above.
+Do not enable the CLI-only negotiation flag for existing iOS clients.

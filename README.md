@@ -125,10 +125,9 @@ RSTs generated locally by the exit-node kernel.
   `transport/batched.go` and `transport/framing.go`.
 - **IPv4 UDP** - L4 forwarding and SOCKS5 `UDP ASSOCIATE` have local echo
   coverage. Linux raw L3 UDP remains experimental; see the limitations below.
-- **Experimental wire v3** - disabled by default; batched mode sends v2 without
-  capability records. `OPENFLUX_EXPERIMENTAL_WIRE_V3=1` enables the prototype
-  on both peers for isolated tests only. Its handshake is not authenticated or
-  session-bound and does not provide replay protection or safe reconnects.
+- **Authenticated capability negotiation** - opt-in `--negotiate` inside
+  encryption, with fresh session challenges, packet limits and replay checks.
+  The old unauthenticated wire-v3 startup option is retired. Legacy mode is unchanged.
 - **Two exit backends** - `l3` (raw SNAT/DNAT) and `l4` (gVisor proxy).
   See [Exit-node backends](#exit-node-backends).
 - **macOS utun client** - `--inbound=tun` (default on macOS). Creates a utun
@@ -265,9 +264,17 @@ SOCKS5 `UDP ASSOCIATE` command.
 ### UDP limitations
 
 - UDP is IPv4-only for now.
-- The L3 backend drops fragmented IPv4 datagrams. An MTU of 1280 does not
-  prevent a large application datagram from being fragmented. Reassembly and
-  ICMP/PMTU forwarding are not implemented.
+- L3 reassembles IPv4 fragments with a 30-second fixed lifetime, 64 incomplete
+  datagrams, 128 fragments per datagram and a 4 MiB byte budget per direction.
+  Overlaps and malformed fragments are discarded; expiry is swept on input.
+- L3 relays checksum-validated ICMP errors only for live TCP/UDP NAT flows,
+  restoring the quoted client address/port and checksums. Redirects and echo
+  traffic are not relayed. Egress EMSGSIZE produces ICMP fragmentation-needed
+  with the kernel route MTU; non-DF packets can instead be fragmented. Outgoing
+  fragmentation of IPv4 headers containing options is not supported.
+- This is ICMP-based PMTU feedback, not active DPLPMTUD probing. Networks that
+  filter ICMP can still black-hole large DF packets; real-network tests remain
+  necessary. The negotiated packet ceiling is distinct from the Internet MTU.
 - Linux raw L3 UDP reserves a kernel-selected source port per remote endpoint
   using a real UDP socket and restores the client's port on return. This avoids
   taking ports owned by host applications and is intended to prevent kernel
@@ -296,8 +303,38 @@ LZ4 codec, pass `--codec=legacy`:
 ```
 
 **Important:** batched and legacy LZ4 codecs remain incompatible. Default
-batched mode remains v2. Experimental v3 has no verified backward-compatibility
-or reconnect guarantee and must not be enabled on untrusted channels.
+batched mode remains v2. The old `OPENFLUX_EXPERIMENTAL_WIRE_V3=1` prototype
+now fails startup rather than accepting unauthenticated capability messages.
+
+### Authenticated capability negotiation (opt-in CLI)
+
+Add these options on **both** updated peers, using the same secret and codec:
+
+```
+--codec=batched --encryption-key-file=/path/to/secret.txt --negotiate
+```
+
+The handshake runs inside AES-GCM and confirms fresh random challenges, peer
+roles, IPv4/TCP/UDP support, ICMP-error support and maximum IPv4 packet size.
+L4 does not advertise raw ICMP forwarding. Only the intersection of capabilities
+is enabled. Data carries both session IDs and a sequence number; a 64-packet
+sliding replay window tolerates bounded reordering. The old batch-v2 envelope
+and encryption key derivation are unchanged; this is not forward secrecy or a
+replacement for a future key-exchange/rekey design.
+
+Negotiated mode never falls back to unencrypted or legacy peers. Startup fails
+after 20 seconds if negotiation cannot complete (wrong key, incompatible codec,
+missing option, or unavailable peer). `--max-packet-size=1280..65000` caps the
+complete IPv4 packet; the default is 65000, leaving room for authenticated
+envelopes. The agreed limit is used by the gVisor link; the macOS TUN remains
+1280. Raw-exit replies exceeding the agreed limit are fragmented without DF,
+or produce ICMP feedback to the Internet sender with DF.
+
+Session identity and capabilities stay fixed for the process lifetime. Carrier
+reconnects retain them; after either process restarts, restart the other peer
+as well. Automatic secure session replacement is not implemented. Existing
+iOS builds have no negotiation setting and must use an exit without `--negotiate`.
+Their UDP switch remains manual. No claim of device-level QUIC validation is made.
 
 ### Encryption (optional)
 

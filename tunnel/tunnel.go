@@ -106,6 +106,11 @@ func NewTCPTunnelMode(trans transport.Transport, isExitNode bool, mode ExitMode)
 	SetTCPBuffers(t.gvisorStack)
 
 	tunnelEP := NewTunnelLinkEndpoint()
+	if n, ok := trans.(transport.PeerParameterProvider); ok {
+		if p, ready := n.PeerParameters(); ready {
+			tunnelEP.SetMTU(uint32(min(1500, p.MaxPacketSize)))
+		}
+	}
 	tunnelEP.onOutgoingPacket = func(data []byte) {
 		if err := trans.Send(data); err != nil {
 			utils.Debugf("[TUNNEL] trans.Send error: %v", err)

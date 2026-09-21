@@ -14,10 +14,12 @@ const clientIP = "10.10.10.2"
 var clientIPBytes = [4]byte{10, 10, 10, 2}
 
 type L3Exit struct {
-	trans   transport.Transport
-	backend L3Backend
-	ct      *conntrack
-	udp     *udpNAT
+	trans                transport.Transport
+	backend              L3Backend
+	ct                   *conntrack
+	udp                  *udpNAT
+	fromClientFragments  reassembler
+	fromNetworkFragments reassembler
 
 	// counters
 	pktFromTransport atomic.Uint64
@@ -79,9 +81,15 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 	pkt = sl
 
 	if isFragmentedIPv4(pkt) {
-		t.dropFragmented.Add(1)
-		utils.Debugf("[L3] drop: fragmented IPv4 packet")
-		return
+		if ipU32([4]byte{pkt[12], pkt[13], pkt[14], pkt[15]}) != ipU32(clientIPBytes) {
+			t.dropNotForUs.Add(1)
+			return
+		}
+		pkt, ok = t.fromClientFragments.add(pkt, time.Now())
+		if !ok {
+			t.dropFragmented.Add(1)
+			return
+		}
 	}
 
 	k, ok := extractFlowKey(pkt)
@@ -94,12 +102,14 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 		t.dropNotForUs.Add(1)
 		return
 	}
+	original := append([]byte(nil), pkt...)
 	if k.proto == 17 {
 		if !validUDPChecksums(pkt) {
 			t.dropBadIPv4.Add(1)
 			return
 		}
-		if err := t.udp.send(pkt, k, t.backend.Send); err != nil {
+		if err := t.udp.send(pkt, k, t.sendNetwork); err != nil {
+			t.reportSendError(original, err)
 			t.sendToNetErrors.Add(1)
 			utils.Debugf("[L3] UDP send to network failed: %v", err)
 			return
@@ -123,7 +133,8 @@ func (t *L3Exit) handleFromTransport(pkt []byte) {
 			ipStr(k.srcIP), k.srcPort, ipStr(k.dstIP), k.dstPort, k.proto, len(pkt))
 	}
 
-	if err := t.backend.Send(pkt); err != nil {
+	if err := t.sendNetwork(pkt); err != nil {
+		t.reportSendError(original, err)
 		t.sendToNetErrors.Add(1)
 		utils.Debugf("[L3] send to network failed: %v", err)
 		return
@@ -151,17 +162,37 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 		return
 	}
 
+	if isFragmentedIPv4(pkt) {
+		pkt, ok = t.fromNetworkFragments.add(pkt, time.Now())
+		if !ok {
+			t.dropFragmented.Add(1)
+			return
+		}
+	}
+	if pkt[9] == 1 {
+		if !t.translateICMP(pkt) {
+			t.dropNoConntrack.Add(1)
+			return
+		}
+		if err := t.trans.Send(pkt); err != nil {
+			t.sendToClientErrs.Add(1)
+		} else {
+			t.pktToTransport.Add(1)
+		}
+		return
+	}
 	k, ok := extractFlowKey(pkt)
 	if !ok {
 		t.dropNoFlowKey.Add(1)
 		return
 	}
 	if k.proto == 17 {
+		wire := append([]byte(nil), pkt...)
 		if !t.udp.translateReply(pkt, k) {
 			t.dropNoConntrack.Add(1)
 			return
 		}
-		if err := t.trans.Send(pkt); err != nil {
+		if err := t.sendClient(pkt, wire); err != nil {
 			t.sendToClientErrs.Add(1)
 			return
 		}
@@ -178,10 +209,11 @@ func (t *L3Exit) handleFromInternet(pkt []byte) {
 		return
 	}
 	t.ct.Touch(rk, isTCPClosing(pkt))
+	wire := append([]byte(nil), pkt...)
 	rewriteDNAT(pkt, clientIPBytes)
 	fixChecksums(pkt)
 
-	if err := t.trans.Send(pkt); err != nil {
+	if err := t.sendClient(pkt, wire); err != nil {
 		t.sendToClientErrs.Add(1)
 		return
 	}

@@ -87,6 +87,9 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 func (b *BatchedTransport) Start() error {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
+	if b.experimentalV3 {
+		return fmt.Errorf("unauthenticated wire-v3 negotiation has been retired; unset OPENFLUX_EXPERIMENTAL_WIRE_V3 and use --negotiate with encryption on both peers")
+	}
 	select {
 	case <-b.stopCh:
 		return fmt.Errorf("batched transport is stopped")
