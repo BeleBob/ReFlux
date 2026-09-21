@@ -43,7 +43,7 @@ func (p *pairedTransport) IsConnected() bool               { return true }
 func (p *pairedTransport) Stats() transport.TransportStats { return transport.TransportStats{} }
 
 func TestL4UDPDatagramRoundTrip(t *testing.T) {
-	for _, codec := range []string{"raw", "batched", "batched-encrypted", "legacy-encrypted"} {
+	for _, codec := range []string{"raw", "batched", "batched-encrypted", "legacy-encrypted", "negotiated"} {
 		t.Run(codec, func(t *testing.T) { testL4UDPDatagramRoundTrip(t, codec) })
 	}
 }
@@ -70,33 +70,44 @@ func testL4UDPDatagramRoundTrip(t *testing.T, codec string) {
 	a, b := newTransportPair()
 	wrap := func(inner transport.Transport, exit bool) transport.Transport {
 		switch codec {
-		case "batched", "batched-encrypted":
+		case "batched", "batched-encrypted", "negotiated":
 			inner = transport.NewBatchedTransport(inner)
 		case "legacy-encrypted":
 			inner = transport.NewCompressedTransport(inner)
 		}
-		if codec == "batched-encrypted" || codec == "legacy-encrypted" {
+		if codec == "batched-encrypted" || codec == "legacy-encrypted" || codec == "negotiated" {
 			var err error
 			inner, err = transport.NewEncryptedTransport(inner, "integration-test-secret-only", t.Name(), exit)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if codec == "negotiated" {
+				inner, err = transport.NewNegotiatedTransport(inner.(*transport.EncryptedTransport), transport.PeerParameters{Capabilities: transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP, MaxPacketSize: 1280}, exit)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 		}
 		return inner
 	}
 	clientTransport, exitTransport := wrap(a, false), wrap(b, true)
+	errs := make(chan error, 2)
+	go func() { errs <- clientTransport.Start() }()
+	go func() { errs <- exitTransport.Start() }()
+	defer clientTransport.Stop()
+	defer exitTransport.Stop()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
 	exit := NewTCPTunnelMode(exitTransport, true, ExitModeL4)
 	client := NewTCPTunnelMode(clientTransport, false, ExitModeL4)
 	defer exit.Close()
 	defer client.Close()
-	if err := exitTransport.Start(); err != nil {
-		t.Fatal(err)
+	if codec == "negotiated" && (client.tunnelEP.MTU() != 1280 || exit.tunnelEP.MTU() != 1280) {
+		t.Fatal("negotiated MTU not applied to gVisor")
 	}
-	defer exitTransport.Stop()
-	if err := clientTransport.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer clientTransport.Stop()
 
 	dest := net.JoinHostPort(localIP.String(), fmt.Sprintf("%d", echo.LocalAddr().(*net.UDPAddr).Port))
 	conn, err := client.DialUDP(dest)
@@ -105,7 +116,7 @@ func testL4UDPDatagramRoundTrip(t *testing.T, codec string) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	for _, size := range []int{0, 12, 1200} {
+	for _, size := range []int{0, 12, 1200, 2000} {
 		want := bytes.Repeat([]byte{0xa5}, size)
 		if _, err := conn.Write(want); err != nil {
 			t.Fatalf("write %d: %v", size, err)

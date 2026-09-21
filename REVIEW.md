@@ -131,6 +131,12 @@ unsigned Xcode app/extension build, and reassembly fuzzing passed. Fuzzing ran
 1280 to exercise actual EMSGSIZE, raw fragmentation and kernel UDP unreachable.
 Its result is tracked in the PR; this local machine is macOS.
 
+GitHub run [35553397483](https://github.com/Ice0011/OpenFlux/actions/runs/35553397483)
+passed all six jobs at `686c299`, including the new Linux raw ICMP/MTU and
+fragmentation test. A second end-to-end review expanded UDP echo coverage to
+five codec compositions (including authenticated negotiation), 0/12/1200/2000
+byte datagrams, and an asserted negotiated gVisor MTU of 1280; race checking passed.
+
 Remaining: active DPLPMTUD/ICMP-filtered paths, outgoing fragmentation with IP
 options, physical-device and real document-carrier checks, secure live session
 replacement/rekey, IPv6, and the unrelated legacy/shutdown items listed above.
