@@ -237,7 +237,13 @@ func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 			if _, cerr := solveCaptcha(docURL, jar, boardsUA); cerr != nil {
 				return boardsInfo{}, fmt.Errorf("captcha solve: %w", cerr)
 			}
-			utils.Debugf("[BOARDS] captcha solved")
+			utils.Debugf("[BOARDS] captcha solved, re-fetching whiteboard")
+
+			// После капчи повторяем GET /whiteboard — сервер выдаёт
+			// свежие cookies, нужные для последующих /api запросов.
+			if err := t.getAllowCaptcha(client, docURL, hash); err != nil && err != errCaptchaRequired {
+				return boardsInfo{}, fmt.Errorf("GET whiteboard (post-captcha): %w", err)
+			}
 		} else {
 			return boardsInfo{}, err
 		}
