@@ -57,6 +57,11 @@ type Session struct {
 	peerKeepalive     bool
 	noPong            bool
 
+	// candidate is a new peer that must prove itself before it replaces an
+	// established one; see receiveHello.
+	candidate     *candidatePeer
+	candidateLast time.Time
+
 	// Transport links, ordered by priority (descending).
 	links map[string]*transportLink
 	order []string
@@ -69,6 +74,19 @@ type Session struct {
 	once sync.Once
 	wg   sync.WaitGroup
 }
+
+// candidatePeer is an unknown sender offered a fresh challenge while the
+// session is established with someone else.
+type candidatePeer struct {
+	sender  [32]byte
+	local   [32]byte
+	expires time.Time
+}
+
+const (
+	candidateTTL      = 20 * time.Second
+	candidateInterval = time.Second
+)
 
 // transportLink wraps one raw Transport with its encryption and batching.
 type transportLink struct {
@@ -359,6 +377,10 @@ func (s *Session) keepaliveLoop() {
 		case <-tick.C:
 		}
 		s.mu.Lock()
+		if !s.exit && s.ready && s.peerKeepalive && s.peerSilentLocked() {
+			s.resetLocked()
+			utils.Debugf("[SESSION] peer silent on every transport; handshaking again")
+		}
 		var quiet []*transportLink
 		if s.ready {
 			for _, name := range s.order {
@@ -372,6 +394,33 @@ func (s *Session) keepaliveLoop() {
 		for _, l := range quiet {
 			_ = s.sendControlVia(l, control.SubtypeLinkPing, nil)
 		}
+	}
+}
+
+// peerSilentLocked reports whether the peer has not been heard on any
+// carrier within linkTimeout. Caller holds s.mu.
+func (s *Session) peerSilentLocked() bool {
+	for _, l := range s.links {
+		if time.Since(l.lastHeard) < s.linkTimeout {
+			return false
+		}
+	}
+	return true
+}
+
+// resetLocked drops the established peer and starts over as a new session
+// identity, as if the process had restarted: a restarted exit knows nothing
+// of the old identity and would otherwise never answer. helloLoop resumes
+// the handshake. Caller holds s.mu.
+func (s *Session) resetLocked() {
+	s.ready = false
+	s.peer = [32]byte{}
+	s.remote = PeerParameters{}
+	s.sequence, s.highest, s.window = 0, 0, 0
+	s.peerKeepalive = false
+	s.candidate = nil
+	if _, err := rand.Read(s.local[:]); err != nil {
+		utils.Debugf("[SESSION] new challenge: %v", err)
 	}
 }
 
@@ -699,8 +748,11 @@ func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 		s.mu.Unlock()
 		return
 	}
-	if s.ready && (sender != s.peer ||
-		params.Capabilities&s.params.Capabilities != s.remote.Capabilities ||
+	if s.ready && sender != s.peer {
+		s.offerReplacementLocked(link, sender, params, env)
+		return
+	}
+	if s.ready && (params.Capabilities&s.params.Capabilities != s.remote.Capabilities ||
 		minInt(params.MaxPacketSize, s.params.MaxPacketSize) != s.remote.MaxPacketSize) {
 		s.mu.Unlock()
 		return
@@ -732,6 +784,89 @@ func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 
 	for _, name := range names {
 		_ = s.helloVia(name)
+	}
+}
+
+// offerReplacementLocked handles a hello from an unknown sender while the
+// session is established. Another key holder appearing usually means the
+// peer restarted, but it may also be a replay of old traffic seen in the
+// carrier (anyone with access to a document sees the ciphertext). So the
+// established session is left alone until the sender echoes a challenge
+// minted for it just now, which old traffic cannot contain; only then is
+// the peer replaced, under that fresh challenge and with a new sequence
+// and replay window, so packets of the old session no longer match.
+// Called with s.mu held; releases it.
+func (s *Session) offerReplacementLocked(link *transportLink, sender [32]byte, params PeerParameters, env *control.Envelope) {
+	now := time.Now()
+	cand := s.candidate
+	if cand != nil && now.After(cand.expires) {
+		cand, s.candidate = nil, nil
+	}
+
+	if cand != nil && cand.sender == sender && env.Peer == cand.local {
+		s.local = cand.local
+		s.peer = sender
+		s.remote = PeerParameters{
+			Capabilities:  params.Capabilities & s.params.Capabilities,
+			MaxPacketSize: minInt(params.MaxPacketSize, s.params.MaxPacketSize),
+		}
+		s.sequence, s.highest, s.window = 0, 0, 0
+		s.peerKeepalive = false
+		s.candidate = nil
+		for _, l := range s.links {
+			l.lastHeard = time.Time{}
+		}
+		link.lastHeard = now
+		names := append([]string(nil), s.order...)
+		s.mu.Unlock()
+		utils.Debugf("[SESSION] peer replaced after a fresh challenge")
+		for _, name := range names {
+			_ = s.helloVia(name)
+		}
+		return
+	}
+
+	if env.Peer != ([32]byte{}) {
+		s.mu.Unlock()
+		return
+	}
+	if cand == nil || cand.sender != sender {
+		if now.Sub(s.candidateLast) < candidateInterval {
+			s.mu.Unlock()
+			return
+		}
+		cand = &candidatePeer{sender: sender, expires: now.Add(candidateTTL)}
+		if _, err := rand.Read(cand.local[:]); err != nil {
+			s.mu.Unlock()
+			return
+		}
+		s.candidate = cand
+		s.candidateLast = now
+	}
+	offer := &control.Envelope{
+		Kind:  control.KindHello,
+		Role:  s.roleLocked(),
+		Local: cand.local,
+		Peer:  sender,
+		Hello: &control.HelloTail{
+			Capabilities:  control.Capabilities(s.params.Capabilities),
+			MaxPacketSize: uint16(s.params.MaxPacketSize),
+		},
+	}
+	var links []*transportLink
+	for _, name := range s.order {
+		if l := s.links[name]; l.started {
+			links = append(links, l)
+		}
+	}
+	s.mu.Unlock()
+
+	raw, err := offer.Encode()
+	if err != nil {
+		return
+	}
+	for _, l := range links {
+		_ = l.batched.Send(raw)
 	}
 }
 
