@@ -70,23 +70,31 @@ func testL4UDPDatagramRoundTrip(t *testing.T, codec string) {
 	a, b := newTransportPair()
 	wrap := func(inner transport.Transport, exit bool) transport.Transport {
 		switch codec {
-		case "batched", "batched-encrypted", "negotiated":
+		case "batched", "batched-encrypted":
 			inner = transport.NewBatchedTransport(inner)
 		case "legacy-encrypted":
 			inner = transport.NewCompressedTransport(inner)
 		}
-		if codec == "batched-encrypted" || codec == "legacy-encrypted" || codec == "negotiated" {
+		if codec == "batched-encrypted" || codec == "legacy-encrypted" {
 			var err error
 			inner, err = transport.NewEncryptedTransport(inner, "integration-test-secret-only", t.Name(), exit)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if codec == "negotiated" {
-				inner, err = transport.NewNegotiatedTransport(inner.(*transport.EncryptedTransport), transport.PeerParameters{Capabilities: transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP, MaxPacketSize: 1280}, exit)
-				if err != nil {
-					t.Fatal(err)
-				}
+		}
+		if codec == "negotiated" {
+			params := transport.PeerParameters{
+				Capabilities:  transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP,
+				MaxPacketSize: 1280,
 			}
+			sess, err := transport.NewSession(params, exit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := sess.AddTransport("primary", inner, "integration-test-secret-only", t.Name(), 100); err != nil {
+				t.Fatal(err)
+			}
+			return sess
 		}
 		return inner
 	}

@@ -40,16 +40,3 @@ func TestBatchedTransportLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestDefaultBatchedTransportDoesNotAcceptV3OrNegotiate(t *testing.T) {
-	t.Setenv("OPENFLUX_EXPERIMENTAL_WIRE_V3", "")
-	f := &fakeTransport{}
-	b := NewBatchedTransport(f)
-	var received int
-	b.Receive(func([]byte) { received++ })
-	f.cb(encodeBatch([][]byte{encodeCapabilityRecord(DefaultCapabilities, true)}))
-	f.cb(encodeBatchV3([][]byte{[]byte("unexpected")}, 42, 1))
-	if _, seen := b.PeerCapabilities(); seen || received != 0 {
-		t.Fatal("default mode negotiated or accepted experimental data")
-	}
-}

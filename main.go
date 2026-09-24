@@ -13,8 +13,11 @@ import (
 
 	"openflux/socks5"
 	"openflux/transport"
+	"openflux/transport/control"
 	"openflux/transport/cupsonline"
+	"openflux/transport/ipc"
 	"openflux/transport/mailru"
+	"openflux/transport/manager"
 	"openflux/transport/oneme"
 	"openflux/transport/yandex"
 	"openflux/tunnel"
@@ -82,6 +85,55 @@ const (
 	codecLegacy  = "legacy"
 )
 
+// transportHasCookies reports whether the given transport uses HTTP cookies
+// that can be refreshed via the NegotiatedTransport control channel.
+func transportHasCookies(t string) bool {
+	switch t {
+	case "yandex", "vyandex", "boards", "mailru", "cupsonline":
+		return true
+	}
+	return false
+}
+
+// cookieKey identifies a session inside the cookie store. For most transports
+// this is the document URL; for oneme it would be maxUid, but oneme does not
+// use the store at all.
+func cookieKey(transportType, docURL, maxUid string) string {
+	switch transportType {
+	case "oneme":
+		return maxUid
+	default:
+		return docURL
+	}
+}
+
+// wireControlHandler connects a CookieExchanger to a NegotiatedTransport's
+// control channel:
+//
+//	SubtypeCookiesRequest  -> exit fetches its live jar and replies with
+//	                          SubtypeCookiesResponse
+//	SubtypeCookiesResponse -> client applies the jar
+//	SubtypeCookiesOffer    -> both sides apply the jar
+// cookieRefreshLoop periodically asks the exit node for a fresh cookie jar.
+// Runs only on the client side, only when --negotiate is enabled.
+
+// managerRefreshLoop periodically asks the exit node for a fresh cookie jar.
+// Runs on the client side only, when --transports or --negotiate is set.
+func managerRefreshLoop(m *manager.Manager) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		if !m.IsConnected() {
+			continue
+		}
+		if err := m.SendControl(control.SubtypeCookiesRequest, nil); err != nil {
+			utils.Debugf("[CTRL] cookies request failed: %v", err)
+			continue
+		}
+		utils.Debugf("[CTRL] cookies request sent")
+	}
+}
+
 func main() {
 	fmt.Print("written by p1neappleXpress\n")
 
@@ -93,6 +145,9 @@ func main() {
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
 	negotiate := flag.Bool("negotiate", false, "Require encrypted, session-bound IPv4 capability negotiation on both peers (no legacy fallback)")
 	maxPacket := flag.Int("max-packet-size", transport.MaxNegotiatedPacket, "Maximum IPv4 packet in negotiated mode (1280..65000); not the Internet path MTU")
+	cookieStorePath := flag.String("cookie-store", "",
+		"Path to the cookie jar file. Default: ./cookies-<transport>.json in the current directory. "+
+			"Ignored for transports without cookies (direct, oneme).")
 	encryptionKeyFile := flag.String("encryption-key-file", "",
 		"Optional: encrypt the transport with AES-256-GCM using a shared secret read from this file. "+
 			"Both peers must use the same secret; unset means unencrypted, unchanged behavior")
@@ -100,6 +155,23 @@ func main() {
 	flag.StringVar(&globalDocUrl, "url", "http://#", "Document URL. If u use Yandex.Docs transport")
 	flag.StringVar(&maxToken, "maxToken", "", "MAX Web token. If u use MAX transport")
 	flag.StringVar(&maxUid, "maxUid", "", "MAX call user id. If u use MAX transport")
+	directDial := flag.String("direct-dial", "", "DirectTransport: exit address to dial (client). Requires --encryption-key-file")
+	directListen := flag.String("direct-listen", "", "DirectTransport: local address to listen on (exit). Requires --encryption-key-file")
+	transportsFlag := flag.String("transports", "",
+		"Comma-separated list of transports with priorities, e.g. "+
+			"\"direct:100,yandex:50,mailru:30\". If empty, --transport is used as a single transport.")
+	yandexURL := flag.String("yandex-url", "", "URL for the yandex transport (overrides --url in --transports mode)")
+	vyandexURL := flag.String("vyandex-url", "", "URL for the vyandex transport")
+	boardsURL := flag.String("boards-url", "", "URL for the boards transport")
+	mailruURL := flag.String("mailru-url", "", "URL (weblink) for the mailru transport")
+	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
+	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
+	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
+	configPath := flag.String("config", "",
+		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
+	ipcSocketPath := flag.String("ipc-socket", "",
+		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
+			"Empty = no IPC server.")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	flag.StringVar(&localIP, "local-ip", "", "Egress IP for exit node (l3 mode only, scoped RST drop)")
 
@@ -125,6 +197,8 @@ func main() {
 
 USAGE
   openflux --role=<role> --transport=<type> [OPTIONS]
+  openflux --role=<role> --transports=<list> [OPTIONS]
+  openflux --config=/path/to/openflux.conf [OPTIONS]
 
 ROLE
   -r, --role=client       Run as client. (default)
@@ -132,16 +206,31 @@ ROLE
   -r, --role=bench-send   Benchmark: push --bench-bytes MB.
   -r, --role=bench-sink   Benchmark: receive from transport.
 
-TRANSPORT
+TRANSPORT  (single-transport mode)
   -t, --transport=yandex       Yandex.Docs over WebSocket. (default)
   -t, --transport=vyandex      Yandex.Volga over HTTP relay + WS.
   -t, --transport=oneme        MAX (VK) over WebRTC.
   -t, --transport=cupsonline   Cups.online interview rooms.
   -t, --transport=mailru       Mail.ru Docs over WebSocket.
-
+  -t, --transport=direct       Plain TCP to a self-hosted exit.
   -u, --url=<URL>              Document URL.
-      --maxToken=<token>       MAX auth token (--transport=oneme).
-      --maxUid=<uid>           MAX user id   (--transport=oneme).
+
+TRANSPORTS  (multi-transport session; requires --encryption-key-file)
+      --transports=direct:100,yandex:50
+                               Comma-separated list of transports with
+                               priorities. Higher priority = tried first
+                               for the handshake and for control traffic.
+                               All listed transports are attached to one
+                               Session; IPv4 flows are hashed across them.
+      --yandex-url=<URL>       URL for the yandex transport.
+      --vyandex-url=<URL>      URL for the vyandex transport.
+      --boards-url=<URL>       URL for the boards transport.
+      --mailru-url=<WEBLINK>   Weblink for the mailru transport.
+      --cupsonline-url=<URL>   URL for the cupsonline transport.
+      --oneme-token=<token>    MAX auth token for the oneme transport.
+      --oneme-uid=<uid>        MAX user id for the oneme transport.
+      --direct-dial=<addr>     DirectTransport: exit host:port (client).
+      --direct-listen=<addr>   DirectTransport: listen addr on exit.
 
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / NEPacketTunnel (iOS). Default on macOS.
@@ -157,7 +246,19 @@ TRANSPORT MODIFIERS
   -c, --codec=batched          zstd + coalescing. Default.
   -c, --codec=legacy           Per-packet LZ4. A/B only.
       --encryption-key-file=<path>
-                               AES-256-GCM wrapper. Both peers must share the same key.
+                               AES-256-GCM wrapper. Required with
+                               --transports or --negotiate. Both peers
+                               must share the same key.
+      --negotiate              Require authenticated capability negotiation
+                               on both peers. No legacy fallback.
+      --max-packet-size=N      Max IPv4 packet in negotiated mode
+                               (1280..65000). Default 65000.
+      --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json.
+      --ipc-socket=<path>      Unix domain socket for the mobile bridge.
+                               Empty = no IPC server.
+      --config=<path>          Load settings from an OpenFlux .conf file
+                               (INI-like, similar to wg-quick). Command-line
+                               flags override values from the file.
 
 BENCHMARK  (only with --role=bench-*)
       --bench-bytes=<MB>       MB to push (bench-send).
@@ -176,6 +277,62 @@ DEPRECATED (removed in v2)
 
 	os.Args = expandShortFlags(os.Args)
 	flag.Parse()
+
+	// Apply .conf file if requested. Only flags that were not explicitly set
+	// on the command line are overridden.
+	var confTransports []transportSpec
+	if *configPath != "" {
+		conf, err := parseConf(*configPath)
+		if err != nil {
+			log.Fatalf("--config: %v", err)
+		}
+		setFlags := make(map[string]bool)
+		flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+
+		applyConfString(conf.Interface, "Role", "role", role, setFlags)
+		applyConfString(conf.Interface, "Inbound", "inbound", inbound, setFlags)
+		applyConfString(conf.Interface, "Transport", "transport", transportType, setFlags)
+		applyConfString(conf.Interface, "Mode", "mode", mode, setFlags)
+		applyConfString(conf.Interface, "Codec", "codec", codec, setFlags)
+		applyConfString(conf.Interface, "Socks5", "socks5", socksAddr, setFlags)
+		applyConfString(conf.Interface, "EncryptionKeyFile", "encryption-key-file", encryptionKeyFile, setFlags)
+		applyConfString(conf.Interface, "CookieStore", "cookie-store", cookieStorePath, setFlags)
+		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
+		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
+		if v, ok := confValue(conf.Interface, "Debug"); ok && !setFlags["debug"] {
+			*debug = confBool(v, *debug)
+		}
+
+		for _, t := range conf.Transports {
+			if t.Name == "" {
+				continue
+			}
+			spec := transportSpec{
+				Name:     t.Name,
+				Type:     t.Values["Type"],
+				Priority: confInt(t.Values["Priority"], 50),
+				URL:      t.Values["URL"],
+			}
+			if spec.Type == "" {
+				spec.Type = t.Name
+			}
+			if spec.Type == "direct" {
+				spec.Params = map[string]interface{}{
+					"dial":    t.Values["Dial"],
+					"listen":  t.Values["Listen"],
+					"is_exit": *role == roleExit,
+				}
+			}
+			if spec.Type == "oneme" {
+				spec.Params = map[string]interface{}{
+					"token": t.Values["Token"],
+					"uid":   t.Values["UID"],
+					"exit":  *role == roleExit,
+				}
+			}
+			confTransports = append(confTransports, spec)
+		}
+	}
 
 	// Map deprecated flags to their new counterparts. New flags win over
 	// deprecated ones if both are supplied.
@@ -281,74 +438,275 @@ DEPRECATED (removed in v2)
 	}
 
 	config := transport.DefaultConfig()
-	var inner transport.Transport
 
-	switch *transportType {
-        case "boards":
-    		inner = yandex.NewBoardsTransport(globalDocUrl, config)
-	case "vyandex":
-		inner = yandex.NewYandexVolgaTransport(globalDocUrl, config)
-	case "yandex":
-		inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
-	case "oneme":
-		uidint, _ := strconv.ParseInt(maxUid, 10, 64)
-		inner = oneme.NewOneMeTransport(*role == roleExit, maxToken, uidint, config)
-	case "cupsonline":
-		inner = cupsonline.NewCupsonlineTransport(globalDocUrl, config, *role != roleExit)
-	case "mailru":
-		inner = mailru.NewMailruDocsTransport(globalDocUrl, config)
-	default:
-		log.Fatalf("Unknown transport type: %s", *transportType)
+	// Cookie store: per-transport file in pwd, unless --cookie-store is set.
+	// Transports without cookies (direct, oneme) skip it entirely.
+	var store *transport.CookieStore
+	if transportHasCookies(*transportType) {
+		path := *cookieStorePath
+		if path == "" {
+			path = fmt.Sprintf("./cookies-%s.json", *transportType)
+		}
+		s, err := transport.NewCookieStore(path)
+		if err != nil {
+			log.Fatalf("Cookie store %s: %v", path, err)
+		}
+		store = s
+		log.Printf("Cookie store: %s", path)
 	}
 
-	// App-layer codec, outermost. Default is the new batching+zstd layer;
-	// --codec=legacy selects the old per-packet LZ4 path so the two can be
-	// compared over the same channel. Client and exit node must use the same one.
-	switch *codec {
-	case codecBatched:
-		log.Printf("Codec: batched (zstd + coalescing)")
-		inner = transport.NewBatchedTransport(inner)
-	case codecLegacy:
-		log.Printf("Codec: legacy (per-packet LZ4, no batching)")
-		inner = transport.NewCompressedTransport(inner)
+	// Build the list of transports to run. Two modes:
+	//   --transports=direct:100,yandex:50  -> multi-transport session
+	//   --transport=<type>                 -> legacy single-transport mode
+	var specs []transportSpec
+	if len(confTransports) > 0 {
+		specs = confTransports
+		// Per-type URL flags still override config values.
+		urls := map[string]string{
+			"yandex":     *yandexURL,
+			"vyandex":    *vyandexURL,
+			"boards":     *boardsURL,
+			"mailru":     *mailruURL,
+			"cupsonline": *cupsonlineURL,
+		}
+		specs = buildTransportSpecs(specs, urls, nil)
+	} else if *transportsFlag != "" {
+		parsed, err := parseTransportList(*transportsFlag)
+		if err != nil {
+			log.Fatalf("--transports: %v", err)
+		}
+		urls := map[string]string{
+			"yandex":     *yandexURL,
+			"vyandex":    *vyandexURL,
+			"boards":     *boardsURL,
+			"mailru":     *mailruURL,
+			"cupsonline": *cupsonlineURL,
+		}
+		if globalDocUrl != "" && urls["yandex"] == "" {
+			urls["yandex"] = globalDocUrl
+		}
+		extra := map[string]map[string]interface{}{
+			"oneme": {"token": *onemeToken, "uid": *onemeUID, "exit": *role == roleExit},
+			"direct": {
+				"dial":    *directDial,
+				"listen":  *directListen,
+				"is_exit": *role == roleExit,
+			},
+		}
+		specs = buildTransportSpecs(parsed, urls, extra)
+	} else {
+		specs = []transportSpec{{
+			Name:     "primary",
+			Type:     *transportType,
+			Priority: 100,
+			URL:      globalDocUrl,
+		}}
+		if *transportType == "oneme" {
+			specs[0].Params = map[string]interface{}{
+				"token": maxToken, "uid": maxUid, "exit": *role == roleExit,
+			}
+		}
+		if *transportType == "direct" {
+			specs[0].Params = map[string]interface{}{
+				"dial": *directDial, "listen": *directListen, "is_exit": *role == roleExit,
+			}
+		}
 	}
 
-	// Preserve legacy wrapper order: encrypt each packet, then batch/compress.
+	// Validate --codec with the multi-transport path. Session always uses
+	// BatchedTransport, so --codec=legacy is only valid in single-transport
+	// non-negotiated mode.
+	if *negotiate && *codec != codecBatched {
+		log.Fatal("--negotiate requires --codec=batched")
+	}
+
+	// Encryption secret is mandatory when --negotiate is set.
+	var secret string
+	var sessionContext string
 	if *encryptionKeyFile != "" {
-		secretBytes, err := os.ReadFile(*encryptionKeyFile)
+		b, err := os.ReadFile(*encryptionKeyFile)
 		if err != nil {
 			log.Fatalf("Read encryption key file: %v", err)
 		}
-		context := *transportType
-		if globalDocUrl != "" {
-			context = globalDocUrl
-		}
-		encrypted, err := transport.NewEncryptedTransport(inner, strings.TrimSpace(string(secretBytes)), context, *role == roleExit)
-		if err != nil {
-			log.Fatalf("Configure encrypted transport: %v", err)
-		}
-		inner = encrypted
-		log.Printf("Transport encryption: AES-256-GCM enabled")
+		secret = strings.TrimSpace(string(b))
+	}
+	sessionContext = *transportType
+	if globalDocUrl != "" {
+		sessionContext = globalDocUrl
 	}
 
-	if *negotiate {
-		encrypted, ok := inner.(*transport.EncryptedTransport)
-		if !ok || *codec != codecBatched || (*role != roleClient && *role != roleExit) {
-			log.Fatal("--negotiate requires --encryption-key-file, --codec=batched and role client or exit")
+	// Decide whether we run the full Session path (encryption + negotiate)
+	// or the legacy single-transport path.
+	var (
+		managerInst *manager.Manager
+		trans       transport.Transport
+		exchanger   transport.CookieExchanger
+	)
+
+	if *negotiate || *transportsFlag != "" {
+		if secret == "" {
+			log.Fatal("--transports/--negotiate requires --encryption-key-file")
 		}
+
 		caps := transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP
-		// Both client ingress paths accept returned IPv4 ICMP. Only the raw
-		// exit currently relays Internet ICMP errors through NAT.
 		if *role == roleClient || exitMode == tunnel.ExitModeL3 {
 			caps |= transport.CapabilityICMPErrors
 		}
-		var err error
-		inner, err = transport.NewNegotiatedTransport(encrypted, transport.PeerParameters{Capabilities: caps, MaxPacketSize: *maxPacket}, *role == roleExit)
+		params := transport.PeerParameters{
+			Capabilities:  caps,
+			MaxPacketSize: *maxPacket,
+		}
+		sess, err := transport.NewSession(params, *role == roleExit)
 		if err != nil {
 			log.Fatal(err)
 		}
+
+		// Build the factory that SubtypeTransportStart will use for
+		// dynamic transports.
+		factory := transportFactory(config)
+		managerInst = manager.New(sess, factory, secret, sessionContext)
+
+		if err := registerBootstrapTransports(managerInst, specs, config, secret, sessionContext); err != nil {
+			log.Fatalf("bootstrap transports: %v", err)
+		}
+
+		// Cookie provider: the first spec that carries cookies becomes the
+		// bootstrap one. Multi-transport cookie routing is left for later.
+		for _, spec := range specs {
+			if !transportHasCookies(spec.Type) {
+				continue
+			}
+			key := cookieKey(spec.Type, spec.URL, maxUid)
+			// The Manager owns per-transport cookie providers; we route
+			// Fetch/Apply through it.
+			managerInst.SetControlCallback(func(sub control.Subtype, payload []byte) {
+				switch sub {
+				case control.SubtypeCookiesRequest:
+					if *role != roleExit {
+						return
+					}
+					jar, err := managerInst.FetchCookiesFor(spec.Name)
+					if err != nil {
+						utils.Debugf("[CTRL] fetch cookies (%s): %v", spec.Name, err)
+						return
+					}
+					body, _ := (&control.CookiesPayload{Jar: jar, Reason: "requested"}).Encode()
+					_ = managerInst.SendControl(control.SubtypeCookiesResponse, body)
+				case control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
+					cp, err := control.DecodeCookies(payload)
+					if err != nil || len(cp.Jar) == 0 {
+						return
+					}
+					if err := managerInst.ApplyCookiesFor(spec.Name, cp.Jar); err != nil {
+						utils.Debugf("[CTRL] apply cookies (%s): %v", spec.Name, err)
+						return
+					}
+					if store != nil {
+						_ = store.Save(key, cp.Jar)
+					}
+				}
+			})
+			// Load persisted cookies into the transport before it starts.
+			if store != nil {
+				if jar := store.Load(key); jar != nil {
+					_ = managerInst.ApplyCookiesFor(spec.Name, jar)
+				}
+			}
+			break
+		}
+
+		// Hook the Session control dispatcher into the manager.
+		sess.SetControlHandler(managerInst.DispatchControl)
+
+		// Optional IPC bridge: if --ipc-socket is set, the core talks to the
+		// mobile app over a Unix domain socket. Transport-initiated captcha
+		// requests go out as MsgCookiesRequest; cookies offers come in as
+		// MsgCookiesOffer.
+		if *ipcSocketPath != "" {
+			h := &coreIPCHandler{manager: managerInst, store: store}
+			srv := ipc.NewServer(*ipcSocketPath, h)
+			if err := srv.Listen(); err != nil {
+				log.Fatalf("IPC listen %s: %v", *ipcSocketPath, err)
+			}
+			defer srv.Close()
+
+			// Which transport to ask about. Use the first cookie-carrying
+			// spec; multi-transport cookie routing is a future extension.
+			for _, spec := range specs {
+				if !transportHasCookies(spec.Type) {
+					continue
+				}
+				url := spec.URL
+				name := spec.Name
+				managerInst.SetCaptchaNotifier(func(_name, _url, reason string) {
+					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
+						Transport: name,
+						URL:       url,
+						Reason:    reason,
+					})
+				})
+				break
+			}
+		}
+
+		trans = managerInst
+		exchanger = nil // cookie handling is inside the callback above
+
+	} else {
+		// Legacy single-transport path (no negotiate, no multi).
+		var inner transport.Transport
+		switch *transportType {
+		case "boards":
+			inner = yandex.NewBoardsTransport(globalDocUrl, config)
+		case "vyandex":
+			inner = yandex.NewYandexVolgaTransport(globalDocUrl, config)
+		case "yandex":
+			inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
+		case "oneme":
+			uidint, _ := strconv.ParseInt(maxUid, 10, 64)
+			inner = oneme.NewOneMeTransport(*role == roleExit, maxToken, uidint, config)
+		case "cupsonline":
+			inner = cupsonline.NewCupsonlineTransport(globalDocUrl, config, *role != roleExit)
+		case "mailru":
+			inner = mailru.NewMailruDocsTransport(globalDocUrl, config)
+		default:
+			log.Fatalf("Unknown transport type: %s", *transportType)
+		}
+
+		// Persist cookie exchanger for the legacy path.
+		if store != nil {
+			if ce, ok := inner.(transport.CookieExchanger); ok {
+				key := cookieKey(*transportType, globalDocUrl, maxUid)
+				if jar := store.Load(key); jar != nil {
+					_ = ce.ApplyCookies(jar)
+				}
+				exchanger = transport.NewPersistentCookieExchanger(ce, store, key)
+			}
+		}
+
+		switch *codec {
+		case codecBatched:
+			log.Printf("Codec: batched (zstd + coalescing)")
+			inner = transport.NewBatchedTransport(inner)
+		case codecLegacy:
+			log.Printf("Codec: legacy (per-packet LZ4, no batching)")
+			inner = transport.NewCompressedTransport(inner)
+		}
+
+		if *encryptionKeyFile != "" {
+			encrypted, err := transport.NewEncryptedTransport(inner, secret, sessionContext, *role == roleExit)
+			if err != nil {
+				log.Fatalf("Configure encrypted transport: %v", err)
+			}
+			inner = encrypted
+			log.Printf("Transport encryption: AES-256-GCM enabled")
+		}
+
+		trans = inner
 	}
-	trans := inner
+
+	_ = exchanger
+	_ = managerInst
 
 	// Benchmark modes run the transport directly with no tunnel / raw socket,
 	// so they never touch the host network.
@@ -367,9 +725,26 @@ DEPRECATED (removed in v2)
 	if err := trans.Start(); err != nil {
 		log.Fatalf("Failed to start transport: %v", err)
 	}
-	if n, ok := trans.(*transport.NegotiatedTransport); ok {
-		p, _ := n.PeerParameters()
-		log.Printf("Authenticated peer: IPv4 TCP; UDP=%t; ICMP errors=%t; maximum packet=%d", p.Capabilities&transport.CapabilityUDP != 0, p.Capabilities&transport.CapabilityICMPErrors != 0, p.MaxPacketSize)
+
+	// Periodically ask the exit node to refresh its cookies. Only the client
+	// initiates; the exit answers with SubtypeCookiesResponse.
+	if *role == roleClient && managerInst != nil {
+		utils.SafeGo("cookie-refresh", func() { managerRefreshLoop(managerInst) })
+	}
+	if managerInst != nil {
+		if pp, ready := managerInst.Session().PeerParameters(); ready {
+			log.Printf("Authenticated peer: IPv4 TCP; UDP=%t; ICMP errors=%t; maximum packet=%d",
+				pp.Capabilities&transport.CapabilityUDP != 0,
+				pp.Capabilities&transport.CapabilityICMPErrors != 0,
+				pp.MaxPacketSize)
+		}
+	} else if n, ok := trans.(*transport.Session); ok {
+		if pp, ready := n.PeerParameters(); ready {
+			log.Printf("Authenticated peer: IPv4 TCP; UDP=%t; ICMP errors=%t; maximum packet=%d",
+				pp.Capabilities&transport.CapabilityUDP != 0,
+				pp.Capabilities&transport.CapabilityICMPErrors != 0,
+				pp.MaxPacketSize)
+		}
 	}
 
 	switch *role {
