@@ -353,4 +353,4 @@ so a new backend gets batching for free.
 
 GNU General Public License v3.0 or later. See LICENSE for the full text.
 
-Third-party licenses are listed in NOTICE.
+Third-party licenses are listed in [NOTICE](NOTICE).

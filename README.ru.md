@@ -358,4 +358,4 @@ LZ4-кодека передайте `--codec=legacy`:
 
 GNU General Public License v3.0 or later. Полный текст - в файле LICENSE.
 
-Лицензии третьих сторон - в файле NOTICE.
+Лицензии третьих сторон - в файле [NOTICE](NOTICE).
