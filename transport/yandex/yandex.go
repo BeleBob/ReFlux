@@ -504,12 +504,7 @@ func (t *YandexDocsTransport) ApplyCookies(values map[string]string) error {
 	}
 	u := mustParseURL(t.url)
 	jar, _ := cookiejar.New(nil)
-	// cookiejar.New returns an in-memory jar; SetCookies on it works for any
-	// host we pass later.
-	cookies := make([]*http.Cookie, 0, len(values))
-	for k, v := range values {
-		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
-	}
+	cookies := siteCookies(u, values)
 	jar.SetCookies(u, cookies)
 
 	t.jarMu.Lock()
@@ -726,6 +721,25 @@ func randUserID() string {
 
 // mustParseURL parses a URL and panics on error. Used only where the input is
 // a known-valid document URL.
+// siteCookies scopes externally supplied cookies to the document's parent
+// domain (disk.yandex.ru -> yandex.ru) instead of host-only: the document
+// fetch is redirected across Yandex hosts, and an out-of-band solve (e.g.
+// SmartCaptcha's spravka) is issued for .yandex.ru, so a host-only copy
+// would never reach the host that actually asked for it.
+func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
+	domain := ""
+	if u != nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 {
+			domain = strings.Join(labels[1:], ".")
+		}
+	}
+	cookies := make([]*http.Cookie, 0, len(values))
+	for k, v := range values {
+		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: domain})
+	}
+	return cookies
+}
+
 func mustParseURL(rawURL string) *url.URL {
 	u, err := url.Parse(rawURL)
 	if err != nil {

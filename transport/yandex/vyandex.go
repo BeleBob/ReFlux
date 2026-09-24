@@ -1181,10 +1181,7 @@ func (t *YandexVolgaTransport) ApplyCookies(values map[string]string) error {
 	}
 	jar, _ := cookiejar.New(nil)
 	u, _ := url.Parse(t.docURL)
-	cookies := make([]*http.Cookie, 0, len(values))
-	for k, v := range values {
-		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
-	}
+	cookies := siteCookies(u, values)
 	if u != nil {
 		jar.SetCookies(u, cookies)
 	}
