@@ -91,6 +91,8 @@ func main() {
 	mode := flag.String("mode", "", "Exit-node mode: l3 (default, Linux only) or l4 (works everywhere)")
 
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
+	negotiate := flag.Bool("negotiate", false, "Require encrypted, session-bound IPv4 capability negotiation on both peers (no legacy fallback)")
+	maxPacket := flag.Int("max-packet-size", transport.MaxNegotiatedPacket, "Maximum IPv4 packet in negotiated mode (1280..65000); not the Internet path MTU")
 	encryptionKeyFile := flag.String("encryption-key-file", "",
 		"Optional: encrypt the transport with AES-256-GCM using a shared secret read from this file. "+
 			"Both peers must use the same secret; unset means unencrypted, unchanged behavior")
@@ -311,9 +313,7 @@ DEPRECATED (removed in v2)
 		inner = transport.NewCompressedTransport(inner)
 	}
 
-	// Optional AES-256-GCM encryption sits closest to the raw transport, so on
-	// send we batch/compress first and encrypt the result (ciphertext would not
-	// compress). Both peers must use the same secret.
+	// Preserve legacy wrapper order: encrypt each packet, then batch/compress.
 	if *encryptionKeyFile != "" {
 		secretBytes, err := os.ReadFile(*encryptionKeyFile)
 		if err != nil {
@@ -331,6 +331,23 @@ DEPRECATED (removed in v2)
 		log.Printf("Transport encryption: AES-256-GCM enabled")
 	}
 
+	if *negotiate {
+		encrypted, ok := inner.(*transport.EncryptedTransport)
+		if !ok || *codec != codecBatched || (*role != roleClient && *role != roleExit) {
+			log.Fatal("--negotiate requires --encryption-key-file, --codec=batched and role client or exit")
+		}
+		caps := transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP
+		// Both client ingress paths accept returned IPv4 ICMP. Only the raw
+		// exit currently relays Internet ICMP errors through NAT.
+		if *role == roleClient || exitMode == tunnel.ExitModeL3 {
+			caps |= transport.CapabilityICMPErrors
+		}
+		var err error
+		inner, err = transport.NewNegotiatedTransport(encrypted, transport.PeerParameters{Capabilities: caps, MaxPacketSize: *maxPacket}, *role == roleExit)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	trans := inner
 
 	// Benchmark modes run the transport directly with no tunnel / raw socket,
@@ -350,6 +367,10 @@ DEPRECATED (removed in v2)
 	if err := trans.Start(); err != nil {
 		log.Fatalf("Failed to start transport: %v", err)
 	}
+	if n, ok := trans.(*transport.NegotiatedTransport); ok {
+		p, _ := n.PeerParameters()
+		log.Printf("Authenticated peer: IPv4 TCP; UDP=%t; ICMP errors=%t; maximum packet=%d", p.Capabilities&transport.CapabilityUDP != 0, p.Capabilities&transport.CapabilityICMPErrors != 0, p.MaxPacketSize)
+	}
 
 	switch *role {
 	case roleExit:
@@ -362,6 +383,11 @@ DEPRECATED (removed in v2)
 }
 
 func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
+	if exitMode == tunnel.ExitModeL3 {
+		if err := tunnel.SetLocalIP(localIP); err != nil {
+			log.Fatalf("--local-ip: %v", err)
+		}
+	}
 	ex, err := tunnel.NewExitNode(trans, exitMode.String())
 	if err != nil {
 		log.Fatalf("exit node: %v", err)

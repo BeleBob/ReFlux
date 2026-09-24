@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-Network stack research tool. TCP tunnel with pluggable transports,
+Network stack research tool. IPv4 TCP/UDP tunnel with pluggable transports,
 batched+zstd codec, and two exit-node backends (L3 raw forward / L4 gVisor proxy).
 
 # Disclaimer
@@ -67,12 +67,12 @@ Client (any):  macOS (utun) / Linux / Windows / iOS (packet tunnel) / Android
 | macOS / Linux / Windows / iOS / Android | `--mode l3`  | exit on Linux + root  |
 | macOS / Linux / Windows / iOS / Android | `--mode l4`  | nothing               |
 
-In `l3`, the exit node terminates nothing: it forwards raw IP packets with
-SNAT/DNAT (conntrack + egress-IP filter). One TCP connection end-to-end
-between the client and the real server.
+In `l3`, the exit node terminates nothing: it forwards raw TCP and UDP packets
+with SNAT/DNAT (conntrack + egress-IP filter). TCP remains end-to-end between
+the client and the real server.
 
-In `l4`, the exit node terminates TCP in a userspace gVisor stack, then
-re-dials the real server with `net.Dial`. Works on any OS, no root.
+In `l4`, the exit node terminates TCP/UDP in a userspace gVisor stack, then
+re-dials the real server. Works on any OS, no root.
 
 The client terminates TCP locally (gVisor, utun, or NEPacketTunnelProvider),
 then sends raw IP packets into the transport.
@@ -86,7 +86,7 @@ against either.
 | `--mode` | Backend | Forwarding | Requires | Platforms |
 |----------|---------|-----------|----------|-----------|
 | `l3` | Raw L3 | SNAT/DNAT on raw IPv4 via SOCK_RAW + conntrack. No userspace TCP stack. | root / CAP_NET_RAW | Linux only |
-| `l4` (alias `proxy`) | gVisor proxy | Terminates TCP in a userspace gVisor stack, then `net.Dial` to the real server. | nothing | Linux, macOS, Windows |
+| `l4` (alias `proxy`) | gVisor proxy | Terminates TCP/UDP in a userspace gVisor stack, then dials the real server. | nothing | Linux, macOS, Windows |
 
 - `proxy` is a deprecated alias for `l4`; both select the same backend.
   `l4` is the canonical name going forward.
@@ -112,8 +112,8 @@ sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s <egress-ip> -j DROP
 sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP
 ```
 
-The L3 code additionally drops client-originated RSTs before `sendto()`, so
-the kernel rule above is only needed for kernel-generated RSTs.
+Client-originated RSTs are forwarded normally. The rule above is only for
+RSTs generated locally by the exit-node kernel.
 
 ## Highlights
 
@@ -123,6 +123,11 @@ the kernel rule above is only needed for kernel-generated RSTs.
 - **Batched + zstd codec** - coalesces many tunnel packets into a single
   transport message. Fewer channel messages, higher throughput. See
   `transport/batched.go` and `transport/framing.go`.
+- **IPv4 UDP** - L4 forwarding and SOCKS5 `UDP ASSOCIATE` have local echo
+  coverage. Linux raw L3 UDP remains experimental; see the limitations below.
+- **Authenticated capability negotiation** - opt-in `--negotiate` inside
+  encryption, with fresh session challenges, packet limits and replay checks.
+  The old unauthenticated wire-v3 startup option is retired. Legacy mode is unchanged.
 - **Two exit backends** - `l3` (raw SNAT/DNAT) and `l4` (gVisor proxy).
   See [Exit-node backends](#exit-node-backends).
 - **macOS utun client** - `--inbound=tun` (default on macOS). Creates a utun
@@ -253,7 +258,39 @@ Requires sudo. All traffic except the transport goes through the tunnel.
 ```
 
 Point your browser / app at `127.0.0.1:1080` as a SOCKS5 proxy. This is the
-default inbound on non-macOS platforms.
+default inbound on non-macOS platforms. UDP-capable applications may use the
+SOCKS5 `UDP ASSOCIATE` command.
+
+### UDP limitations
+
+- UDP is IPv4-only for now.
+- L3 reassembles IPv4 fragments with a 30-second fixed lifetime, 64 incomplete
+  datagrams, 128 fragments per datagram and a 4 MiB byte budget per direction.
+  Overlaps and malformed fragments are discarded; expiry is swept on input.
+- L3 relays checksum-validated ICMP errors only for live TCP/UDP NAT flows,
+  restoring the quoted client address/port and checksums. Redirects and echo
+  traffic are not relayed. Egress EMSGSIZE produces ICMP fragmentation-needed
+  with the kernel route MTU; non-DF packets can instead be fragmented. Outgoing
+  fragmentation of IPv4 headers containing options is not supported.
+- This is ICMP-based PMTU feedback, not active DPLPMTUD probing. Networks that
+  filter ICMP can still black-hole large DF packets; real-network tests remain
+  necessary. The negotiated packet ceiling is distinct from the Internet MTU.
+- Linux raw L3 UDP reserves a kernel-selected source port per remote endpoint
+  using a real UDP socket and restores the client's port on return. This avoids
+  taking ports owned by host applications and is intended to prevent kernel
+  ICMP port-unreachable without firewall changes. There are at most 256 mappings;
+  idle expiry is 2 minutes (15 seconds for DNS). Source-port preservation and
+  endpoint-independent NAT/hole-punching are not provided.
+- The isolated Linux raw-socket/ICMP test passes in GitHub Actions. It covers
+  loopback inside a disposable network namespace, including host-port conflicts
+  and false ICMP port-unreachable responses; it is not an Internet/PMTU canary.
+  TCP's existing raw-port ownership and RST-suppression requirements are unchanged.
+- iOS keeps the old TCP fallback for non-DNS UDP unless the app explicitly
+  calls `OpenFluxTunSetUDPEnabled(1)` for a known UDP-capable exit. Reset it to
+  `0` when switching to an older exit. Physical-device QUIC is not validated.
+- Most document/WebSocket transports are reliable and ordered. UDP works over
+  them, but packet loss in the carrier can still cause head-of-line blocking;
+  this is not equivalent to a native datagram transport.
 
 ### Codec selection
 
@@ -265,9 +302,39 @@ LZ4 codec, pass `--codec=legacy`:
 ./openflux --role=client --codec=legacy ...
 ```
 
-**Important:** the batched wire format is NOT compatible with the legacy LZ4
-format. Client and exit node must both use the same codec (both new, or both
-`--codec=legacy`).
+**Important:** batched and legacy LZ4 codecs remain incompatible. Default
+batched mode remains v2. The old `OPENFLUX_EXPERIMENTAL_WIRE_V3=1` prototype
+now fails startup rather than accepting unauthenticated capability messages.
+
+### Authenticated capability negotiation (opt-in CLI)
+
+Add these options on **both** updated peers, using the same secret and codec:
+
+```
+--codec=batched --encryption-key-file=/path/to/secret.txt --negotiate
+```
+
+The handshake runs inside AES-GCM and confirms fresh random challenges, peer
+roles, IPv4/TCP/UDP support, ICMP-error support and maximum IPv4 packet size.
+L4 does not advertise raw ICMP forwarding. Only the intersection of capabilities
+is enabled. Data carries both session IDs and a sequence number; a 64-packet
+sliding replay window tolerates bounded reordering. The old batch-v2 envelope
+and encryption key derivation are unchanged; this is not forward secrecy or a
+replacement for a future key-exchange/rekey design.
+
+Negotiated mode never falls back to unencrypted or legacy peers. Startup fails
+after 20 seconds if negotiation cannot complete (wrong key, incompatible codec,
+missing option, or unavailable peer). `--max-packet-size=1280..65000` caps the
+complete IPv4 packet; the default is 65000, leaving room for authenticated
+envelopes. The agreed limit is used by the gVisor link; the macOS TUN remains
+1280. Raw-exit replies exceeding the agreed limit are fragmented without DF,
+or produce ICMP feedback to the Internet sender with DF.
+
+Session identity and capabilities stay fixed for the process lifetime. Carrier
+reconnects retain them; after either process restarts, restart the other peer
+as well. Automatic secure session replacement is not implemented. Existing
+iOS builds have no negotiation setting and must use an exit without `--negotiate`.
+Their UDP switch remains manual. No claim of device-level QUIC validation is made.
 
 ### Encryption (optional)
 
