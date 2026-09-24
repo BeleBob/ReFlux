@@ -531,6 +531,7 @@ DEPRECATED (removed in v2)
 		managerInst *manager.Manager
 		trans       transport.Transport
 		exchanger   transport.CookieExchanger
+		demux       *transport.PortDemux
 	)
 
 	if *negotiate || *transportsFlag != "" {
@@ -595,14 +596,25 @@ DEPRECATED (removed in v2)
 					Transport: name, URL: url, Reason: reason,
 				})
 			})
-			managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
-				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-					Transport: name, URL: url, Reason: reason, Remote: true,
+			if *role == roleClient {
+				demux = transport.NewPortDemux(managerInst, authProxyPortLo, authProxyPortHi)
+				authProxy := &remoteAuthProxy{demux: demux}
+				managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
+					proxy, err := authProxy.Addr()
+					if err != nil {
+						log.Printf("remote auth proxy: %v", err)
+					}
+					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
+						Transport: name, URL: url, Reason: reason, Remote: true, Proxy: proxy,
+					})
 				})
-			})
+			}
 		}
 
 		trans = managerInst
+		if demux != nil {
+			trans = demux
+		}
 		exchanger = nil // cookie handling lives in the Manager
 
 	} else {

@@ -38,6 +38,9 @@ type CookiesRequestPayload struct {
 	// Remote marks a check the exit node needs: it must be passed from the
 	// exit's address, and the answering offer must set Remote too.
 	Remote bool `json:"remote,omitempty"`
+	// Proxy, set with Remote, is a local HTTP proxy (host:port) whose
+	// traffic leaves from the exit's address; point the browser at it.
+	Proxy string `json:"proxy,omitempty"`
 }
 
 type CookiesOfferPayload struct {
