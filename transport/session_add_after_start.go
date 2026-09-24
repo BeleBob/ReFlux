@@ -42,12 +42,9 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 	}
 	bat := NewBatchedTransport(enc)
 
-	if err := raw.Start(); err != nil {
-		return fmt.Errorf("session: transport %q start: %w", name, err)
-	}
+	// bat.Start starts raw through the encryption layer.
 	if err := bat.Start(); err != nil {
-		_ = raw.Stop()
-		return fmt.Errorf("session: transport %q batched start: %w", name, err)
+		return fmt.Errorf("session: transport %q start: %w", name, err)
 	}
 
 	// Same receive path as the bootstrap transports: everything that

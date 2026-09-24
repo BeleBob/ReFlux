@@ -220,15 +220,12 @@ func (s *Session) Start() (err error) {
 			continue
 		}
 
-		if err := link.raw.Start(); err != nil {
+		// batched.Start starts raw through the encryption layer; starting
+		// raw separately as well brought every carrier up twice (for a
+		// document transport: two sessions attached to the document).
+		if err := link.batched.Start(); err != nil {
 			utils.Debugf("[SESSION] transport %q start: %v", name, err)
 			lastErr = err
-			continue
-		}
-		if err := link.batched.Start(); err != nil {
-			utils.Debugf("[SESSION] transport %q batched start: %v", name, err)
-			lastErr = err
-			_ = link.raw.Stop()
 			continue
 		}
 
