@@ -409,17 +409,16 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	t.connectToDoc(next)
 }
 
-// scheduleReconnectNoCaptcha is called when fetchDocInfo returned a sentinel
-// error (ErrCaptchaRequired / ErrLoginRequired). Retrying with a backoff would
-// just hit the same captcha again, so we slow down to a fixed long delay and
-// rely on external cookie injection to break the cycle.
-
 // SetErrorNotifier installs a callback for out-of-band errors such as
 // ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
 func (t *YandexDocsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
 	t.errNotifier = fn
 }
 
+// scheduleReconnectNoCaptcha is called when fetchDocInfo returned a sentinel
+// error (ErrCaptchaRequired / ErrLoginRequired). Retrying with a backoff would
+// just hit the same captcha again, so we slow down to a fixed long delay and
+// rely on external cookie injection to break the cycle.
 func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	if !t.IsRunning() {
 		return
@@ -428,7 +427,7 @@ func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	utils.Debugf("[YDOCS] external solver needed; waiting %v before next attempt", longDelay)
 	select {
 	case <-time.After(longDelay):
-	case <-t.StopCh():
+	case <-t.Done():
 		return
 	}
 	if !t.IsRunning() {
@@ -436,16 +435,6 @@ func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	}
 	t.RecordReconnect()
 	t.connectToDoc(attempt + 1)
-}
-
-// StopCh returns a channel that closes when the transport is stopped.
-// Used internally by scheduleReconnectNoCaptcha.
-func (t *YandexDocsTransport) StopCh() <-chan struct{} {
-	// BaseTransport doesn't expose a stop channel; we create a fresh one
-	// that never fires. This is enough: IsRunning() is checked after the
-	// sleep anyway.
-	ch := make(chan struct{})
-	return ch
 }
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 30s.
