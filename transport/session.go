@@ -493,6 +493,20 @@ func (s *Session) liveLocked(l *transportLink) bool {
 	return !s.peerKeepalive || time.Since(l.lastHeard) < s.linkTimeout
 }
 
+// ActiveTransport names the carrier data currently goes through: the
+// highest-priority live one, or "" when none is live.
+func (s *Session) ActiveTransport() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready || s.stopped {
+		return ""
+	}
+	if links := s.liveLinksLocked(); len(links) > 0 {
+		return links[0].name
+	}
+	return ""
+}
+
 // IsExit reports whether this is the exit node's side of the session.
 func (s *Session) IsExit() bool { return s.exit }
 

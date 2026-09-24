@@ -534,9 +534,12 @@ DEPRECATED (removed in v2)
 		demux       *transport.PortDemux
 	)
 
-	if *negotiate || *transportsFlag != "" {
+	// [Transport] sections in a .conf describe a multi-transport session
+	// just like --transports; without this they were silently ignored and
+	// only the single --transport ran.
+	if *negotiate || *transportsFlag != "" || len(confTransports) > 0 {
 		if secret == "" {
-			log.Fatal("--transports/--negotiate requires --encryption-key-file")
+			log.Fatal("--transports/--negotiate/.conf transports require --encryption-key-file")
 		}
 
 		caps := transport.CapabilityIPv4 | transport.CapabilityTCP | transport.CapabilityUDP

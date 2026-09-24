@@ -57,7 +57,7 @@
 Клиент (любой): macOS (utun) / Linux / Windows / iOS (packet tunnel) / Android
                     |
                     v
-               Транспорт (Yandex.Docs / Volga / MAX / Cups / Mail.ru)
+               Транспорт (Yandex.Docs / Volga / Board / MAX / Cups / Mail.ru / Direct)
                     |
                     v
                Выходная нода  -->  Интернет
@@ -78,7 +78,9 @@ end-to-end между клиентом и реальным сервером.
 подключается к реальному серверу. Работает на любой ОС без root.
 
 Клиент терминирует TCP локально (gVisor, utun или NEPacketTunnelProvider),
-затем отправляет сырые IP-пакеты в транспорт.
+затем отправляет сырые IP-пакеты в транспорт. В сессии с несколькими
+транспортами они работают одновременно, и трафик переключается между ними (см.
+[Сессии с несколькими транспортами](#сессии-с-несколькими-транспортами)).
 
 ## Бэкенды выходной ноды
 
@@ -121,16 +123,29 @@ RST, которые локально генерирует ядро выходн�
 ## Ключевые особенности
 
 - **Подключаемые транспорты** - Yandex.Docs (WS), Yandex Volga (HTTP relay + WS),
-  MAX/OneMe (WebRTC DataChannel), Cups.online (Centrifugo-комнаты),
-  Mail.ru Docs (WS).
+  Yandex Board (WS), MAX/OneMe (WebRTC DataChannel), Cups.online
+  (Centrifugo-комнаты), Mail.ru Docs (WS), Direct (прямое TCP до выходной
+  ноды, только в сессии).
 - **Батчинг + zstd** - склеивает множество туннельных пакетов в одно
   транспортное сообщение. Меньше сообщений в канале, выше скорость. См.
   `transport/batched.go` и `transport/framing.go`.
 - **IPv4 UDP** - L4 и SOCKS5 `UDP ASSOCIATE` проверяются локальными echo-тестами.
   Linux raw L3 UDP остаётся экспериментальным; ограничения приведены ниже.
-- **Защищённое согласование возможностей** - флаг `--negotiate` внутри
-  шифрованного канала: свежие идентификаторы сессии, лимиты пакетов и защита
-  от повторов. Запуск старого неаутентифицированного wire-v3 теперь запрещён.
+- **Аутентифицированные сессии** - флаг `--negotiate` внутри шифрованного
+  канала: свежие идентификаторы сессии, лимиты пакетов и защита от повторов.
+  Перезапущенный клиент или выходная нода принимаются снова после
+  подтверждения свежего challenge, вторую сторону перезапускать не нужно.
+  Запуск старого неаутентифицированного wire-v3 теперь запрещён.
+- **Сессии с несколькими транспортами** - `--transports=direct:100,yandex:50`
+  (или секции `[Transport]` в `.conf`) запускает все транспорты сразу. Трафик
+  идёт по самому приоритетному из тех, что реально доходят до другой стороны,
+  и переключается при его отказе. См.
+  [Сессии с несколькими транспортами](#сессии-с-несколькими-транспортами).
+- **Обработка капчи** - PoW-капча Яндекса решается автоматически. SmartCaptcha
+  и требование входа уходят приложению через IPC; те, в которые упирается
+  выходная нода, пересылаются клиенту по любому работающему транспорту вместе
+  с локальным прокси, через который приложение проходит их с адреса самой
+  ноды. См. [Капча](#капча).
 - **Два бэкенда выхода** - `l3` (сырой SNAT/DNAT) и `l4` (gVisor proxy).
   См. [Бэкенды выходной ноды](#бэкенды-выходной-ноды).
 - **macOS utun-клиент** - `--inbound=tun` (по умолчанию на macOS). Создаёт
@@ -158,24 +173,42 @@ RST, которые локально генерирует ядро выходн�
 ```
 OpenFlux/
   main.go                          # Точка входа CLI (клиент / exit / бенчи)
+  conf.go                          # Разбор .conf
+  transport_spec.go                # Разбор --transports, запуск сессии
+  transport_factory.go             # Создание транспорта по типу
+  ipc_handler.go                   # IPC: cookies от приложения
+  auth_proxy.go                    # Локальный HTTP-прокси для проверок ноды
   bench.go                         # Хелперы бенчмарка
   tun_darwin.go                    # macOS utun L3-клиент
   tun_watch.go                     # Watcher сокетов для bypass-маршрутов
-  tun_other.go                     # Заглушки для не-darwin платформ
+  tun_learn.go, tun_other.go       # Хелперы utun / заглушки для не-darwin
+  signals_{unix,windows}.go        # Сигналы завершения
   export_ios.go                    # cgo-мост для iOS-статической библиотеки
+  export_ios_packet.go             # Мост packet tunnel для iOS
   transport/
     transport.go                   # Интерфейс Transport
     batched.go                     # BatchedTransport (склейка + zstd)
     framing.go                     # Wire-формат батчированных кадров
     compressor.go                  # Legacy per-packet LZ4-кодек
     encrypted.go                   # Опциональная AES-256-GCM обёртка
-    yandex/                        # Бэкенды Yandex.Docs + Volga
+    session.go                     # Согласованная сессия с несколькими транспортами
+    session_add_after_start.go     # Добавление транспорта в работающую сессию
+    direct.go                      # Прямой TCP-транспорт
+    portdemux.go                   # Разделение ответов между двумя стеками клиента
+    cookies.go, cookiestore.go     # Обмен cookies и их хранение
+    error_notifier.go              # Внешние ошибки (капча, вход)
+    control/                       # Конверт и управляющие сообщения
+    manager/                       # Транспорты, cookies и проверки в сессии
+    ipc/                           # IPC приложение <-> ядро через Unix-сокет
+    yandex/                        # Yandex.Docs, Volga, Board, решатель капчи
     oneme/                         # Бэкенд MAX Messenger
     cupsonline/                    # Бэкенд Cups.online
     mailru/                        # Бэкенд Mail.ru Docs
   tunnel/
     tunnel.go                      # Клиентский туннель (gVisor + TunnelLinkEndpoint)
     endpoint.go                    # Виртуальный NIC (клиент)
+    packettunnel.go                # Packet tunnel (iOS)
+    httpproxy.go                   # HTTP-прокси поверх стека туннеля
     exit.go                        # Диспетчер NewExitNode (l3 / l4)
     proxy_exit.go                  # L4 exit (gVisor + net.Dial)
     l3/
@@ -186,19 +219,20 @@ OpenFlux/
       backend_other.go             # Заглушка для неподдерживаемых платформ
       conntrack.go                 # Таблица conntrack
       flow.go                      # Flow-ключи, SNAT/DNAT, checksums
-    rawsocket_linux.go             # Legacy raw exit (оставлен для референса)
-    rawsocket_{darwin,windows}.go  # Заглушки
+      udp_nat.go                   # UDP NAT
+      icmp.go                      # ICMP-ошибки и MTU
+      reassembly.go                # Сборка IPv4-фрагментов
     windivert/                     # WinDivert-бэкенд (есть, но к L3 не подключён)
   socks5/                          # SOCKS5-сервер (fallback на клиенте)
   network/                         # Контрольные суммы, разбор пакетов
   utils/                           # Логирование
   ios-app/                         # iOS-клиент на SwiftUI (XcodeGen)
+  build_all.sh                     # Кросс-сборка релизных бинарников
   build_ios.sh                     # Сборка статической библиотеки iOS (liboflux.a)
   build_ios_app.sh                 # Сборка + архив + экспорт IPA iOS
   build_android.sh                 # Сборка клиентского бинарника Android
   scripts/
     cleanup-utun.sh                # Удалить stale-маршруты utun (macOS)
-    build-flx-linux-img.sh         # Сборка минимального Alpine rootfs для QEMU
 ```
 
 ## Сборка
@@ -312,15 +346,103 @@ LZ4-кодека передайте `--codec=legacy`:
 ```
 
 Согласуются IPv4/TCP/UDP, передача ICMP-ошибок и максимальный размер IP-пакета.
-L4 не объявляет raw ICMP forwarding. При несовместимости/отсутствии ответа
-запуск прекращается через 20 секунд, без перехода на менее защищённый режим.
-`--max-packet-size` принимает 1280–65000 (по умолчанию 65000); это лимит полного
-IP-пакета, не MTU Интернета. Сессии привязаны к запущенным процессам: после
-перезапуска одного узла перезапустите второй. Автоматическая замена сессии,
-новый обмен ключами и forward secrecy не реализованы.
+L4 не объявляет raw ICMP forwarding. При несовместимости или отсутствии ответа
+клиент прекращает попытки через 20 секунд, без перехода на менее защищённый
+режим; выходная нода ждёт клиента сколько угодно. `--max-packet-size`
+принимает 1280-65000 (по умолчанию 65000); это лимит полного IP-пакета, не MTU
+Интернета.
+
+Переподключения транспорта сессию сохраняют. Перезапущенный узел принимается
+снова без перезапуска второго: hello от неизвестного отправителя получает
+challenge, созданный только для него, и сессия заменяется, только когда этот
+challenge вернули в ответ. Поэтому старый трафик, переигранный из транспорта
+(шифротекст видит любой, у кого есть доступ к документу), сессию не собьёт.
+Выходная нода обслуживает одного активного клиента за раз. Клиент, чья нода
+замолчала на всех транспортах, сам начинает новый handshake примерно в течение
+минуты. Новый обмен ключами и forward secrecy не реализованы.
 
 Текущие iOS-сборки не включают этот режим: для них exit запускается без
 `--negotiate`, UDP остаётся ручной настройкой. Детали формата: [спецификация](PROTOCOL_NEGOTIATION.md).
+
+### Сессии с несколькими транспортами
+
+Несколько транспортов в одной согласованной сессии, например прямое
+TCP-подключение к выходной ноде и документ Яндекса как запасной канал:
+
+```
+# Выходная нода: direct на :8445 плюс документ
+./openflux --role=exit --mode=l3 --negotiate \
+    --transports=direct:100,yandex:50 --direct-listen=0.0.0.0:8445 \
+    --encryption-key-file=secret.txt --url="YOUR_YANDEX_DOC_URL"
+
+# Клиент
+./openflux --role=client --inbound=socks5 --negotiate \
+    --transports=direct:100,yandex:50 --direct-dial=EXIT_IP:8445 \
+    --encryption-key-file=secret.txt --url="YOUR_YANDEX_DOC_URL"
+```
+
+- Все транспорты стартуют сразу. Тот, что не смог запуститься (например,
+  из-за капчи), перезапускается в фоне с нарастающей паузой.
+- Приоритет - это порядок переключения: трафик идёт по самому приоритетному
+  транспорту из тех, что доходят до другой стороны. Транспорты с одинаковым
+  приоритетом делят потоки между собой.
+- Транспорт считается рабочим, только пока с той стороны по нему что-то
+  приходит (молчащие пингуются), а не просто пока он подключён к своему
+  документу. Со старыми версиями всё работает как раньше.
+- Транспорты называются по своему типу. Ссылки на документы по типам:
+  `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`,
+  `--cupsonline-url`; для MAX - `--oneme-token` / `--oneme-uid`. Если
+  `--yandex-url` не задан, для `yandex` используется `--url`.
+- `--url` - это ещё и контекст шифрования: у обеих сторон он должен совпадать.
+- Для `direct` порт выходной ноды должен быть доступен клиенту (откройте его в
+  firewall); `direct` работает только в сессии.
+
+То же самое файлом `.conf` (`./openflux --config=client.conf`; флаги из
+командной строки важнее файла):
+
+```
+[Interface]
+Role = client
+Inbound = socks5
+EncryptionKeyFile = secret.txt
+URL = YOUR_YANDEX_DOC_URL
+
+[Transport "direct"]
+Priority = 100
+Dial = EXIT_IP:8445
+
+[Transport "yandex"]
+Priority = 50
+URL = YOUR_YANDEX_DOC_URL
+```
+
+Ключи `[Interface]`: `Role`, `Inbound`, `Transport`, `Mode`, `Codec`,
+`Socks5`, `EncryptionKeyFile`, `CookieStore`, `IPCSocket`, `URL`, `Debug`.
+Секции транспортов: `Type` (по умолчанию имя секции), `Priority` (по умолчанию
+50), `URL`, `Dial` / `Listen` (direct) и `Token` / `UID` (MAX). `.conf` с
+секциями транспортов всегда запускается как согласованная сессия.
+
+### Капча
+
+- **PoW-капчу** (`showcaptchafast`) транспорт решает сам, ничего делать не
+  нужно.
+- **SmartCaptcha или требование входа на своём транспорте клиента**: с
+  `--ipc-socket=PATH` ядро просит приложение (`CookiesRequest`), приложение
+  открывает страницу во встроенном браузере и отвечает cookies
+  (`CookiesOffer`); транспорт применяет их и переподключается.
+- **То же на выходной ноде**: нода сообщает об этом клиенту управляющим
+  сообщением по любому транспорту, который ещё работает (например, `direct`,
+  пока застрял документ). Клиент передаёт это приложению как `CookiesRequest`
+  с `remote: true` и `proxy`: локальным HTTP-прокси, соединения которого
+  выходят через туннель и ноду, так что проверка проходится с адреса ноды.
+  Приложение отвечает с `remote: true`, и нода применяет cookies. TCP-стек
+  прокси делит адрес туннеля и использует локальные порты 12000-12999.
+- На практике настоящий браузер с адреса ноды обычно пускают к документу
+  сразу (капча нацелена на HTTP-клиент транспорта), так что обычно достаточно
+  загрузить страницу и отправить её cookies.
+- Cookies сохраняются в `--cookie-store` (по умолчанию
+  `./cookies-<transport>.json`) и используются после перезапуска. Под systemd
+  с `ProtectSystem=strict` укажите папку, доступную на запись.
 
 ### Шифрование (опционально)
 
@@ -357,6 +479,9 @@ IP-пакета, не MTU Интернета. Сессии привязаны к
 ./openflux --role=exit --mode=l3 --transport=cupsonline --debug
 # печатает base64-список комнат; передайте его клиенту через --url
 
+# Yandex Board (WS)
+./openflux --role=exit --mode=l3 --transport=boards --url="..." --debug
+
 # Mail.ru Docs (WS)
 ./openflux --role=exit --mode=l3 --transport=mailru \
     --url="YOUR_MAILRU_PUBLIC_LINK" --debug
@@ -370,7 +495,7 @@ IP-пакета, не MTU Интернета. Сессии привязаны к
 |------|----------|--------------|----------|
 | `--role` | `-r` | `client` | `client` \| `exit` \| `bench-send` \| `bench-sink` |
 | `--inbound` | `-i` | (платформа) | `tun` (macOS) \| `socks5` |
-| `--transport` | `-t` | `yandex` | `yandex` \| `vyandex` \| `oneme` \| `cupsonline` \| `mailru` |
+| `--transport` | `-t` | `yandex` | `yandex` \| `vyandex` \| `boards` \| `oneme` \| `cupsonline` \| `mailru` |
 | `--mode` | `-m` | `l3` | Режим выходной ноды: `l3` \| `l4` |
 | `--codec` | `-c` | `batched` | `batched` \| `legacy` |
 | `--url` | `-u` | `http://#` | URL документа |
@@ -382,6 +507,16 @@ IP-пакета, не MTU Интернета. Сессии привязаны к
 | `--maxUid` | | | ID пользователя MAX (`--transport=oneme`) |
 | `--bench-bytes` | | `0` | Сколько MB залить (`--role=bench-send`) |
 | `--bench-compressible` | | `false` | Сжимаемый payload (bench) |
+| `--negotiate` | | `false` | Аутентифицированная сессия (на обеих сторонах) |
+| `--max-packet-size` | | `65000` | Максимальный IPv4-пакет в сессии (1280..65000) |
+| `--transports` | | | Транспорты сессии с приоритетами, например `direct:100,yandex:50` |
+| `--direct-dial` | | | Адрес выходной ноды для `direct` (клиент) |
+| `--direct-listen` | | | Адрес прослушивания для `direct` (выходная нода) |
+| `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`, `--cupsonline-url` | | | Ссылка на документ по типу транспорта в сессии |
+| `--oneme-token`, `--oneme-uid` | | | Данные MAX в сессии |
+| `--config` | | | Файл `.conf`; флаги важнее него |
+| `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |
+| `--ipc-socket` | | | Unix-сокет для приложения (запросы капчи, cookies) |
 
 Устаревшие (оставлены на один релиз, автоматически маппятся на новые флаги):
 `--client`, `--exit-node`, `--tun`, `--socks5-mode`, `--legacy`,
@@ -390,10 +525,12 @@ IP-пакета, не MTU Интернета. Сессии привязаны к
 ## Реализация собственных транспортов
 
 Реализуйте интерфейс `Transport` из `transport/transport.go` и
-зарегистрируйте свой транспорт в `switch`-блоке `main.go` (см.
-`transport/mailru/` как полный пример). Батчированный кодек
+зарегистрируйте свой транспорт в `transport_factory.go` (сессии,
+`--transports`) и в `switch` по `--transport` в `main.go` (режим с одним
+транспортом); полный пример - `transport/mailru/`. Батчированный кодек
 (`BatchedTransport`) оборачивает любой транспорт - новый бэкенд получает
-батчинг бесплатно.
+батчинг бесплатно. Чтобы участвовать в обработке капчи, реализуйте также
+`transport.ErrorNotifier` и `transport.CookieExchanger`.
 
 ## TODO
 
