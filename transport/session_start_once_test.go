@@ -1,18 +1,24 @@
 package transport
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 )
 
-// startCountingWire counts Start calls on a negotiationWire.
+// startCountingWire counts Start calls on a negotiationWire and can be made
+// to fail the first few of them.
 type startCountingWire struct {
 	negotiationWire
-	starts atomic.Int32
+	starts   atomic.Int32
+	failures atomic.Int32
 }
 
 func (w *startCountingWire) Start() error {
 	w.starts.Add(1)
+	if w.failures.Add(-1) >= 0 {
+		return errors.New("carrier not ready")
+	}
 	return nil
 }
 

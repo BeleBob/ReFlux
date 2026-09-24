@@ -57,6 +57,7 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 		encrypted: enc,
 		batched:   bat,
 		priority:  priority,
+		started:   true,
 	}
 
 	s.mu.Lock()

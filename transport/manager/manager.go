@@ -136,9 +136,9 @@ func (m *Manager) Transports() []string {
 	return append([]string(nil), m.order...)
 }
 
-// Start brings up the Session. The Session itself iterates transports by
-// priority and performs the handshake through the first live one; the
-// Manager only needs to have already registered every transport in it.
+// Start brings up the Session, which starts every registered transport. On
+// the client it returns once the handshake completed; on the exit node it
+// returns right away and the session becomes ready when a client arrives.
 func (m *Manager) Start() error {
 	m.mu.RLock()
 	entries := make([]*Entry, 0, len(m.order))

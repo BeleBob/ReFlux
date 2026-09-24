@@ -40,6 +40,13 @@ type Session struct {
 	window           uint64
 	handshakeTimeout time.Duration
 
+	// helloInterval paces the client's hellos until the session is ready.
+	// restartMin/restartMax bound the backoff for carriers whose Start
+	// failed (e.g. a captcha during authorization).
+	helloInterval time.Duration
+	restartMin    time.Duration
+	restartMax    time.Duration
+
 	// Transport links, ordered by priority (descending).
 	links map[string]*transportLink
 	order []string
@@ -61,6 +68,9 @@ type transportLink struct {
 	batched   *BatchedTransport
 	priority  int
 
+	// started is set once the carrier is up and its receive path attached.
+	started bool
+
 	// Set once the link has been observed to fail; it is removed from
 	// routing but kept for stats until RemoveTransport is called.
 	dead bool
@@ -80,6 +90,9 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 		links:            make(map[string]*transportLink),
 		done:             make(chan struct{}),
 		handshakeTimeout: 20 * time.Second,
+		helloInterval:    250 * time.Millisecond,
+		restartMin:       time.Second,
+		restartMax:       30 * time.Second,
 	}
 	if _, err := rand.Read(s.local[:]); err != nil {
 		return nil, err
@@ -180,93 +193,146 @@ func insertByPriority(order []string, name string, priority int, links map[strin
 	return out
 }
 
-// Start brings up the transports in priority order and performs exactly one
-// handshake through the first live one. If that transport fails to start or
-// the handshake times out, the next transport is tried. Once ready, all
-// transports are live for IPv4 routing.
+// Start brings up every transport. A carrier whose Start fails is retried
+// in the background with backoff, so e.g. a transport stuck on a captcha
+// joins the session once it recovers instead of being dropped for good.
 //
-// Start is idempotent in the sense that calling it twice returns an error.
-func (s *Session) Start() (err error) {
+// The client keeps sending hellos through every started carrier until the
+// session is ready, and returns an error if that takes longer than the
+// handshake timeout. The exit node answers hellos but never initiates, so
+// its Start returns as soon as the carriers are launched: it must be able
+// to sit idle until a client shows up.
+func (s *Session) Start() error {
 	s.mu.Lock()
 	if s.stopped || s.started {
 		s.mu.Unlock()
 		return errors.New("session already started or stopped")
 	}
-	s.started = true
-	s.wg.Add(1)
-	handshakeTimeout := s.handshakeTimeout
-	s.mu.Unlock()
-	defer func() {
-		s.wg.Done()
-		if err != nil {
-			_ = s.Stop()
-		}
-	}()
-
-	s.mu.Lock()
-	order := append([]string(nil), s.order...)
-	s.mu.Unlock()
-
-	if len(order) == 0 {
+	if len(s.order) == 0 {
+		s.mu.Unlock()
 		return errors.New("session: no transports added")
 	}
+	s.started = true
+	links := make([]*transportLink, 0, len(s.order))
+	for _, name := range s.order {
+		links = append(links, s.links[name])
+	}
+	exit := s.exit
+	timeout := s.handshakeTimeout
+	s.mu.Unlock()
 
-	var lastErr error
-	for _, name := range order {
-		s.mu.Lock()
-		link, ok := s.links[name]
-		s.mu.Unlock()
-		if !ok {
-			continue
+	for _, link := range links {
+		if err := s.startLink(link); err != nil {
+			utils.Debugf("[SESSION] transport %q start: %v; retrying in background", link.name, err)
+			s.superviseLink(link)
 		}
-
-		// batched.Start starts raw through the encryption layer; starting
-		// raw separately as well brought every carrier up twice (for a
-		// document transport: two sessions attached to the document).
-		if err := link.batched.Start(); err != nil {
-			utils.Debugf("[SESSION] transport %q start: %v", name, err)
-			lastErr = err
-			continue
-		}
-
-		// Attach the receive path: each transport delivers to the same
-		// Session-level handler.
-		link.batched.Receive(func(raw []byte) {
-			s.receive(raw)
-		})
-
-		if err := s.handshakeVia(name, handshakeTimeout); err != nil {
-			utils.Debugf("[SESSION] handshake via %q failed: %v", name, err)
-			lastErr = err
-			_ = link.batched.Stop()
-			continue
-		}
-
-		utils.Debugf("[SESSION] ready via transport %q", name)
+	}
+	if exit {
 		return nil
 	}
 
-	if lastErr == nil {
-		lastErr = errors.New("session: no live transport for handshake")
+	s.wg.Add(1)
+	go s.helloLoop()
+	if err := s.waitReady(timeout); err != nil {
+		_ = s.Stop()
+		return fmt.Errorf("session: handshake failed: %w", err)
 	}
-	return fmt.Errorf("session: handshake failed: %w", lastErr)
+	return nil
 }
 
-// handshakeVia runs the hello exchange through one specific transport.
-func (s *Session) handshakeVia(name string, timeout time.Duration) error {
+// startLink starts one carrier and attaches it to the receive path. The
+// batched wrapper starts the raw transport through the encryption layer;
+// starting raw separately as well would bring the carrier up twice (two
+// sessions attached to the same document).
+func (s *Session) startLink(link *transportLink) error {
+	if err := link.batched.Start(); err != nil {
+		return err
+	}
+	link.batched.Receive(func(p []byte) { s.receive(p) })
+
+	s.mu.Lock()
+	stopped := s.stopped
+	if !stopped {
+		link.started = true
+	}
+	s.mu.Unlock()
+	if stopped {
+		_ = link.batched.Stop()
+		_ = link.raw.Stop()
+		return errors.New("session stopped")
+	}
+	return nil
+}
+
+// superviseLink retries startLink with exponential backoff until it
+// succeeds, the link is removed, or the session stops.
+func (s *Session) superviseLink(link *transportLink) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		delay := s.restartMin
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-time.After(delay):
+			}
+			s.mu.Lock()
+			current := s.links[link.name] == link
+			s.mu.Unlock()
+			if !current {
+				return
+			}
+			err := s.startLink(link)
+			if err == nil {
+				utils.Debugf("[SESSION] transport %q up after retry", link.name)
+				return
+			}
+			utils.Debugf("[SESSION] transport %q start: %v", link.name, err)
+			if delay *= 2; delay > s.restartMax {
+				delay = s.restartMax
+			}
+		}
+	}()
+}
+
+// helloLoop keeps offering the handshake through every started carrier
+// until the session is ready.
+func (s *Session) helloLoop() {
+	defer s.wg.Done()
+	tick := time.NewTicker(s.helloInterval)
+	defer tick.Stop()
+	for {
+		s.mu.Lock()
+		ready := s.ready
+		var names []string
+		if !ready {
+			for _, name := range s.order {
+				if s.links[name].started {
+					names = append(names, name)
+				}
+			}
+		}
+		s.mu.Unlock()
+		for _, name := range names {
+			if err := s.helloVia(name); err != nil {
+				utils.Debugf("[SESSION] hello via %q: %v", name, err)
+			}
+		}
+		select {
+		case <-s.done:
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+func (s *Session) waitReady(timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	tick := time.NewTicker(250 * time.Millisecond)
+	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
-
-	for {
-		if err := s.helloVia(name); err != nil {
-			// Transient send error: keep trying within the budget.
-			utils.Debugf("[SESSION] hello via %q: %v", name, err)
-		}
-		if s.IsConnected() {
-			return nil
-		}
+	for !s.IsConnected() {
 		select {
 		case <-s.done:
 			return errors.New("session stopped")
@@ -275,6 +341,7 @@ func (s *Session) handshakeVia(name string, timeout time.Duration) error {
 		case <-tick.C:
 		}
 	}
+	return nil
 }
 
 // Stop tears down all transports and marks the session stopped.
