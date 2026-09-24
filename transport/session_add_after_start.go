@@ -47,10 +47,6 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 		return fmt.Errorf("session: transport %q start: %w", name, err)
 	}
 
-	// Same receive path as the bootstrap transports: everything that
-	// arrives on this link goes through Session.receive.
-	bat.Receive(func(p []byte) { s.receive(p) })
-
 	link := &transportLink{
 		name:      name,
 		raw:       raw,
@@ -59,6 +55,9 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 		priority:  priority,
 		started:   true,
 	}
+	// Same receive path as the bootstrap transports: everything that
+	// arrives on this link goes through Session.receive.
+	bat.Receive(func(p []byte) { s.receive(link, p) })
 
 	s.mu.Lock()
 	s.links[name] = link

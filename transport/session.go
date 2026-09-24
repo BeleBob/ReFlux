@@ -47,6 +47,16 @@ type Session struct {
 	restartMin    time.Duration
 	restartMax    time.Duration
 
+	// A carrier only counts as live if the peer was heard on it within
+	// linkTimeout; idle carriers are pinged every keepaliveInterval.
+	// peerKeepalive is set by the first pong: a peer that never answers
+	// predates keepalive, and liveness falls back to the carrier's own
+	// IsConnected. noPong makes this side behave like such a peer (tests).
+	keepaliveInterval time.Duration
+	linkTimeout       time.Duration
+	peerKeepalive     bool
+	noPong            bool
+
 	// Transport links, ordered by priority (descending).
 	links map[string]*transportLink
 	order []string
@@ -71,6 +81,10 @@ type transportLink struct {
 	// started is set once the carrier is up and its receive path attached.
 	started bool
 
+	// lastHeard is when an authenticated envelope from the current peer
+	// last arrived on this carrier.
+	lastHeard time.Time
+
 	// Set once the link has been observed to fail; it is removed from
 	// routing but kept for stats until RemoveTransport is called.
 	dead bool
@@ -93,6 +107,9 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 		helloInterval:    250 * time.Millisecond,
 		restartMin:       time.Second,
 		restartMax:       30 * time.Second,
+
+		keepaliveInterval: 10 * time.Second,
+		linkTimeout:       30 * time.Second,
 	}
 	if _, err := rand.Read(s.local[:]); err != nil {
 		return nil, err
@@ -227,6 +244,8 @@ func (s *Session) Start() error {
 			s.superviseLink(link)
 		}
 	}
+	s.wg.Add(1)
+	go s.keepaliveLoop()
 	if exit {
 		return nil
 	}
@@ -248,7 +267,7 @@ func (s *Session) startLink(link *transportLink) error {
 	if err := link.batched.Start(); err != nil {
 		return err
 	}
-	link.batched.Receive(func(p []byte) { s.receive(p) })
+	link.batched.Receive(func(p []byte) { s.receive(link, p) })
 
 	s.mu.Lock()
 	stopped := s.stopped
@@ -327,6 +346,35 @@ func (s *Session) helloLoop() {
 	}
 }
 
+// keepaliveLoop pings every carrier the peer has been quiet on, so a
+// carrier that stopped reaching the peer ages out of routing.
+func (s *Session) keepaliveLoop() {
+	defer s.wg.Done()
+	tick := time.NewTicker(s.keepaliveInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-tick.C:
+		}
+		s.mu.Lock()
+		var quiet []*transportLink
+		if s.ready {
+			for _, name := range s.order {
+				l := s.links[name]
+				if l.started && !l.dead && time.Since(l.lastHeard) >= s.keepaliveInterval {
+					quiet = append(quiet, l)
+				}
+			}
+		}
+		s.mu.Unlock()
+		for _, l := range quiet {
+			_ = s.sendControlVia(l, control.SubtypeLinkPing, nil)
+		}
+	}
+}
+
 func (s *Session) waitReady(timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
@@ -377,16 +425,23 @@ func (s *Session) IsConnected() bool {
 	return s.anyLive()
 }
 
-// anyLive reports whether at least one transport is currently connected.
+// anyLive reports whether at least one transport currently reaches the peer.
 func (s *Session) anyLive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, l := range s.links {
-		if !l.dead && l.raw.IsConnected() {
-			return true
-		}
+	return len(s.liveLinksLocked()) > 0
+}
+
+// liveLocked reports whether a carrier currently reaches the peer. A
+// document carrier can be attached to its document (IsConnected) while the
+// peer's side of it is down, e.g. stuck on a captcha; once the peer is
+// known to answer keepalives, only recently heard carriers count.
+// Caller holds s.mu.
+func (s *Session) liveLocked(l *transportLink) bool {
+	if l == nil || l.dead || !l.started || !l.raw.IsConnected() {
+		return false
 	}
-	return false
+	return !s.peerKeepalive || time.Since(l.lastHeard) < s.linkTimeout
 }
 
 // PeerParameters returns the negotiated peer parameters, if ready.
@@ -457,9 +512,8 @@ func (s *Session) helloVia(name string) error {
 
 // ---- IPv4 data ----
 
-// Send routes one complete IPv4 packet across one of the live transports,
-// chosen by flow-hash. If the flow's transport is dead, the packet is
-// retried on another live transport.
+// Send routes one complete IPv4 packet through the highest-priority live
+// transport (flow-hashed across ties).
 func (s *Session) Send(p []byte) error {
 	s.mu.Lock()
 	if !s.ready || s.stopped {
@@ -496,11 +550,19 @@ func (s *Session) Send(p []byte) error {
 	}
 	raw = append(raw, p...)
 
-	// flow-hash: same 4-tuple always lands on the same transport, so
-	// ordering within one flow is preserved.
+	// Priority is the failover order: use the best live carrier, and
+	// spread flows only across carriers sharing that priority. The flow
+	// hash keeps each 4-tuple on one carrier so its ordering is preserved.
+	top := links[:1]
+	for _, l := range links[1:] {
+		if l.priority != links[0].priority {
+			break
+		}
+		top = append(top, l)
+	}
 	key := extractFlowKeyBytes(p)
-	idx := int(flowHashBytes(key) % uint64(len(links)))
-	return links[idx].batched.Send(raw)
+	idx := int(flowHashBytes(key) % uint64(len(top)))
+	return top[idx].batched.Send(raw)
 }
 
 // liveLinksLocked returns the live transports in priority order.
@@ -508,14 +570,9 @@ func (s *Session) Send(p []byte) error {
 func (s *Session) liveLinksLocked() []*transportLink {
 	out := make([]*transportLink, 0, len(s.links))
 	for _, name := range s.order {
-		l := s.links[name]
-		if l == nil || l.dead {
-			continue
+		if l := s.links[name]; s.liveLocked(l) {
+			out = append(out, l)
 		}
-		if !l.raw.IsConnected() {
-			continue
-		}
-		out = append(out, l)
 	}
 	return out
 }
@@ -523,6 +580,17 @@ func (s *Session) liveLinksLocked() []*transportLink {
 // SendControl transmits a control packet through the highest-priority live
 // transport. Control is not covered by the replay window.
 func (s *Session) SendControl(subtype control.Subtype, payload []byte) error {
+	s.mu.Lock()
+	links := s.liveLinksLocked()
+	s.mu.Unlock()
+	if len(links) == 0 {
+		return errors.New("session: no live transport for control")
+	}
+	return s.sendControlVia(links[0], subtype, payload)
+}
+
+// sendControlVia transmits a control packet through one specific carrier.
+func (s *Session) sendControlVia(link *transportLink, subtype control.Subtype, payload []byte) error {
 	if subtype == 0 {
 		return errors.New("session: empty control subtype")
 	}
@@ -545,23 +613,7 @@ func (s *Session) SendControl(subtype control.Subtype, payload []byte) error {
 			PayloadLen: uint16(len(payload)),
 		},
 	}
-	var link *transportLink
-	for _, name := range s.order {
-		l := s.links[name]
-		if l == nil || l.dead {
-			continue
-		}
-		if !l.raw.IsConnected() {
-			continue
-		}
-		link = l
-		break
-	}
 	s.mu.Unlock()
-
-	if link == nil {
-		return errors.New("session: no live transport for control")
-	}
 
 	raw, err := env.Encode()
 	if err != nil {
@@ -599,7 +651,7 @@ func permittedPacket(p []byte, limits PeerParameters) error {
 
 // ---- receive ----
 
-func (s *Session) receive(p []byte) {
+func (s *Session) receive(link *transportLink, p []byte) {
 	env, err := control.Decode(p)
 	if err != nil {
 		return
@@ -609,11 +661,11 @@ func (s *Session) receive(p []byte) {
 	}
 	switch env.Kind {
 	case control.KindHello:
-		s.receiveHello(p, env)
+		s.receiveHello(link, env)
 	case control.KindIPv4:
-		s.receiveIPv4(p, env)
+		s.receiveIPv4(link, p, env)
 	case control.KindControl:
-		s.receiveControl(p, env)
+		s.receiveControl(link, p, env)
 	}
 }
 
@@ -624,7 +676,7 @@ func (s *Session) roleLocked() control.Role {
 	return control.RoleClient
 }
 
-func (s *Session) receiveHello(p []byte, env *control.Envelope) {
+func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -669,6 +721,7 @@ func (s *Session) receiveHello(p []byte, env *control.Envelope) {
 		}
 		s.ready = true
 	}
+	link.lastHeard = time.Now()
 	// Reply through every live transport so the peer sees the new ready
 	// state regardless of which one it is listening on.
 	var names []string
@@ -682,7 +735,7 @@ func (s *Session) receiveHello(p []byte, env *control.Envelope) {
 	}
 }
 
-func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
+func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelope) {
 	s.mu.Lock()
 	if env.Data == nil || !s.ready || s.stopped || env.Local != s.peer || env.Peer != s.local {
 		s.mu.Unlock()
@@ -697,6 +750,7 @@ func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
 		s.mu.Unlock()
 		return
 	}
+	link.lastHeard = time.Now()
 	cb := s.dataCallback
 	s.mu.Unlock()
 	if cb != nil {
@@ -704,12 +758,27 @@ func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
 	}
 }
 
-func (s *Session) receiveControl(p []byte, env *control.Envelope) {
+func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Envelope) {
 	if env.Control == nil || env.Control.Flags != 0 || env.Control.Subtype == 0 {
 		return
 	}
 	s.mu.Lock()
 	if !s.ready || s.stopped || env.Local != s.peer || env.Peer != s.local {
+		s.mu.Unlock()
+		return
+	}
+	link.lastHeard = time.Now()
+	switch env.Control.Subtype {
+	case control.SubtypeLinkPing:
+		noPong := s.noPong
+		s.mu.Unlock()
+		if noPong {
+			return
+		}
+		go func() { _ = s.sendControlVia(link, control.SubtypeLinkPong, nil) }()
+		return
+	case control.SubtypeLinkPong:
+		s.peerKeepalive = true
 		s.mu.Unlock()
 		return
 	}

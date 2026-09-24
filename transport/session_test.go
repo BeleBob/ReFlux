@@ -194,7 +194,7 @@ func TestSessionReplayWindow(t *testing.T) {
 		return append(raw, testIPv4(40, 6)...)
 	}
 	for _, seq := range []uint64{2, 1, 2, 100, 1, 99, 99, 0} {
-		b.receive(data(seq))
+		b.receive(b.links["primary"], data(seq))
 	}
 	if count != 4 {
 		t.Fatalf("replay/reordering delivered %d, want 4", count)

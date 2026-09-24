@@ -30,6 +30,13 @@ const (
 	SubtypeTransportStop   Subtype = 0x11
 	SubtypeTransportStatus Subtype = 0x12
 	SubtypeTransportList   Subtype = 0x13
+
+	// Per-carrier keepalive. A ping is answered with a pong on the carrier
+	// it arrived on, so each side can tell a carrier that is merely attached
+	// to its document from one that actually reaches the peer. Peers that
+	// predate these ignore them, which the Session detects and tolerates.
+	SubtypeLinkPing Subtype = 0x20
+	SubtypeLinkPong Subtype = 0x21
 )
 
 // ControlPacket is a decoded control message: subtype, flags, payload.
