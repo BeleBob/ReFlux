@@ -53,6 +53,9 @@ func TestSessionFailsOverWhenCarrierStopsReachingPeer(t *testing.T) {
 		return client.peerKeepalive
 	})
 
+	if got := client.ActiveTransport(); got != "direct" {
+		t.Fatalf("active transport = %q, want direct", got)
+	}
 	blackhole(cw["direct"], ew["direct"])
 	eventually(t, "data to arrive over the remaining carrier", func() bool {
 		_ = client.Send(testIPv4(40, 6))
@@ -61,6 +64,9 @@ func TestSessionFailsOverWhenCarrierStopsReachingPeer(t *testing.T) {
 	if !client.IsConnected() {
 		t.Fatal("session reported down while a carrier still reaches the peer")
 	}
+	eventually(t, "the active transport to follow the failover", func() bool {
+		return client.ActiveTransport() == "yandex"
+	})
 }
 
 func TestSessionPrefersHigherPriorityCarrier(t *testing.T) {
