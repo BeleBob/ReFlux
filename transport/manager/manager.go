@@ -49,6 +49,10 @@ type Manager struct {
 	entries map[string]*Entry
 	order   []string // transport names, priority-descending
 
+	// Cookie persistence: store key per transport name.
+	store      *transport.CookieStore
+	cookieKeys map[string]string
+
 	// Callbacks wired from main.go / mobile bridge.
 	dataCallback    func([]byte)
 	controlCallback func(sub control.Subtype, payload []byte)
@@ -219,10 +223,93 @@ func (m *Manager) ApplyCookiesFor(name string, jar map[string]string) error {
 	return e.Provider.ApplyCookies(jar)
 }
 
+// UseCookieStore persists cookies accepted for transport name under key and
+// replays what was saved for it before. Call before Start.
+func (m *Manager) UseCookieStore(store *transport.CookieStore, name, key string) error {
+	m.mu.Lock()
+	m.store = store
+	if m.cookieKeys == nil {
+		m.cookieKeys = make(map[string]string)
+	}
+	m.cookieKeys[name] = key
+	m.mu.Unlock()
+	if jar := store.Load(key); len(jar) > 0 {
+		return m.ApplyCookiesFor(name, jar)
+	}
+	return nil
+}
+
+// AcceptCookies applies a jar to one transport and persists it, whether it
+// came from the peer over the control channel or from the local app (IPC).
+func (m *Manager) AcceptCookies(name string, jar map[string]string) error {
+	if err := m.ApplyCookiesFor(name, jar); err != nil {
+		return err
+	}
+	m.mu.RLock()
+	store, key := m.store, m.cookieKeys[name]
+	m.mu.RUnlock()
+	if store != nil && key != "" {
+		return store.Save(key, jar)
+	}
+	return nil
+}
+
+// cookieTransport resolves the transport a cookie message refers to: the
+// named one, or for peers that predate named messages, the
+// highest-priority transport that carries cookies.
+func (m *Manager) cookieTransport(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if name != "" {
+		return name
+	}
+	for _, n := range m.order {
+		if m.entries[n].Provider != nil {
+			return n
+		}
+	}
+	return ""
+}
+
+// handleCookies serves the cookie-exchange subtypes. Only the exit answers
+// requests; both sides accept responses and unprompted offers.
+func (m *Manager) handleCookies(sub control.Subtype, payload []byte) {
+	cp, err := control.DecodeCookies(payload)
+	if err != nil {
+		utils.Debugf("[MANAGER] bad cookies payload: %v", err)
+		return
+	}
+	name := m.cookieTransport(cp.Transport)
+	if name == "" {
+		return
+	}
+	switch sub {
+	case control.SubtypeCookiesRequest:
+		if !m.session.IsExit() {
+			return
+		}
+		jar, err := m.FetchCookiesFor(name)
+		if err != nil {
+			utils.Debugf("[MANAGER] fetch cookies (%s): %v", name, err)
+			return
+		}
+		body, _ := (&control.CookiesPayload{Transport: name, Jar: jar, Reason: "requested"}).Encode()
+		_ = m.SendControl(control.SubtypeCookiesResponse, body)
+	case control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
+		if len(cp.Jar) == 0 {
+			return
+		}
+		if err := m.AcceptCookies(name, cp.Jar); err != nil {
+			utils.Debugf("[MANAGER] apply cookies (%s): %v", name, err)
+		}
+	}
+}
+
 // ---- Control dispatch ----
 
 // DispatchControl is the Session's ControlHandler. It interprets transport
-// lifecycle packets locally and forwards cookie packets to the higher layer.
+// lifecycle and cookie packets locally and forwards anything else to the
+// higher layer.
 func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 	switch sub {
 	case control.SubtypeTransportStart:
@@ -251,8 +338,10 @@ func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 	case control.SubtypeTransportList:
 		m.sendList()
 
+	case control.SubtypeCookiesRequest, control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
+		m.handleCookies(sub, payload)
+
 	default:
-		// Cookie and other subtypes go up to the application.
 		m.mu.RLock()
 		cb := m.controlCallback
 		m.mu.RUnlock()
@@ -263,7 +352,7 @@ func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 }
 
 // SetControlCallback installs the callback that receives control packets
-// not handled locally (cookies).
+// not handled locally.
 func (m *Manager) SetControlCallback(cb func(sub control.Subtype, payload []byte)) {
 	m.mu.Lock()
 	m.controlCallback = cb

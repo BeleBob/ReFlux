@@ -1,7 +1,6 @@
 package main
 
 import (
-	"openflux/transport"
 	"openflux/transport/ipc"
 	"openflux/transport/manager"
 	"openflux/utils"
@@ -14,7 +13,6 @@ import (
 // manager calls SetCaptchaNotifier, whose callback fires into IPC.
 type coreIPCHandler struct {
 	manager *manager.Manager
-	store   *transport.CookieStore
 }
 
 func (h *coreIPCHandler) OnConnect()    { utils.Debugf("[IPC] app connected") }
@@ -30,16 +28,9 @@ func (h *coreIPCHandler) OnCookies(p *ipc.CookiesOfferPayload) {
 		utils.Debugf("[IPC] empty cookies offer, ignoring")
 		return
 	}
-	if err := h.manager.ApplyCookiesFor(p.Transport, p.Jar); err != nil {
+	if err := h.manager.AcceptCookies(p.Transport, p.Jar); err != nil {
 		utils.Debugf("[IPC] apply cookies for %q: %v", p.Transport, err)
 		return
-	}
-	if h.store != nil {
-		key := p.Domain
-		if key == "" {
-			key = p.Transport
-		}
-		_ = h.store.Save(key, p.Jar)
 	}
 	utils.Debugf("[IPC] applied %d cookies for %q", len(p.Jar), p.Transport)
 }

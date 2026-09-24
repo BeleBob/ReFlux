@@ -493,6 +493,9 @@ func (s *Session) liveLocked(l *transportLink) bool {
 	return !s.peerKeepalive || time.Since(l.lastHeard) < s.linkTimeout
 }
 
+// IsExit reports whether this is the exit node's side of the session.
+func (s *Session) IsExit() bool { return s.exit }
+
 // PeerParameters returns the negotiated peer parameters, if ready.
 func (s *Session) PeerParameters() (PeerParameters, bool) {
 	s.mu.Lock()
