@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"openflux/transport"
 	"openflux/transport/control"
@@ -49,11 +50,23 @@ type Manager struct {
 	entries map[string]*Entry
 	order   []string // transport names, priority-descending
 
+	// Cookie persistence: store key per transport name.
+	store      *transport.CookieStore
+	cookieKeys map[string]string
+
 	// Callbacks wired from main.go / mobile bridge.
 	dataCallback    func([]byte)
 	controlCallback func(sub control.Subtype, payload []byte)
 	captchaNotifier CaptchaNotifier
+	remoteAuth      CaptchaNotifier
+
+	// authSent rate-limits AuthRequired forwarding per transport.
+	authSent map[string]time.Time
 }
+
+// authForwardInterval bounds how often the exit re-sends AuthRequired for
+// one transport; a stuck transport re-reports about every 30s on its own.
+const authForwardInterval = 20 * time.Second
 
 // New creates a Manager around a fresh Session. secret and context are the
 // same values used by Session.AddTransport for bootstrap transports; they
@@ -136,9 +149,9 @@ func (m *Manager) Transports() []string {
 	return append([]string(nil), m.order...)
 }
 
-// Start brings up the Session. The Session itself iterates transports by
-// priority and performs the handshake through the first live one; the
-// Manager only needs to have already registered every transport in it.
+// Start brings up the Session, which starts every registered transport. On
+// the client it returns once the handshake completed; on the exit node it
+// returns right away and the session becomes ready when a client arrives.
 func (m *Manager) Start() error {
 	m.mu.RLock()
 	entries := make([]*Entry, 0, len(m.order))
@@ -219,10 +232,93 @@ func (m *Manager) ApplyCookiesFor(name string, jar map[string]string) error {
 	return e.Provider.ApplyCookies(jar)
 }
 
+// UseCookieStore persists cookies accepted for transport name under key and
+// replays what was saved for it before. Call before Start.
+func (m *Manager) UseCookieStore(store *transport.CookieStore, name, key string) error {
+	m.mu.Lock()
+	m.store = store
+	if m.cookieKeys == nil {
+		m.cookieKeys = make(map[string]string)
+	}
+	m.cookieKeys[name] = key
+	m.mu.Unlock()
+	if jar := store.Load(key); len(jar) > 0 {
+		return m.ApplyCookiesFor(name, jar)
+	}
+	return nil
+}
+
+// AcceptCookies applies a jar to one transport and persists it, whether it
+// came from the peer over the control channel or from the local app (IPC).
+func (m *Manager) AcceptCookies(name string, jar map[string]string) error {
+	if err := m.ApplyCookiesFor(name, jar); err != nil {
+		return err
+	}
+	m.mu.RLock()
+	store, key := m.store, m.cookieKeys[name]
+	m.mu.RUnlock()
+	if store != nil && key != "" {
+		return store.Save(key, jar)
+	}
+	return nil
+}
+
+// cookieTransport resolves the transport a cookie message refers to: the
+// named one, or for peers that predate named messages, the
+// highest-priority transport that carries cookies.
+func (m *Manager) cookieTransport(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if name != "" {
+		return name
+	}
+	for _, n := range m.order {
+		if m.entries[n].Provider != nil {
+			return n
+		}
+	}
+	return ""
+}
+
+// handleCookies serves the cookie-exchange subtypes. Only the exit answers
+// requests; both sides accept responses and unprompted offers.
+func (m *Manager) handleCookies(sub control.Subtype, payload []byte) {
+	cp, err := control.DecodeCookies(payload)
+	if err != nil {
+		utils.Debugf("[MANAGER] bad cookies payload: %v", err)
+		return
+	}
+	name := m.cookieTransport(cp.Transport)
+	if name == "" {
+		return
+	}
+	switch sub {
+	case control.SubtypeCookiesRequest:
+		if !m.session.IsExit() {
+			return
+		}
+		jar, err := m.FetchCookiesFor(name)
+		if err != nil {
+			utils.Debugf("[MANAGER] fetch cookies (%s): %v", name, err)
+			return
+		}
+		body, _ := (&control.CookiesPayload{Transport: name, Jar: jar, Reason: "requested"}).Encode()
+		_ = m.SendControl(control.SubtypeCookiesResponse, body)
+	case control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
+		if len(cp.Jar) == 0 {
+			return
+		}
+		if err := m.AcceptCookies(name, cp.Jar); err != nil {
+			utils.Debugf("[MANAGER] apply cookies (%s): %v", name, err)
+		}
+	}
+}
+
 // ---- Control dispatch ----
 
 // DispatchControl is the Session's ControlHandler. It interprets transport
-// lifecycle packets locally and forwards cookie packets to the higher layer.
+// lifecycle and cookie packets locally and forwards anything else to the
+// higher layer.
 func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 	switch sub {
 	case control.SubtypeTransportStart:
@@ -251,8 +347,23 @@ func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 	case control.SubtypeTransportList:
 		m.sendList()
 
+	case control.SubtypeCookiesRequest, control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
+		m.handleCookies(sub, payload)
+
+	case control.SubtypeAuthRequired:
+		req, err := control.DecodeAuthRequired(payload)
+		if err != nil || req.Transport == "" {
+			utils.Debugf("[MANAGER] bad AuthRequired payload: %v", err)
+			return
+		}
+		m.mu.RLock()
+		cb := m.remoteAuth
+		m.mu.RUnlock()
+		if cb != nil {
+			cb(req.Transport, req.URL, req.Reason)
+		}
+
 	default:
-		// Cookie and other subtypes go up to the application.
 		m.mu.RLock()
 		cb := m.controlCallback
 		m.mu.RUnlock()
@@ -263,7 +374,7 @@ func (m *Manager) DispatchControl(sub control.Subtype, payload []byte) {
 }
 
 // SetControlCallback installs the callback that receives control packets
-// not handled locally (cookies).
+// not handled locally.
 func (m *Manager) SetControlCallback(cb func(sub control.Subtype, payload []byte)) {
 	m.mu.Lock()
 	m.controlCallback = cb
@@ -369,7 +480,10 @@ func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
 }
 
 // NotifyCaptcha is called by transports (via ErrorNotifier) when they cannot
-// proceed without external help.
+// proceed without external help. The local notifier (IPC to the app) gets
+// every report. On the exit node there is usually no app, and the check
+// has to be passed from the exit's address anyway, so the report also goes
+// to the client over whichever carrier still reaches it.
 func (m *Manager) NotifyCaptcha(name, url, reason string) {
 	m.mu.RLock()
 	n := m.captchaNotifier
@@ -377,4 +491,49 @@ func (m *Manager) NotifyCaptcha(name, url, reason string) {
 	if n != nil {
 		n(name, url, reason)
 	}
+	if m.session.IsExit() {
+		m.forwardAuth(name, url, reason)
+	}
+}
+
+func (m *Manager) forwardAuth(name, url, reason string) {
+	now := time.Now()
+	m.mu.Lock()
+	if m.authSent == nil {
+		m.authSent = make(map[string]time.Time)
+	}
+	if now.Sub(m.authSent[name]) < authForwardInterval {
+		m.mu.Unlock()
+		return
+	}
+	m.authSent[name] = now
+	m.mu.Unlock()
+
+	body, _ := (&control.AuthRequiredPayload{Transport: name, URL: url, Reason: reason}).Encode()
+	if err := m.SendControl(control.SubtypeAuthRequired, body); err != nil {
+		// No client yet: let the transport's next report try again.
+		utils.Debugf("[MANAGER] forward AuthRequired (%s): %v", name, err)
+		m.mu.Lock()
+		delete(m.authSent, name)
+		m.mu.Unlock()
+	}
+}
+
+// SetRemoteAuthNotifier installs the callback for AuthRequired reports from
+// the exit node: the app must pass the check from the exit's address and
+// answer with OfferCookies.
+func (m *Manager) SetRemoteAuthNotifier(n CaptchaNotifier) {
+	m.mu.Lock()
+	m.remoteAuth = n
+	m.mu.Unlock()
+}
+
+// OfferCookies sends a jar for one of the peer's transports (the answer to
+// an AuthRequired report).
+func (m *Manager) OfferCookies(name string, jar map[string]string) error {
+	body, err := (&control.CookiesPayload{Transport: name, Jar: jar, Reason: "solved"}).Encode()
+	if err != nil {
+		return err
+	}
+	return m.SendControl(control.SubtypeCookiesOffer, body)
 }

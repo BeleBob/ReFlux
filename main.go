@@ -107,16 +107,6 @@ func cookieKey(transportType, docURL, maxUid string) string {
 	}
 }
 
-// wireControlHandler connects a CookieExchanger to a NegotiatedTransport's
-// control channel:
-//
-//	SubtypeCookiesRequest  -> exit fetches its live jar and replies with
-//	                          SubtypeCookiesResponse
-//	SubtypeCookiesResponse -> client applies the jar
-//	SubtypeCookiesOffer    -> both sides apply the jar
-// cookieRefreshLoop periodically asks the exit node for a fresh cookie jar.
-// Runs only on the client side, only when --negotiate is enabled.
-
 // managerRefreshLoop periodically asks the exit node for a fresh cookie jar.
 // Runs on the client side only, when --transports or --negotiate is set.
 func managerRefreshLoop(m *manager.Manager) {
@@ -541,6 +531,7 @@ DEPRECATED (removed in v2)
 		managerInst *manager.Manager
 		trans       transport.Transport
 		exchanger   transport.CookieExchanger
+		demux       *transport.PortDemux
 	)
 
 	if *negotiate || *transportsFlag != "" {
@@ -570,49 +561,17 @@ DEPRECATED (removed in v2)
 			log.Fatalf("bootstrap transports: %v", err)
 		}
 
-		// Cookie provider: the first spec that carries cookies becomes the
-		// bootstrap one. Multi-transport cookie routing is left for later.
-		for _, spec := range specs {
-			if !transportHasCookies(spec.Type) {
-				continue
-			}
-			key := cookieKey(spec.Type, spec.URL, maxUid)
-			// The Manager owns per-transport cookie providers; we route
-			// Fetch/Apply through it.
-			managerInst.SetControlCallback(func(sub control.Subtype, payload []byte) {
-				switch sub {
-				case control.SubtypeCookiesRequest:
-					if *role != roleExit {
-						return
-					}
-					jar, err := managerInst.FetchCookiesFor(spec.Name)
-					if err != nil {
-						utils.Debugf("[CTRL] fetch cookies (%s): %v", spec.Name, err)
-						return
-					}
-					body, _ := (&control.CookiesPayload{Jar: jar, Reason: "requested"}).Encode()
-					_ = managerInst.SendControl(control.SubtypeCookiesResponse, body)
-				case control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
-					cp, err := control.DecodeCookies(payload)
-					if err != nil || len(cp.Jar) == 0 {
-						return
-					}
-					if err := managerInst.ApplyCookiesFor(spec.Name, cp.Jar); err != nil {
-						utils.Debugf("[CTRL] apply cookies (%s): %v", spec.Name, err)
-						return
-					}
-					if store != nil {
-						_ = store.Save(key, cp.Jar)
-					}
+		// Persist each cookie-carrying transport's jar and replay what was
+		// saved; the Manager routes cookie control messages by name.
+		if store != nil {
+			for _, spec := range specs {
+				if !transportHasCookies(spec.Type) {
+					continue
 				}
-			})
-			// Load persisted cookies into the transport before it starts.
-			if store != nil {
-				if jar := store.Load(key); jar != nil {
-					_ = managerInst.ApplyCookiesFor(spec.Name, jar)
+				if err := managerInst.UseCookieStore(store, spec.Name, cookieKey(spec.Type, spec.URL, maxUid)); err != nil {
+					utils.Debugf("[COOKIE] replay %s: %v", spec.Name, err)
 				}
 			}
-			break
 		}
 
 		// Hook the Session control dispatcher into the manager.
@@ -623,34 +582,40 @@ DEPRECATED (removed in v2)
 		// requests go out as MsgCookiesRequest; cookies offers come in as
 		// MsgCookiesOffer.
 		if *ipcSocketPath != "" {
-			h := &coreIPCHandler{manager: managerInst, store: store}
+			h := &coreIPCHandler{manager: managerInst}
 			srv := ipc.NewServer(*ipcSocketPath, h)
 			if err := srv.Listen(); err != nil {
 				log.Fatalf("IPC listen %s: %v", *ipcSocketPath, err)
 			}
 			defer srv.Close()
 
-			// Which transport to ask about. Use the first cookie-carrying
-			// spec; multi-transport cookie routing is a future extension.
-			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) {
-					continue
-				}
-				url := spec.URL
-				name := spec.Name
-				managerInst.SetCaptchaNotifier(func(_name, _url, reason string) {
+			// Checks for local transports go to the app as-is; checks the
+			// exit reports are marked Remote, to be passed from its address.
+			managerInst.SetCaptchaNotifier(func(name, url, reason string) {
+				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
+					Transport: name, URL: url, Reason: reason,
+				})
+			})
+			if *role == roleClient {
+				demux = transport.NewPortDemux(managerInst, authProxyPortLo, authProxyPortHi)
+				authProxy := &remoteAuthProxy{demux: demux}
+				managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
+					proxy, err := authProxy.Addr()
+					if err != nil {
+						log.Printf("remote auth proxy: %v", err)
+					}
 					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-						Transport: name,
-						URL:       url,
-						Reason:    reason,
+						Transport: name, URL: url, Reason: reason, Remote: true, Proxy: proxy,
 					})
 				})
-				break
 			}
 		}
 
 		trans = managerInst
-		exchanger = nil // cookie handling is inside the callback above
+		if demux != nil {
+			trans = demux
+		}
+		exchanger = nil // cookie handling lives in the Manager
 
 	} else {
 		// Legacy single-transport path (no negotiate, no multi).

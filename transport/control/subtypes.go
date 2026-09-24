@@ -15,6 +15,11 @@ const (
 	SubtypeCookiesResponse Subtype = 0x02
 	SubtypeCookiesOffer    Subtype = 0x03
 
+	// AuthRequired exit -> client: a transport on the exit is stuck on a
+	// captcha or login wall that must be passed from the exit's address.
+	// The client answers with SubtypeCookiesOffer naming that transport.
+	SubtypeAuthRequired Subtype = 0x04
+
 	// Transport lifecycle. The client drives these; the exit answers with
 	// SubtypeTransportStatus. Multiple transports can be active at once:
 	// each one is a full Transport with its own NegotiatedTransport.
@@ -30,6 +35,13 @@ const (
 	SubtypeTransportStop   Subtype = 0x11
 	SubtypeTransportStatus Subtype = 0x12
 	SubtypeTransportList   Subtype = 0x13
+
+	// Per-carrier keepalive. A ping is answered with a pong on the carrier
+	// it arrived on, so each side can tell a carrier that is merely attached
+	// to its document from one that actually reaches the peer. Peers that
+	// predate these ignore them, which the Session detects and tolerates.
+	SubtypeLinkPing Subtype = 0x20
+	SubtypeLinkPong Subtype = 0x21
 )
 
 // ControlPacket is a decoded control message: subtype, flags, payload.

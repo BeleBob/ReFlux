@@ -42,17 +42,10 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 	}
 	bat := NewBatchedTransport(enc)
 
-	if err := raw.Start(); err != nil {
+	// bat.Start starts raw through the encryption layer.
+	if err := bat.Start(); err != nil {
 		return fmt.Errorf("session: transport %q start: %w", name, err)
 	}
-	if err := bat.Start(); err != nil {
-		_ = raw.Stop()
-		return fmt.Errorf("session: transport %q batched start: %w", name, err)
-	}
-
-	// Same receive path as the bootstrap transports: everything that
-	// arrives on this link goes through Session.receive.
-	bat.Receive(func(p []byte) { s.receive(p) })
 
 	link := &transportLink{
 		name:      name,
@@ -60,7 +53,11 @@ func (s *Session) AddTransportPostStart(name string, raw Transport, secret, cont
 		encrypted: enc,
 		batched:   bat,
 		priority:  priority,
+		started:   true,
 	}
+	// Same receive path as the bootstrap transports: everything that
+	// arrives on this link goes through Session.receive.
+	bat.Receive(func(p []byte) { s.receive(link, p) })
 
 	s.mu.Lock()
 	s.links[name] = link

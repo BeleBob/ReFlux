@@ -84,12 +84,17 @@ type YandexDocsTransport struct {
 	jarMu     sync.RWMutex
 
 	errNotifier func(err error, transportName, url, reason string)
+
+	// cookiesApplied wakes a scheduleReconnectNoCaptcha wait early. Unbuffered
+	// on purpose: a send only succeeds while such a wait is in progress.
+	cookiesApplied chan struct{}
 }
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+		BaseTransport:  transport.NewBaseTransport(config),
+		url:            url,
+		cookiesApplied: make(chan struct{}),
 	}
 	t.baseUserID = randUserID()
 	jar, _ := cookiejar.New(nil)
@@ -409,17 +414,16 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	t.connectToDoc(next)
 }
 
-// scheduleReconnectNoCaptcha is called when fetchDocInfo returned a sentinel
-// error (ErrCaptchaRequired / ErrLoginRequired). Retrying with a backoff would
-// just hit the same captcha again, so we slow down to a fixed long delay and
-// rely on external cookie injection to break the cycle.
-
 // SetErrorNotifier installs a callback for out-of-band errors such as
 // ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
 func (t *YandexDocsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
 	t.errNotifier = fn
 }
 
+// scheduleReconnectNoCaptcha is called when fetchDocInfo returned a sentinel
+// error (ErrCaptchaRequired / ErrLoginRequired). Retrying with a backoff would
+// just hit the same captcha again, so we slow down to a fixed long delay and
+// rely on external cookie injection to break the cycle.
 func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	if !t.IsRunning() {
 		return
@@ -428,7 +432,8 @@ func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	utils.Debugf("[YDOCS] external solver needed; waiting %v before next attempt", longDelay)
 	select {
 	case <-time.After(longDelay):
-	case <-t.StopCh():
+	case <-t.cookiesApplied:
+	case <-t.Done():
 		return
 	}
 	if !t.IsRunning() {
@@ -436,16 +441,6 @@ func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	}
 	t.RecordReconnect()
 	t.connectToDoc(attempt + 1)
-}
-
-// StopCh returns a channel that closes when the transport is stopped.
-// Used internally by scheduleReconnectNoCaptcha.
-func (t *YandexDocsTransport) StopCh() <-chan struct{} {
-	// BaseTransport doesn't expose a stop channel; we create a fresh one
-	// that never fires. This is enough: IsRunning() is checked after the
-	// sleep anyway.
-	ch := make(chan struct{})
-	return ch
 }
 
 // reconnectBackoff returns an exponential backoff with jitter, capped at 30s.
@@ -504,12 +499,7 @@ func (t *YandexDocsTransport) ApplyCookies(values map[string]string) error {
 	}
 	u := mustParseURL(t.url)
 	jar, _ := cookiejar.New(nil)
-	// cookiejar.New returns an in-memory jar; SetCookies on it works for any
-	// host we pass later.
-	cookies := make([]*http.Cookie, 0, len(values))
-	for k, v := range values {
-		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
-	}
+	cookies := siteCookies(u, values)
 	jar.SetCookies(u, cookies)
 
 	t.jarMu.Lock()
@@ -529,7 +519,13 @@ func (t *YandexDocsTransport) ApplyCookies(values map[string]string) error {
 		_ = session.Conn.Close()
 	}
 	if t.IsRunning() {
-		t.scheduleReconnect(0)
+		select {
+		case t.cookiesApplied <- struct{}{}:
+			// The captcha wait reconnects now; a second reconnect here would
+			// open a duplicate session to the document.
+		default:
+			t.scheduleReconnect(0)
+		}
 	}
 	return nil
 }
@@ -726,6 +722,25 @@ func randUserID() string {
 
 // mustParseURL parses a URL and panics on error. Used only where the input is
 // a known-valid document URL.
+// siteCookies scopes externally supplied cookies to the document's parent
+// domain (disk.yandex.ru -> yandex.ru) instead of host-only: the document
+// fetch is redirected across Yandex hosts, and an out-of-band solve (e.g.
+// SmartCaptcha's spravka) is issued for .yandex.ru, so a host-only copy
+// would never reach the host that actually asked for it.
+func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
+	domain := ""
+	if u != nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 {
+			domain = strings.Join(labels[1:], ".")
+		}
+	}
+	cookies := make([]*http.Cookie, 0, len(values))
+	for k, v := range values {
+		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: domain})
+	}
+	return cookies
+}
+
 func mustParseURL(rawURL string) *url.URL {
 	u, err := url.Parse(rawURL)
 	if err != nil {

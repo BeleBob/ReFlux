@@ -40,6 +40,28 @@ type Session struct {
 	window           uint64
 	handshakeTimeout time.Duration
 
+	// helloInterval paces the client's hellos until the session is ready.
+	// restartMin/restartMax bound the backoff for carriers whose Start
+	// failed (e.g. a captcha during authorization).
+	helloInterval time.Duration
+	restartMin    time.Duration
+	restartMax    time.Duration
+
+	// A carrier only counts as live if the peer was heard on it within
+	// linkTimeout; idle carriers are pinged every keepaliveInterval.
+	// peerKeepalive is set by the first pong: a peer that never answers
+	// predates keepalive, and liveness falls back to the carrier's own
+	// IsConnected. noPong makes this side behave like such a peer (tests).
+	keepaliveInterval time.Duration
+	linkTimeout       time.Duration
+	peerKeepalive     bool
+	noPong            bool
+
+	// candidate is a new peer that must prove itself before it replaces an
+	// established one; see receiveHello.
+	candidate     *candidatePeer
+	candidateLast time.Time
+
 	// Transport links, ordered by priority (descending).
 	links map[string]*transportLink
 	order []string
@@ -53,6 +75,19 @@ type Session struct {
 	wg   sync.WaitGroup
 }
 
+// candidatePeer is an unknown sender offered a fresh challenge while the
+// session is established with someone else.
+type candidatePeer struct {
+	sender  [32]byte
+	local   [32]byte
+	expires time.Time
+}
+
+const (
+	candidateTTL      = 20 * time.Second
+	candidateInterval = time.Second
+)
+
 // transportLink wraps one raw Transport with its encryption and batching.
 type transportLink struct {
 	name      string
@@ -60,6 +95,13 @@ type transportLink struct {
 	encrypted *EncryptedTransport
 	batched   *BatchedTransport
 	priority  int
+
+	// started is set once the carrier is up and its receive path attached.
+	started bool
+
+	// lastHeard is when an authenticated envelope from the current peer
+	// last arrived on this carrier.
+	lastHeard time.Time
 
 	// Set once the link has been observed to fail; it is removed from
 	// routing but kept for stats until RemoveTransport is called.
@@ -80,6 +122,12 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 		links:            make(map[string]*transportLink),
 		done:             make(chan struct{}),
 		handshakeTimeout: 20 * time.Second,
+		helloInterval:    250 * time.Millisecond,
+		restartMin:       time.Second,
+		restartMax:       30 * time.Second,
+
+		keepaliveInterval: 10 * time.Second,
+		linkTimeout:       30 * time.Second,
 	}
 	if _, err := rand.Read(s.local[:]); err != nil {
 		return nil, err
@@ -180,96 +228,208 @@ func insertByPriority(order []string, name string, priority int, links map[strin
 	return out
 }
 
-// Start brings up the transports in priority order and performs exactly one
-// handshake through the first live one. If that transport fails to start or
-// the handshake times out, the next transport is tried. Once ready, all
-// transports are live for IPv4 routing.
+// Start brings up every transport. A carrier whose Start fails is retried
+// in the background with backoff, so e.g. a transport stuck on a captcha
+// joins the session once it recovers instead of being dropped for good.
 //
-// Start is idempotent in the sense that calling it twice returns an error.
-func (s *Session) Start() (err error) {
+// The client keeps sending hellos through every started carrier until the
+// session is ready, and returns an error if that takes longer than the
+// handshake timeout. The exit node answers hellos but never initiates, so
+// its Start returns as soon as the carriers are launched: it must be able
+// to sit idle until a client shows up.
+func (s *Session) Start() error {
 	s.mu.Lock()
 	if s.stopped || s.started {
 		s.mu.Unlock()
 		return errors.New("session already started or stopped")
 	}
-	s.started = true
-	s.wg.Add(1)
-	handshakeTimeout := s.handshakeTimeout
-	s.mu.Unlock()
-	defer func() {
-		s.wg.Done()
-		if err != nil {
-			_ = s.Stop()
-		}
-	}()
-
-	s.mu.Lock()
-	order := append([]string(nil), s.order...)
-	s.mu.Unlock()
-
-	if len(order) == 0 {
+	if len(s.order) == 0 {
+		s.mu.Unlock()
 		return errors.New("session: no transports added")
 	}
+	s.started = true
+	links := make([]*transportLink, 0, len(s.order))
+	for _, name := range s.order {
+		links = append(links, s.links[name])
+	}
+	exit := s.exit
+	timeout := s.handshakeTimeout
+	s.mu.Unlock()
 
-	var lastErr error
-	for _, name := range order {
-		s.mu.Lock()
-		link, ok := s.links[name]
-		s.mu.Unlock()
-		if !ok {
-			continue
+	for _, link := range links {
+		if err := s.startLink(link); err != nil {
+			utils.Debugf("[SESSION] transport %q start: %v; retrying in background", link.name, err)
+			s.superviseLink(link)
 		}
-
-		if err := link.raw.Start(); err != nil {
-			utils.Debugf("[SESSION] transport %q start: %v", name, err)
-			lastErr = err
-			continue
-		}
-		if err := link.batched.Start(); err != nil {
-			utils.Debugf("[SESSION] transport %q batched start: %v", name, err)
-			lastErr = err
-			_ = link.raw.Stop()
-			continue
-		}
-
-		// Attach the receive path: each transport delivers to the same
-		// Session-level handler.
-		link.batched.Receive(func(raw []byte) {
-			s.receive(raw)
-		})
-
-		if err := s.handshakeVia(name, handshakeTimeout); err != nil {
-			utils.Debugf("[SESSION] handshake via %q failed: %v", name, err)
-			lastErr = err
-			_ = link.batched.Stop()
-			continue
-		}
-
-		utils.Debugf("[SESSION] ready via transport %q", name)
+	}
+	s.wg.Add(1)
+	go s.keepaliveLoop()
+	if exit {
 		return nil
 	}
 
-	if lastErr == nil {
-		lastErr = errors.New("session: no live transport for handshake")
+	s.wg.Add(1)
+	go s.helloLoop()
+	if err := s.waitReady(timeout); err != nil {
+		_ = s.Stop()
+		return fmt.Errorf("session: handshake failed: %w", err)
 	}
-	return fmt.Errorf("session: handshake failed: %w", lastErr)
+	return nil
 }
 
-// handshakeVia runs the hello exchange through one specific transport.
-func (s *Session) handshakeVia(name string, timeout time.Duration) error {
+// startLink starts one carrier and attaches it to the receive path. The
+// batched wrapper starts the raw transport through the encryption layer;
+// starting raw separately as well would bring the carrier up twice (two
+// sessions attached to the same document).
+func (s *Session) startLink(link *transportLink) error {
+	if err := link.batched.Start(); err != nil {
+		return err
+	}
+	link.batched.Receive(func(p []byte) { s.receive(link, p) })
+
+	s.mu.Lock()
+	stopped := s.stopped
+	if !stopped {
+		link.started = true
+	}
+	s.mu.Unlock()
+	if stopped {
+		_ = link.batched.Stop()
+		_ = link.raw.Stop()
+		return errors.New("session stopped")
+	}
+	return nil
+}
+
+// superviseLink retries startLink with exponential backoff until it
+// succeeds, the link is removed, or the session stops.
+func (s *Session) superviseLink(link *transportLink) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		delay := s.restartMin
+		for {
+			select {
+			case <-s.done:
+				return
+			case <-time.After(delay):
+			}
+			s.mu.Lock()
+			current := s.links[link.name] == link
+			s.mu.Unlock()
+			if !current {
+				return
+			}
+			err := s.startLink(link)
+			if err == nil {
+				utils.Debugf("[SESSION] transport %q up after retry", link.name)
+				return
+			}
+			utils.Debugf("[SESSION] transport %q start: %v", link.name, err)
+			if delay *= 2; delay > s.restartMax {
+				delay = s.restartMax
+			}
+		}
+	}()
+}
+
+// helloLoop keeps offering the handshake through every started carrier
+// until the session is ready.
+func (s *Session) helloLoop() {
+	defer s.wg.Done()
+	tick := time.NewTicker(s.helloInterval)
+	defer tick.Stop()
+	for {
+		s.mu.Lock()
+		ready := s.ready
+		var names []string
+		if !ready {
+			for _, name := range s.order {
+				if s.links[name].started {
+					names = append(names, name)
+				}
+			}
+		}
+		s.mu.Unlock()
+		for _, name := range names {
+			if err := s.helloVia(name); err != nil {
+				utils.Debugf("[SESSION] hello via %q: %v", name, err)
+			}
+		}
+		select {
+		case <-s.done:
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// keepaliveLoop pings every carrier the peer has been quiet on, so a
+// carrier that stopped reaching the peer ages out of routing.
+func (s *Session) keepaliveLoop() {
+	defer s.wg.Done()
+	tick := time.NewTicker(s.keepaliveInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-tick.C:
+		}
+		s.mu.Lock()
+		if !s.exit && s.ready && s.peerKeepalive && s.peerSilentLocked() {
+			s.resetLocked()
+			utils.Debugf("[SESSION] peer silent on every transport; handshaking again")
+		}
+		var quiet []*transportLink
+		if s.ready {
+			for _, name := range s.order {
+				l := s.links[name]
+				if l.started && !l.dead && time.Since(l.lastHeard) >= s.keepaliveInterval {
+					quiet = append(quiet, l)
+				}
+			}
+		}
+		s.mu.Unlock()
+		for _, l := range quiet {
+			_ = s.sendControlVia(l, control.SubtypeLinkPing, nil)
+		}
+	}
+}
+
+// peerSilentLocked reports whether the peer has not been heard on any
+// carrier within linkTimeout. Caller holds s.mu.
+func (s *Session) peerSilentLocked() bool {
+	for _, l := range s.links {
+		if time.Since(l.lastHeard) < s.linkTimeout {
+			return false
+		}
+	}
+	return true
+}
+
+// resetLocked drops the established peer and starts over as a new session
+// identity, as if the process had restarted: a restarted exit knows nothing
+// of the old identity and would otherwise never answer. helloLoop resumes
+// the handshake. Caller holds s.mu.
+func (s *Session) resetLocked() {
+	s.ready = false
+	s.peer = [32]byte{}
+	s.remote = PeerParameters{}
+	s.sequence, s.highest, s.window = 0, 0, 0
+	s.peerKeepalive = false
+	s.candidate = nil
+	if _, err := rand.Read(s.local[:]); err != nil {
+		utils.Debugf("[SESSION] new challenge: %v", err)
+	}
+}
+
+func (s *Session) waitReady(timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	tick := time.NewTicker(250 * time.Millisecond)
+	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
-
-	for {
-		if err := s.helloVia(name); err != nil {
-			// Transient send error: keep trying within the budget.
-			utils.Debugf("[SESSION] hello via %q: %v", name, err)
-		}
-		if s.IsConnected() {
-			return nil
-		}
+	for !s.IsConnected() {
 		select {
 		case <-s.done:
 			return errors.New("session stopped")
@@ -278,6 +438,7 @@ func (s *Session) handshakeVia(name string, timeout time.Duration) error {
 		case <-tick.C:
 		}
 	}
+	return nil
 }
 
 // Stop tears down all transports and marks the session stopped.
@@ -313,17 +474,27 @@ func (s *Session) IsConnected() bool {
 	return s.anyLive()
 }
 
-// anyLive reports whether at least one transport is currently connected.
+// anyLive reports whether at least one transport currently reaches the peer.
 func (s *Session) anyLive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, l := range s.links {
-		if !l.dead && l.raw.IsConnected() {
-			return true
-		}
-	}
-	return false
+	return len(s.liveLinksLocked()) > 0
 }
+
+// liveLocked reports whether a carrier currently reaches the peer. A
+// document carrier can be attached to its document (IsConnected) while the
+// peer's side of it is down, e.g. stuck on a captcha; once the peer is
+// known to answer keepalives, only recently heard carriers count.
+// Caller holds s.mu.
+func (s *Session) liveLocked(l *transportLink) bool {
+	if l == nil || l.dead || !l.started || !l.raw.IsConnected() {
+		return false
+	}
+	return !s.peerKeepalive || time.Since(l.lastHeard) < s.linkTimeout
+}
+
+// IsExit reports whether this is the exit node's side of the session.
+func (s *Session) IsExit() bool { return s.exit }
 
 // PeerParameters returns the negotiated peer parameters, if ready.
 func (s *Session) PeerParameters() (PeerParameters, bool) {
@@ -393,9 +564,8 @@ func (s *Session) helloVia(name string) error {
 
 // ---- IPv4 data ----
 
-// Send routes one complete IPv4 packet across one of the live transports,
-// chosen by flow-hash. If the flow's transport is dead, the packet is
-// retried on another live transport.
+// Send routes one complete IPv4 packet through the highest-priority live
+// transport (flow-hashed across ties).
 func (s *Session) Send(p []byte) error {
 	s.mu.Lock()
 	if !s.ready || s.stopped {
@@ -432,11 +602,19 @@ func (s *Session) Send(p []byte) error {
 	}
 	raw = append(raw, p...)
 
-	// flow-hash: same 4-tuple always lands on the same transport, so
-	// ordering within one flow is preserved.
+	// Priority is the failover order: use the best live carrier, and
+	// spread flows only across carriers sharing that priority. The flow
+	// hash keeps each 4-tuple on one carrier so its ordering is preserved.
+	top := links[:1]
+	for _, l := range links[1:] {
+		if l.priority != links[0].priority {
+			break
+		}
+		top = append(top, l)
+	}
 	key := extractFlowKeyBytes(p)
-	idx := int(flowHashBytes(key) % uint64(len(links)))
-	return links[idx].batched.Send(raw)
+	idx := int(flowHashBytes(key) % uint64(len(top)))
+	return top[idx].batched.Send(raw)
 }
 
 // liveLinksLocked returns the live transports in priority order.
@@ -444,14 +622,9 @@ func (s *Session) Send(p []byte) error {
 func (s *Session) liveLinksLocked() []*transportLink {
 	out := make([]*transportLink, 0, len(s.links))
 	for _, name := range s.order {
-		l := s.links[name]
-		if l == nil || l.dead {
-			continue
+		if l := s.links[name]; s.liveLocked(l) {
+			out = append(out, l)
 		}
-		if !l.raw.IsConnected() {
-			continue
-		}
-		out = append(out, l)
 	}
 	return out
 }
@@ -459,6 +632,17 @@ func (s *Session) liveLinksLocked() []*transportLink {
 // SendControl transmits a control packet through the highest-priority live
 // transport. Control is not covered by the replay window.
 func (s *Session) SendControl(subtype control.Subtype, payload []byte) error {
+	s.mu.Lock()
+	links := s.liveLinksLocked()
+	s.mu.Unlock()
+	if len(links) == 0 {
+		return errors.New("session: no live transport for control")
+	}
+	return s.sendControlVia(links[0], subtype, payload)
+}
+
+// sendControlVia transmits a control packet through one specific carrier.
+func (s *Session) sendControlVia(link *transportLink, subtype control.Subtype, payload []byte) error {
 	if subtype == 0 {
 		return errors.New("session: empty control subtype")
 	}
@@ -481,23 +665,7 @@ func (s *Session) SendControl(subtype control.Subtype, payload []byte) error {
 			PayloadLen: uint16(len(payload)),
 		},
 	}
-	var link *transportLink
-	for _, name := range s.order {
-		l := s.links[name]
-		if l == nil || l.dead {
-			continue
-		}
-		if !l.raw.IsConnected() {
-			continue
-		}
-		link = l
-		break
-	}
 	s.mu.Unlock()
-
-	if link == nil {
-		return errors.New("session: no live transport for control")
-	}
 
 	raw, err := env.Encode()
 	if err != nil {
@@ -535,7 +703,7 @@ func permittedPacket(p []byte, limits PeerParameters) error {
 
 // ---- receive ----
 
-func (s *Session) receive(p []byte) {
+func (s *Session) receive(link *transportLink, p []byte) {
 	env, err := control.Decode(p)
 	if err != nil {
 		return
@@ -545,11 +713,11 @@ func (s *Session) receive(p []byte) {
 	}
 	switch env.Kind {
 	case control.KindHello:
-		s.receiveHello(p, env)
+		s.receiveHello(link, env)
 	case control.KindIPv4:
-		s.receiveIPv4(p, env)
+		s.receiveIPv4(link, p, env)
 	case control.KindControl:
-		s.receiveControl(p, env)
+		s.receiveControl(link, p, env)
 	}
 }
 
@@ -560,7 +728,7 @@ func (s *Session) roleLocked() control.Role {
 	return control.RoleClient
 }
 
-func (s *Session) receiveHello(p []byte, env *control.Envelope) {
+func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
@@ -583,8 +751,11 @@ func (s *Session) receiveHello(p []byte, env *control.Envelope) {
 		s.mu.Unlock()
 		return
 	}
-	if s.ready && (sender != s.peer ||
-		params.Capabilities&s.params.Capabilities != s.remote.Capabilities ||
+	if s.ready && sender != s.peer {
+		s.offerReplacementLocked(link, sender, params, env)
+		return
+	}
+	if s.ready && (params.Capabilities&s.params.Capabilities != s.remote.Capabilities ||
 		minInt(params.MaxPacketSize, s.params.MaxPacketSize) != s.remote.MaxPacketSize) {
 		s.mu.Unlock()
 		return
@@ -605,6 +776,7 @@ func (s *Session) receiveHello(p []byte, env *control.Envelope) {
 		}
 		s.ready = true
 	}
+	link.lastHeard = time.Now()
 	// Reply through every live transport so the peer sees the new ready
 	// state regardless of which one it is listening on.
 	var names []string
@@ -618,7 +790,90 @@ func (s *Session) receiveHello(p []byte, env *control.Envelope) {
 	}
 }
 
-func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
+// offerReplacementLocked handles a hello from an unknown sender while the
+// session is established. Another key holder appearing usually means the
+// peer restarted, but it may also be a replay of old traffic seen in the
+// carrier (anyone with access to a document sees the ciphertext). So the
+// established session is left alone until the sender echoes a challenge
+// minted for it just now, which old traffic cannot contain; only then is
+// the peer replaced, under that fresh challenge and with a new sequence
+// and replay window, so packets of the old session no longer match.
+// Called with s.mu held; releases it.
+func (s *Session) offerReplacementLocked(link *transportLink, sender [32]byte, params PeerParameters, env *control.Envelope) {
+	now := time.Now()
+	cand := s.candidate
+	if cand != nil && now.After(cand.expires) {
+		cand, s.candidate = nil, nil
+	}
+
+	if cand != nil && cand.sender == sender && env.Peer == cand.local {
+		s.local = cand.local
+		s.peer = sender
+		s.remote = PeerParameters{
+			Capabilities:  params.Capabilities & s.params.Capabilities,
+			MaxPacketSize: minInt(params.MaxPacketSize, s.params.MaxPacketSize),
+		}
+		s.sequence, s.highest, s.window = 0, 0, 0
+		s.peerKeepalive = false
+		s.candidate = nil
+		for _, l := range s.links {
+			l.lastHeard = time.Time{}
+		}
+		link.lastHeard = now
+		names := append([]string(nil), s.order...)
+		s.mu.Unlock()
+		utils.Debugf("[SESSION] peer replaced after a fresh challenge")
+		for _, name := range names {
+			_ = s.helloVia(name)
+		}
+		return
+	}
+
+	if env.Peer != ([32]byte{}) {
+		s.mu.Unlock()
+		return
+	}
+	if cand == nil || cand.sender != sender {
+		if now.Sub(s.candidateLast) < candidateInterval {
+			s.mu.Unlock()
+			return
+		}
+		cand = &candidatePeer{sender: sender, expires: now.Add(candidateTTL)}
+		if _, err := rand.Read(cand.local[:]); err != nil {
+			s.mu.Unlock()
+			return
+		}
+		s.candidate = cand
+		s.candidateLast = now
+	}
+	offer := &control.Envelope{
+		Kind:  control.KindHello,
+		Role:  s.roleLocked(),
+		Local: cand.local,
+		Peer:  sender,
+		Hello: &control.HelloTail{
+			Capabilities:  control.Capabilities(s.params.Capabilities),
+			MaxPacketSize: uint16(s.params.MaxPacketSize),
+		},
+	}
+	var links []*transportLink
+	for _, name := range s.order {
+		if l := s.links[name]; l.started {
+			links = append(links, l)
+		}
+	}
+	s.mu.Unlock()
+
+	raw, err := offer.Encode()
+	if err != nil {
+		return
+	}
+	for _, l := range links {
+		_ = l.batched.Send(raw)
+	}
+}
+
+func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelope) {
 	s.mu.Lock()
 	if env.Data == nil || !s.ready || s.stopped || env.Local != s.peer || env.Peer != s.local {
 		s.mu.Unlock()
@@ -633,6 +888,7 @@ func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
 		s.mu.Unlock()
 		return
 	}
+	link.lastHeard = time.Now()
 	cb := s.dataCallback
 	s.mu.Unlock()
 	if cb != nil {
@@ -640,12 +896,27 @@ func (s *Session) receiveIPv4(p []byte, env *control.Envelope) {
 	}
 }
 
-func (s *Session) receiveControl(p []byte, env *control.Envelope) {
+func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Envelope) {
 	if env.Control == nil || env.Control.Flags != 0 || env.Control.Subtype == 0 {
 		return
 	}
 	s.mu.Lock()
 	if !s.ready || s.stopped || env.Local != s.peer || env.Peer != s.local {
+		s.mu.Unlock()
+		return
+	}
+	link.lastHeard = time.Now()
+	switch env.Control.Subtype {
+	case control.SubtypeLinkPing:
+		noPong := s.noPong
+		s.mu.Unlock()
+		if noPong {
+			return
+		}
+		go func() { _ = s.sendControlVia(link, control.SubtypeLinkPong, nil) }()
+		return
+	case control.SubtypeLinkPong:
+		s.peerKeepalive = true
 		s.mu.Unlock()
 		return
 	}

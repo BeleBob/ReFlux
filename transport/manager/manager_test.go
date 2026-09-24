@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -121,7 +122,8 @@ func (f *fakeCookieProvider) ApplyCookies(jar map[string]string) error {
 	return nil
 }
 
-func TestManagerDispatchControlForwardsCookies(t *testing.T) {
+func newTestManager(t *testing.T) *Manager {
+	t.Helper()
 	sess, err := transport.NewSession(transport.PeerParameters{
 		Capabilities:  control.CapabilityIPv4 | control.CapabilityTCP,
 		MaxPacketSize: 1500,
@@ -129,25 +131,79 @@ func TestManagerDispatchControlForwardsCookies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := New(sess, nil, "test-secret-long-enough", "test-ctx")
+	t.Cleanup(func() { _ = sess.Stop() })
+	return New(sess, nil, "test-secret-long-enough", "test-ctx")
+}
 
-	got := make(chan control.Subtype, 1)
-	m.SetControlCallback(func(sub control.Subtype, payload []byte) {
-		select {
-		case got <- sub:
-		default:
+func offer(t *testing.T, name string, jar map[string]string) []byte {
+	t.Helper()
+	body, err := (&control.CookiesPayload{Transport: name, Jar: jar}).Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// Cookie offers reach the transport they name (or, from older peers that
+// name none, the highest-priority cookie transport) and are persisted.
+func TestManagerRoutesCookiesByTransport(t *testing.T) {
+	m := newTestManager(t)
+	yandex := &fakeCookieProvider{}
+	mailru := &fakeCookieProvider{}
+	if err := m.Add("yandex", "yandex", &fakeTransport{}, 100, yandex); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Add("mailru", "mailru", &fakeTransport{}, 50, mailru); err != nil {
+		t.Fatal(err)
+	}
+	store, err := transport.NewCookieStore(filepath.Join(t.TempDir(), "cookies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, key := range map[string]string{"yandex": "doc-y", "mailru": "doc-m"} {
+		if err := m.UseCookieStore(store, name, key); err != nil {
+			t.Fatal(err)
 		}
-	})
+	}
 
-	// Cookies subtypes are not handled locally; they must reach the callback.
-	m.DispatchControl(control.SubtypeCookiesRequest, nil)
+	m.DispatchControl(control.SubtypeCookiesOffer, offer(t, "mailru", map[string]string{"m": "1"}))
+	m.DispatchControl(control.SubtypeCookiesResponse, offer(t, "", map[string]string{"y": "2"}))
+	if jar, _ := mailru.FetchCookies(); jar["m"] != "1" {
+		t.Fatalf("mailru jar = %v", jar)
+	}
+	if jar, _ := yandex.FetchCookies(); jar["y"] != "2" || jar["m"] != "" {
+		t.Fatalf("yandex jar = %v", jar)
+	}
+
+	// A restarted process replays what was persisted.
+	next := newTestManager(t)
+	replayed := &fakeCookieProvider{}
+	if err := next.Add("mailru", "mailru", &fakeTransport{}, 50, replayed); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := transport.NewCookieStore(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.UseCookieStore(reopened, "mailru", "doc-m"); err != nil {
+		t.Fatal(err)
+	}
+	if jar, _ := replayed.FetchCookies(); jar["m"] != "1" {
+		t.Fatalf("replayed jar = %v", jar)
+	}
+}
+
+func TestManagerDispatchControlForwardsUnknownSubtypes(t *testing.T) {
+	m := newTestManager(t)
+	got := make(chan control.Subtype, 1)
+	m.SetControlCallback(func(sub control.Subtype, payload []byte) { got <- sub })
+	m.DispatchControl(control.Subtype(0x7f), nil)
 	select {
 	case sub := <-got:
-		if sub != control.SubtypeCookiesRequest {
+		if sub != 0x7f {
 			t.Fatalf("forwarded subtype = %v", sub)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("callback not invoked")
 	}
-	_ = sess.Stop()
 }
