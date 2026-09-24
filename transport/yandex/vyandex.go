@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,10 +136,12 @@ type volgaAuth struct {
 	Cookies     []*http.Cookie
 }
 
-func authorize(docURL string) (*volgaAuth, error) {
+func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	utils.Debugf("[VOLGA] authorize(%s)", docURL)
 
-	jar, _ := cookiejar.New(nil)
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+	}
 	session := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
@@ -184,6 +187,16 @@ func authorize(docURL string) (*volgaAuth, error) {
 			loc := resp.Header.Get("Location")
 			if loc == "" {
 				return nil, fmt.Errorf("redirect without Location from %s", currentURL)
+			}
+
+			// Second-tier captcha (SmartCaptcha): cannot be solved with PoW.
+			if strings.Contains(loc, "showcaptcha") && !strings.Contains(loc, "showcaptchafast") {
+				utils.Debugf("[VOLGA] SmartCaptcha detected, external solver required")
+				return nil, ErrCaptchaRequired
+			}
+
+			if strings.Contains(loc, "passport.yandex") {
+				return nil, ErrLoginRequired
 			}
 
 			if strings.Contains(loc, "showcaptchafast") {
@@ -360,6 +373,10 @@ func authorize(docURL string) (*volgaAuth, error) {
 	utils.Debugf("[VOLGA] auth OK: user=%d(%s) rp=%s sign=%s ts=%s",
 		a.UserID, a.UserIDStr, a.RequestPath, a.Sign, a.TS)
 	return a, nil
+}
+
+func authorize(docURL string) (*volgaAuth, error) {
+	return authorizeWithJar(docURL, nil)
 }
 
 func getStr(m map[string]interface{}, key string) string {
@@ -951,17 +968,30 @@ type YandexVolgaTransport struct {
 	onDataMu sync.RWMutex
 	onData   func([]byte)
 
+	cookieJar *cookiejar.Jar
+	jarMu     sync.RWMutex
+
+	errNotifier func(err error, transportName, url, reason string)
+
 	keepAliveStop chan struct{}
 }
 
 func NewYandexVolgaTransport(docURL string, cfg transport.TransportConfig) *YandexVolgaTransport {
+	jar, _ := cookiejar.New(nil)
 	return &YandexVolgaTransport{
 		BaseTransport: transport.NewBaseTransport(cfg),
 		docURL:        docURL,
 		config:        DefaultVolgaConfig(),
 		stats:         &VolgaStats{},
+		cookieJar:     jar,
 		keepAliveStop: make(chan struct{}),
 	}
+}
+
+// SetErrorNotifier installs a callback for out-of-band errors such as
+// ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
+func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+	t.errNotifier = fn
 }
 
 func (t *YandexVolgaTransport) Start() error {
@@ -970,8 +1000,17 @@ func (t *YandexVolgaTransport) Start() error {
 	}
 
 	utils.Debugf("[VOLGA] authorizing...")
-	auth, err := authorize(t.docURL)
+	auth, err := authorizeWithJar(t.docURL, t.jar())
 	if err != nil {
+		if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
+			reason := "smartcaptcha"
+			if errors.Is(err, ErrLoginRequired) {
+				reason = "login"
+			}
+			if t.errNotifier != nil {
+				t.errNotifier(err, "vyandex", t.docURL, reason)
+			}
+		}
 		return fmt.Errorf("auth: %w", err)
 	}
 	t.auth = auth
@@ -1103,4 +1142,87 @@ func maxU64(a, b uint64) uint64 {
 		return a
 	}
 	return b
+}
+
+// jar returns the transport's shared cookie jar (never nil).
+func (t *YandexVolgaTransport) jar() *cookiejar.Jar {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+		t.jarMu.Lock()
+		t.cookieJar = jar
+		t.jarMu.Unlock()
+	}
+	return jar
+}
+
+// ---- CookieExchanger ----
+
+// FetchCookies returns a snapshot of the transport's current cookie jar as
+// name -> value for the current document host.
+func (t *YandexVolgaTransport) FetchCookies() (map[string]string, error) {
+	if t.auth == nil {
+		return nil, fmt.Errorf("volga: not started")
+	}
+	out := make(map[string]string)
+	for _, c := range t.auth.Cookies {
+		out[c.Name] = c.Value
+	}
+	return out, nil
+}
+
+// ApplyCookies replaces the transport's cookie jar, updates the live auth's
+// Cookies slice, and forces the current sessions to reconnect.
+func (t *YandexVolgaTransport) ApplyCookies(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse(t.docURL)
+	cookies := siteCookies(u, values)
+	if u != nil {
+		jar.SetCookies(u, cookies)
+	}
+
+	t.jarMu.Lock()
+	t.cookieJar = jar
+	t.jarMu.Unlock()
+
+	if t.auth != nil {
+		t.auth.Cookies = cookies
+	}
+
+	utils.Debugf("[VOLGA] applied %d cookies, forcing reconnect", len(cookies))
+
+	if t.ws != nil {
+		t.ws.Stop()
+	}
+	if t.relay != nil {
+		t.relay.Stop()
+	}
+	if t.IsRunning() {
+		utils.SafeGo("volga.reconnect", func() {
+			auth, err := authorizeWithJar(t.docURL, t.jar())
+			if err != nil {
+				utils.Debugf("[VOLGA] re-authorize: %v", err)
+				return
+			}
+			t.auth = auth
+			t.relay = newRelayClient(auth, t.config, t.stats)
+			t.relay.Start()
+			t.ws = newWSListener(auth, t.config, t.stats, t.relay, func(data []byte) {
+				t.onDataMu.RLock()
+				cb := t.onData
+				t.onDataMu.RUnlock()
+				if cb != nil {
+					cb(data)
+				}
+				t.RecordReceive(len(data))
+			})
+			t.ws.Start()
+		})
+	}
+	return nil
 }

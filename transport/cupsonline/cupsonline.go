@@ -106,8 +106,10 @@ type cupsAuth struct {
 	csrfToken  string
 }
 
-func authorize(roomURL string) (*cupsAuth, error) {
-	jar, _ := cookiejar.New(nil)
+func authorizeWithJar(roomURL string, jar http.CookieJar) (*cupsAuth, error) {
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+	}
 	client := &http.Client{
 		Jar:     jar,
 		Timeout: 30 * time.Second,
@@ -191,6 +193,10 @@ func authorize(roomURL string) (*cupsAuth, error) {
 	return a, nil
 }
 
+func authorize(roomURL string) (*cupsAuth, error) {
+	return authorizeWithJar(roomURL, nil)
+}
+
 func createRooms(baseURL string, n int, pause time.Duration) ([]*cupsAuth, error) {
 	if baseURL == "" {
 		baseURL = baseRoomURL
@@ -204,7 +210,7 @@ func createRooms(baseURL string, n int, pause time.Duration) ([]*cupsAuth, error
 		var a *cupsAuth
 		var lastErr error
 		for attempt := 0; attempt < 6; attempt++ {
-			a, lastErr = authorize(baseURL)
+			a, lastErr = authorizeWithJar(baseURL, nil)
 			if lastErr == nil {
 				break
 			}
@@ -310,6 +316,13 @@ func (w *cupsWS) writeJSON(v interface{}) error {
 		return err
 	}
 	return w.writeRaw(data)
+}
+
+// currentConn returns the currently active WebSocket, if any.
+func (w *cupsWS) currentConn() *websocket.Conn {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	return w.conn
 }
 
 func (w *cupsWS) run() {
@@ -636,16 +649,21 @@ type CupsonlineTransport struct {
 	flowMu sync.RWMutex
 	flows  map[flowKey]*flowSender
 
+	cookieJar *cookiejar.Jar
+	jarMu     sync.RWMutex
+
 	stopCh     chan struct{}
 	statsStart time.Time
 }
 
 func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClient bool) *CupsonlineTransport {
+	jar, _ := cookiejar.New(nil)
 	t := &CupsonlineTransport{
 		BaseTransport: transport.NewBaseTransport(cfg),
 		config:        DefaultCupsonlineConfig(),
 		isClient:      isClient,
 		flows:         make(map[flowKey]*flowSender),
+		cookieJar:     jar,
 		stopCh:        make(chan struct{}),
 		statsStart:    time.Now(),
 	}
@@ -685,7 +703,6 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	return t
 }
 
-
 func (t *CupsonlineTransport) Start() error {
 	if t.clientErr != nil {
 		return t.clientErr
@@ -699,7 +716,7 @@ func (t *CupsonlineTransport) Start() error {
 
 	if t.isClient {
 		for i, u := range t.urls {
-			a, e := authorize(u)
+			a, e := authorizeWithJar(u, t.jar())
 			if e != nil {
 				utils.Debugf("[CUPS] join %d failed: %v", i, e)
 				continue
@@ -964,4 +981,63 @@ func mustParseURL(rawURL string) *url.URL {
 		panic(err)
 	}
 	return u
+}
+
+// jar returns the transport's shared cookie jar (never nil).
+func (t *CupsonlineTransport) jar() *cookiejar.Jar {
+	t.jarMu.RLock()
+	jar := t.cookieJar
+	t.jarMu.RUnlock()
+	if jar == nil {
+		jar, _ = cookiejar.New(nil)
+		t.jarMu.Lock()
+		t.cookieJar = jar
+		t.jarMu.Unlock()
+	}
+	return jar
+}
+
+// ---- CookieExchanger ----
+
+// FetchCookies returns a snapshot of the transport's current cookie jar as
+// name -> value.
+func (t *CupsonlineTransport) FetchCookies() (map[string]string, error) {
+	u, err := url.Parse(baseRoomURL)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string)
+	for _, c := range t.jar().Cookies(u) {
+		out[c.Name] = c.Value
+	}
+	return out, nil
+}
+
+// ApplyCookies replaces the transport's cookie jar with the provided values
+// and forces active sessions to reconnect.
+func (t *CupsonlineTransport) ApplyCookies(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	u, _ := url.Parse(baseRoomURL)
+	jar, _ := cookiejar.New(nil)
+	cookies := make([]*http.Cookie, 0, len(values))
+	for k, v := range values {
+		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
+	}
+	jar.SetCookies(u, cookies)
+
+	t.jarMu.Lock()
+	t.cookieJar = jar
+	t.jarMu.Unlock()
+
+	utils.Debugf("[CUPS] applied %d cookies, forcing reconnects", len(cookies))
+
+	// Close all WS sessions; they will reconnect with fresh cookies.
+	for _, ws := range t.wss {
+		if conn := ws.currentConn(); conn != nil {
+			_ = conn.Close()
+		}
+	}
+	return nil
 }
