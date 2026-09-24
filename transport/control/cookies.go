@@ -32,3 +32,24 @@ func DecodeCookies(b []byte) (*CookiesPayload, error) {
 	}
 	return &out, nil
 }
+
+// AuthRequiredPayload is the body of SubtypeAuthRequired.
+type AuthRequiredPayload struct {
+	Transport string `json:"transport"`
+	URL       string `json:"url"`
+	Reason    string `json:"reason"`
+}
+
+// Encode serializes the payload to JSON.
+func (a *AuthRequiredPayload) Encode() ([]byte, error) {
+	return json.Marshal(a)
+}
+
+// DecodeAuthRequired parses a payload received on the wire.
+func DecodeAuthRequired(b []byte) (*AuthRequiredPayload, error) {
+	var out AuthRequiredPayload
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

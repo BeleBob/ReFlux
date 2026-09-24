@@ -588,27 +588,22 @@ DEPRECATED (removed in v2)
 			}
 			defer srv.Close()
 
-			// Which transport to ask about. Use the first cookie-carrying
-			// spec; multi-transport cookie routing is a future extension.
-			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) {
-					continue
-				}
-				url := spec.URL
-				name := spec.Name
-				managerInst.SetCaptchaNotifier(func(_name, _url, reason string) {
-					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-						Transport: name,
-						URL:       url,
-						Reason:    reason,
-					})
+			// Checks for local transports go to the app as-is; checks the
+			// exit reports are marked Remote, to be passed from its address.
+			managerInst.SetCaptchaNotifier(func(name, url, reason string) {
+				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
+					Transport: name, URL: url, Reason: reason,
 				})
-				break
-			}
+			})
+			managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
+				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
+					Transport: name, URL: url, Reason: reason, Remote: true,
+				})
+			})
 		}
 
 		trans = managerInst
-		exchanger = nil // cookie handling is inside the callback above
+		exchanger = nil // cookie handling lives in the Manager
 
 	} else {
 		// Legacy single-transport path (no negotiate, no multi).

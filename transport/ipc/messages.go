@@ -35,12 +35,18 @@ type CookiesRequestPayload struct {
 	Transport string `json:"transport"`
 	URL       string `json:"url"`
 	Reason    string `json:"reason"`
+	// Remote marks a check the exit node needs: it must be passed from the
+	// exit's address, and the answering offer must set Remote too.
+	Remote bool `json:"remote,omitempty"`
 }
 
 type CookiesOfferPayload struct {
 	Transport string            `json:"transport"`
 	Jar       map[string]string `json:"jar"`
 	Domain    string            `json:"domain,omitempty"`
+	// Remote sends the jar to the exit node's transport instead of the
+	// local one (answer to a Remote request).
+	Remote bool `json:"remote,omitempty"`
 }
 
 type StatusPayload struct {

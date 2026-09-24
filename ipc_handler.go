@@ -28,6 +28,14 @@ func (h *coreIPCHandler) OnCookies(p *ipc.CookiesOfferPayload) {
 		utils.Debugf("[IPC] empty cookies offer, ignoring")
 		return
 	}
+	if p.Remote {
+		if err := h.manager.OfferCookies(p.Transport, p.Jar); err != nil {
+			utils.Debugf("[IPC] offer cookies to exit for %q: %v", p.Transport, err)
+			return
+		}
+		utils.Debugf("[IPC] sent %d cookies to exit for %q", len(p.Jar), p.Transport)
+		return
+	}
 	if err := h.manager.AcceptCookies(p.Transport, p.Jar); err != nil {
 		utils.Debugf("[IPC] apply cookies for %q: %v", p.Transport, err)
 		return

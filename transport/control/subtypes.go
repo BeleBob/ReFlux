@@ -15,6 +15,11 @@ const (
 	SubtypeCookiesResponse Subtype = 0x02
 	SubtypeCookiesOffer    Subtype = 0x03
 
+	// AuthRequired exit -> client: a transport on the exit is stuck on a
+	// captcha or login wall that must be passed from the exit's address.
+	// The client answers with SubtypeCookiesOffer naming that transport.
+	SubtypeAuthRequired Subtype = 0x04
+
 	// Transport lifecycle. The client drives these; the exit answers with
 	// SubtypeTransportStatus. Multiple transports can be active at once:
 	// each one is a full Transport with its own NegotiatedTransport.
