@@ -77,3 +77,28 @@ func TestStopInterruptsCaptchaWait(t *testing.T) {
 		t.Fatalf("captcha wait still running after Stop (%d goroutines)", n)
 	}
 }
+
+// Cookies arriving during the captcha wait must end that wait and retry
+// right away, instead of scheduling a second reconnect next to it (which
+// opened a duplicate session to the document once the wait expired).
+func TestApplyCookiesWakesCaptchaWait(t *testing.T) {
+	url, hits := captchaDoc(t)
+	tr, _ := startCaptchaTransport(t, url)
+	defer tr.Stop()
+	waitHit(t, hits, 5*time.Second)
+	deadline := time.Now().Add(2 * time.Second)
+	for captchaWaiters() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	start := time.Now()
+	if err := tr.ApplyCookies(map[string]string{"spravka": "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("ApplyCookies blocked for %v on its own reconnect", took)
+	}
+	if at := waitHit(t, hits, 5*time.Second); at.Sub(start) > time.Second {
+		t.Fatalf("retry came %v after ApplyCookies, want an immediate wake", at.Sub(start))
+	}
+}

@@ -84,12 +84,17 @@ type YandexDocsTransport struct {
 	jarMu     sync.RWMutex
 
 	errNotifier func(err error, transportName, url, reason string)
+
+	// cookiesApplied wakes a scheduleReconnectNoCaptcha wait early. Unbuffered
+	// on purpose: a send only succeeds while such a wait is in progress.
+	cookiesApplied chan struct{}
 }
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+		BaseTransport:  transport.NewBaseTransport(config),
+		url:            url,
+		cookiesApplied: make(chan struct{}),
 	}
 	t.baseUserID = randUserID()
 	jar, _ := cookiejar.New(nil)
@@ -427,6 +432,7 @@ func (t *YandexDocsTransport) scheduleReconnectNoCaptcha(attempt int) {
 	utils.Debugf("[YDOCS] external solver needed; waiting %v before next attempt", longDelay)
 	select {
 	case <-time.After(longDelay):
+	case <-t.cookiesApplied:
 	case <-t.Done():
 		return
 	}
@@ -513,7 +519,13 @@ func (t *YandexDocsTransport) ApplyCookies(values map[string]string) error {
 		_ = session.Conn.Close()
 	}
 	if t.IsRunning() {
-		t.scheduleReconnect(0)
+		select {
+		case t.cookiesApplied <- struct{}{}:
+			// The captcha wait reconnects now; a second reconnect here would
+			// open a duplicate session to the document.
+		default:
+			t.scheduleReconnect(0)
+		}
 	}
 	return nil
 }
