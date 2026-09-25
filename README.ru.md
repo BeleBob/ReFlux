@@ -189,6 +189,8 @@ OpenFlux/
   transport_factory.go             # Создание транспорта по типу
   ipc_handler.go                   # IPC: cookies от приложения
   auth_proxy.go                    # Локальный HTTP-прокси для проверок ноды
+  share_cli.go                     # --share: ссылка и QR-код для клиентов
+  share/                           # Ссылки openflux:// и QR-коды
   bench.go                         # Хелперы бенчмарка
   tun_darwin.go                    # macOS utun L3-клиент
   tun_watch.go                     # Watcher сокетов для bypass-маршрутов
@@ -433,6 +435,29 @@ URL = YOUR_YANDEX_DOC_URL
 50), `URL`, `Dial` / `Listen` (direct) и `Token` / `UID` (MAX). `.conf` с
 секциями транспортов всегда запускается как согласованная сессия.
 
+### Раздача выходной ноды через QR-код
+
+Запустите выходную ноду с `--share`, и она напечатает ссылку `openflux://` и
+её QR-код (в терминале или в логе сервиса). Клиент сканирует его или
+открывает ссылку и получает транспорты ноды, приоритеты, режим сессии, ключ и
+контекст шифрования, а `direct` указывает на саму ноду:
+
+```
+./openflux --role=exit --mode=l3 --negotiate \
+    --transports=direct:100,yandex:50 --direct-listen=0.0.0.0:8445 \
+    --encryption-key-file=secret.txt --url="YOUR_YANDEX_DOC_URL" \
+    --share --share-host=EXIT_PUBLIC_IP
+```
+
+- В ссылке лежит ключ шифрования: обращайтесь с ней и с QR-кодом как с файлом
+  ключа.
+- `--share-host` - адрес, по которому клиенты подключаются к `direct`; по
+  умолчанию первый публичный IPv4 хоста.
+- MAX в ссылку не попадает (токен принадлежит одному аккаунту), Cups.online
+  тоже, если комнаты создаются при старте.
+- Формат и отрисовка QR находятся в пакете `share` (`Encode`, `Decode`,
+  `PNG`, `Bitmap`, `Terminal`), им могут пользоваться и приложения.
+
 ### Капча
 
 - **PoW-капчу** (`showcaptchafast`) транспорт решает сам, ничего делать не
@@ -528,6 +553,8 @@ URL = YOUR_YANDEX_DOC_URL
 | `--config` | | | Файл `.conf`; флаги важнее него |
 | `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |
 | `--ipc-socket` | | | Unix-сокет для приложения (запросы капчи, cookies) |
+| `--share` | | `false` | Выходная нода: напечатать ссылку `openflux://` и QR-код для клиентов |
+| `--share-host` | | (первый публичный IPv4) | Выходная нода: адрес для `direct` в этой ссылке |
 
 Устаревшие (оставлены на один релиз, автоматически маппятся на новые флаги):
 `--client`, `--exit-node`, `--tun`, `--socks5-mode`, `--legacy`,

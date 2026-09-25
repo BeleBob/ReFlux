@@ -159,6 +159,10 @@ func main() {
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
+	shareFlag := flag.Bool("share", false,
+		"Exit: print an openflux:// link and QR code that clients scan to connect (contains the encryption key)")
+	shareHost := flag.String("share-host", "",
+		"Exit: address clients dial for direct in the --share link. Default: this host's first public IPv4")
 	ipcSocketPath := flag.String("ipc-socket", "",
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
@@ -246,6 +250,10 @@ TRANSPORT MODIFIERS
       --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json.
       --ipc-socket=<path>      Unix domain socket for the mobile bridge.
                                Empty = no IPC server.
+      --share                  Exit: print an openflux:// link and QR code for
+                               clients to scan. Contains the encryption key.
+      --share-host=<host>      Exit: address clients dial for direct in the
+                               link. Default: this host's first public IPv4.
       --config=<path>          Load settings from an OpenFlux .conf file
                                (INI-like, similar to wg-quick). Command-line
                                flags override values from the file.
@@ -717,6 +725,14 @@ DEPRECATED (removed in v2)
 
 	switch *role {
 	case roleExit:
+		if *shareFlag {
+			session := *negotiate || *transportsFlag != "" || len(confTransports) > 0
+			host := *shareHost
+			if host == "" {
+				host = publicIPv4()
+			}
+			printShare(shareConfig(specs, session, *codec, secret, sessionContext, host))
+		}
 		runExit(trans, exitMode)
 	case roleClient:
 		runClient(trans, *inbound, *socksAddr, exitMode)

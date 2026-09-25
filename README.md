@@ -183,6 +183,8 @@ OpenFlux/
   transport_factory.go             # Builds a transport from its type
   ipc_handler.go                   # IPC: cookies from the app
   auth_proxy.go                    # Local HTTP proxy for the exit's checks
+  share_cli.go                     # --share: link and QR code for clients
+  share/                           # openflux:// links and QR codes
   bench.go                         # Benchmark helpers
   tun_darwin.go                    # macOS utun L3 client
   tun_watch.go                     # Socket watcher for bypass routes
@@ -440,6 +442,29 @@ sections take `Type` (defaults to the section name), `Priority` (default 50),
 `URL`, `Dial` / `Listen` (direct) and `Token` / `UID` (MAX). A `.conf` with
 transport sections always runs as a negotiated session.
 
+### Sharing an exit with a QR code
+
+Start the exit with `--share` to print an `openflux://` link and its QR code
+(in the terminal or the service log). A client scans it, or opens the link,
+and gets the exit's transports, priorities, session mode, key and encryption
+context, with `direct` pointing at the exit:
+
+```
+./openflux --role=exit --mode=l3 --negotiate \
+    --transports=direct:100,yandex:50 --direct-listen=0.0.0.0:8445 \
+    --encryption-key-file=secret.txt --url="YOUR_YANDEX_DOC_URL" \
+    --share --share-host=EXIT_PUBLIC_IP
+```
+
+- The link contains the encryption key: treat it and the QR code like the
+  key file.
+- `--share-host` is the address clients dial for `direct`; by default the
+  first public IPv4 of the host.
+- MAX is left out (a token belongs to one account), and so is Cups.online
+  when its rooms are created at startup.
+- Format and QR rendering live in the `share` package (`Encode`, `Decode`,
+  `PNG`, `Bitmap`, `Terminal`), for apps to use as well.
+
 ### Captchas
 
 - **Proof-of-work captcha** (`showcaptchafast`) is solved by the transport
@@ -538,6 +563,8 @@ Measure raw goodput through the transport, without touching the host network:
 | `--config` | | | `.conf` file; flags override it |
 | `--cookie-store` | | `./cookies-<transport>.json` | Cookie jar file |
 | `--ipc-socket` | | | Unix socket for the app (captcha requests, cookies) |
+| `--share` | | `false` | Exit: print an `openflux://` link and QR code for clients |
+| `--share-host` | | (first public IPv4) | Exit: address clients dial for `direct` in that link |
 
 Deprecated (kept for one release, mapped automatically to the new flags):
 `--client`, `--exit-node`, `--tun`, `--socks5-mode`, `--legacy`,
