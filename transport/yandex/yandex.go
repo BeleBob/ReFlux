@@ -114,6 +114,21 @@ func (t *YandexDocsTransport) Start() error {
 	return nil
 }
 
+// Stop also closes the document connection. Otherwise the reader sits in
+// ReadMessage until the server's next message and then leaves the socket
+// open, keeping a participant attached to the document after the transport
+// is gone.
+func (t *YandexDocsTransport) Stop() error {
+	err := t.BaseTransport.Stop()
+	t.Mu.RLock()
+	session := t.session
+	t.Mu.RUnlock()
+	if session != nil && session.Conn != nil {
+		_ = session.Conn.Close()
+	}
+	return err
+}
+
 func (t *YandexDocsTransport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
@@ -288,11 +303,15 @@ func (t *YandexDocsTransport) writerLoop() {
 	var pending []byte
 	for t.IsRunning() {
 		if pending == nil {
-			packet, ok := <-queue
-			if !ok {
+			select {
+			case packet, ok := <-queue:
+				if !ok {
+					return
+				}
+				pending = packet
+			case <-t.Done():
 				return
 			}
-			pending = packet
 		}
 
 		t.Mu.RLock()
