@@ -768,8 +768,9 @@ func (t *CupsonlineTransport) Stop() error {
 		close(t.stopCh)
 	}
 	for _, ws := range t.wss {
-		ws.closed.Store(true)
-		close(ws.ctx)
+		if ws.closed.CompareAndSwap(false, true) {
+			close(ws.ctx)
+		}
 	}
 	t.SetConnected(false)
 	return t.BaseTransport.Stop()
