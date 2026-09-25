@@ -37,11 +37,21 @@ The original code is provided **as is**, **without any warranties**.
 | **Linux**   | build from source | CLI client (SOCKS5) / exit node (L3 or L4) |
 | **Windows** | build from source | CLI client (SOCKS5) / exit node (`l4`, or `l3` via QEMU - see TODO) |
 | **Android** | [OpenFluxAndroid releases](https://github.com/p1neappleXpress/OpenFluxAndroid) | Standalone APK |
+| **Android** | [OpenFlux-Android releases](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Fork: system-wide VPN or SOCKS5 proxy, multi-transport sessions, captcha handling, phone as exit node |
 | **iOS**     | [TestFlight beta](https://testflight.apple.com/join/BwnAcdus) | System-wide VPN via Network Extension |
 
 > **iOS app** built by [@saharev1](https://github.com/saharev1) - full iOS client,
 > TestFlight pipeline, system VPN support, DNS-over-TLS, and many stability fixes.
 > HUGE thanks!
+>
+> **OpenFlux-Android** built by [@damnurmum](https://github.com/damnurmum) - an
+> Android client with a system-wide VPN and a local SOCKS5 proxy mode, connection
+> profiles, multi-transport sessions with failover (direct included), SmartCaptcha
+> and login handling in a WebView (the exit node's too, passed through the tunnel
+> from its address), the phone as an l4 exit node, Kill Switch and per-app and
+> per-domain routing. Also contributed end-to-end encryption (#38), the Mail.ru
+> transport (#60) and session resilience with exit captcha handling (#93) to this
+> repository. HUGE thanks!
 >
 > **Android app** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid).
 
