@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -276,6 +277,10 @@ func (t *TCPTunnel) setupClient(tunnelNIC tcpip.NICID) {
 	})
 }
 
+// dialTimeout bounds DialTCP. Over a transport that is down the handshake
+// never completes, and gonet.DialTCP would wait for it indefinitely.
+var dialTimeout = 10 * time.Second
+
 func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
@@ -293,13 +298,19 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
 		nic = tcpip.NICID(2)
 	}
 
-	conn, err := gonet.DialTCP(t.gvisorStack, tcpip.FullAddress{
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+	conn, err := gonet.DialContextTCP(ctx, t.gvisorStack, tcpip.FullAddress{
 		NIC:  nic,
 		Addr: tcpip.AddrFrom4([4]byte{ip[0], ip[1], ip[2], ip[3]}),
 		Port: uint16(tcpAddr.Port),
 	}, ipv4.ProtocolNumber)
-
-	return conn, err
+	if err != nil {
+		// Not "return conn, err": a nil *gonet.TCPConn in a net.Conn is a
+		// non-nil interface, and callers checking conn != nil would crash.
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (t *TCPTunnel) DialUDP(address string) (net.Conn, error) {
