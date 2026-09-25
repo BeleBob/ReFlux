@@ -40,11 +40,22 @@
 | **Linux**   | сборка из исходников | CLI-клиент (SOCKS5) / выходная нода (L3 или L4) |
 | **Windows** | сборка из исходников | CLI-клиент (SOCKS5) / выходная нода (`l4`, либо `l3` через QEMU - см. TODO) |
 | **Android** | [Релизы OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid) | Отдельный APK |
+| **Android** | [Релизы OpenFlux-Android](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Форк: системный VPN или SOCKS5-прокси, сессии с несколькими транспортами, обработка капчи, телефон как выходная нода |
 | **iOS**     | [TestFlight бета](https://testflight.apple.com/join/BwnAcdus) | Системный VPN через Network Extension |
 
 > **iOS-приложение** сделано [@saharev1](https://github.com/saharev1) -
 > полноценный iOS-клиент, пайплайн TestFlight, системный VPN, DNS-over-TLS
 > и множество фиксов стабильности. ОГРОМНОЕ спасибо!
+>
+> **OpenFlux-Android** сделан [@damnurmum](https://github.com/damnurmum) -
+> Android-клиент с системным VPN и режимом локального SOCKS5-прокси, профилями
+> подключений, сессиями с несколькими транспортами и переключением между ними
+> (включая direct), обработкой SmartCaptcha и входа во встроенном браузере (в том
+> числе капчи выходной ноды, которая проходится через туннель с её адреса),
+> режимом выходной ноды l4 на телефоне, Kill Switch и маршрутизацией по
+> приложениям и доменам. Также внёс в этот репозиторий сквозное шифрование (#38),
+> транспорт Mail.ru (#60) и устойчивость сессий с обработкой капчи ноды (#93).
+> ОГРОМНОЕ спасибо!
 >
 > **Android-приложение** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid).
 
