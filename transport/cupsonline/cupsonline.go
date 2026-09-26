@@ -20,6 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"openflux/netbind"
 	"openflux/transport"
 	"openflux/utils"
 )
@@ -683,6 +684,7 @@ func (w *cupsWS) connectAndServe() error {
 	}
 
 	dialer := websocket.Dialer{
+		NetDialContext:   netbind.DialContext,
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
 		ReadBufferSize:   w.config.ReadBufferSize,
 		WriteBufferSize:  w.config.WriteBufferSize,

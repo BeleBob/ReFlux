@@ -21,6 +21,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"openflux/netbind"
 	"openflux/transport"
 	"openflux/utils"
 )
@@ -141,7 +142,10 @@ type volgaAuth struct {
 	Sign        string
 	TS          string
 	SessionID   string
-	Cookies     []*http.Cookie
+	// Action is editorParams.action: "edit" when this session may write to
+	// the document, which both peers need.
+	Action  string
+	Cookies []*http.Cookie
 }
 
 func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
@@ -153,6 +157,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	session := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
+			DialContext:         netbind.DialContext,
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
@@ -275,6 +280,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 		AccessToken: accessToken,
 		ResourceURL: getStr(office, "resource_url"),
 		DocID:       getStr(editor, "idDoc"),
+		Action:      getStr(editor, "action"),
 	}
 
 	if actionURL == "" {
@@ -381,6 +387,28 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	utils.Debugf("[VOLGA] auth OK: user=%d(%s) rp=%s sign=%s ts=%s",
 		a.UserID, a.UserIDStr, a.RequestPath, a.Sign, a.TS)
 	return a, nil
+}
+
+// VolgaDocument is what CheckVolgaDocument learned about a document.
+type VolgaDocument struct {
+	DocID    string
+	Editable bool
+}
+
+// CheckVolgaDocument runs the transport's own authorization against docURL
+// without joining the document, to tell whether the vyandex transport can
+// use it: the page must be the Volga editor and, for an anonymous visitor
+// (jar nil or empty), editable by anyone with the link. The first-tier PoW
+// captcha is solved like on a real connect; a SmartCaptcha or login wall
+// comes back as ErrCaptchaRequired / ErrLoginRequired.
+func CheckVolgaDocument(docURL string, jar http.CookieJar) (VolgaDocument, error) {
+	a, err := authorizeWithJar(docURL, jar)
+	if err != nil {
+		return VolgaDocument{}, err
+	}
+	// Older pages leave the action out; they only reach this point when
+	// the editor opened, so treat a missing one as editable.
+	return VolgaDocument{DocID: a.DocID, Editable: a.Action == "" || a.Action == "edit"}, nil
 }
 
 func authorize(docURL string) (*volgaAuth, error) {
@@ -494,6 +522,7 @@ type relayClient struct {
 
 func newRelayClient(auth *atomic.Pointer[volgaAuth], cfg VolgaConfig, stats *VolgaStats) *relayClient {
 	tr := &http.Transport{
+		DialContext:         netbind.DialContext,
 		MaxIdleConns:        cfg.MaxIdleConns,
 		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
 		IdleConnTimeout:     cfg.IdleConnTimeout,
@@ -914,6 +943,7 @@ func (w *wsListener) connect() error {
 	header.Set("Cookie", strings.Join(cookieParts, "; "))
 
 	dialer := websocket.Dialer{
+		NetDialContext:   netbind.DialContext,
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
 		ReadBufferSize:   4 << 20,
 		WriteBufferSize:  4 << 20,
@@ -1341,6 +1371,12 @@ func maxU64(a, b uint64) uint64 {
 }
 
 // jar returns the transport's shared cookie jar (never nil).
+// LoadCookieFile imports a Netscape cookies.txt (yandex.ru cookies only)
+// into the transport's cookie jar, so it opens the document signed in.
+func (t *YandexVolgaTransport) LoadCookieFile(path string) error {
+	return loadYandexCookies(path, t.jar())
+}
+
 func (t *YandexVolgaTransport) jar() *cookiejar.Jar {
 	t.jarMu.RLock()
 	jar := t.cookieJar

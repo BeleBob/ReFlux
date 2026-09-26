@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"openflux/netbind"
 	"openflux/utils"
 )
 
@@ -295,7 +296,7 @@ func (t *DirectTransport) dialLoop() {
 		attempt++
 		utils.Debugf("[DIRECT] dialLoop: attempt #%d dialing %s (timeout=%v)",
 			attempt, t.config.DialAddr, t.config.HandshakeTimeout)
-		d := net.Dialer{Timeout: t.config.HandshakeTimeout}
+		d := netbind.Dialer(t.config.HandshakeTimeout)
 		start := time.Now()
 		conn, err := d.Dial("tcp", t.config.DialAddr)
 		elapsed := time.Since(start)

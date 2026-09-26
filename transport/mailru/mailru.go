@@ -24,6 +24,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"openflux/netbind"
 	"openflux/transport"
 	"openflux/utils"
 )
@@ -168,7 +169,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 15 * time.Second,
-			NetDialContext: (&net.Dialer{
+			NetDialContext: netbind.Wrap(&net.Dialer{
 				Timeout:   10 * time.Second,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,

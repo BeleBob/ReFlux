@@ -529,6 +529,21 @@ func (s *Session) ActiveTransport() string {
 	return ""
 }
 
+// LiveTransports names the carriers that currently reach the peer, highest
+// priority first. Empty before the handshake or after Stop.
+func (s *Session) LiveTransports() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready || s.stopped {
+		return nil
+	}
+	var names []string
+	for _, l := range s.liveLinksLocked() {
+		names = append(names, l.name)
+	}
+	return names
+}
+
 func (s *Session) IsExit() bool { return s.exit }
 
 func (s *Session) PeerParameters() (PeerParameters, bool) {

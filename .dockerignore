@@ -7,7 +7,8 @@
 
 # Prebuilt binaries — never belong in the image.
 openflux
-openflux-*
+oflx
+oflx-new
 output/
 
 # Mobile client sources & scripts — not part of the linux binary.

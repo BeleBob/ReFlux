@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	godebug "runtime/debug"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"openflux/netbind"
 	"openflux/socks5"
 	"openflux/transport"
 	"openflux/transport/control"
@@ -196,6 +198,10 @@ func managerRefreshLoop(m *manager.Manager) {
 }
 
 func main() {
+	// The desktop wizard's JSON protocol owns stdout: no banner, no flags.
+	if len(os.Args) == 2 && os.Args[1] == "--node-wizard" {
+		os.Exit(runNodeWizard(os.Stdin, os.Stdout))
+	}
 	fmt.Print("written by p1neappleXpress\n")
 
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
@@ -227,6 +233,7 @@ func main() {
 			"\"direct:100,yandex:50\". If empty, --transport is used as a single transport.")
 	yandexURL := flag.String("yandex-url", "", "URL for the yandex transport (overrides --url in --transports mode)")
 	vyandexURL := flag.String("vyandex-url", "", "URL for the vyandex transport")
+	flag.StringVar(&yandexCookiesFile, "yandex-cookies-file", "", "Netscape cookies.txt with a Yandex login for vyandex transports")
 	boardsURL := flag.String("boards-url", "", "URL for the boards transport")
 	mailruURL := flag.String("mailru-url", "", "URL (weblink) for the mailru transport")
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
@@ -242,6 +249,7 @@ func main() {
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
+	httpProxyAddr := flag.String("http-proxy", "", "Client: also serve an HTTP proxy (CONNECT and plain requests) on this address, through the same tunnel")
 	flag.StringVar(&localIP, "local-ip", "", "Egress IP for exit node (l3 mode only, scoped RST drop)")
 
 	benchBytes := flag.Int("bench-bytes", 0, "Benchmark: push this many MB through the transport, then report and exit")
@@ -295,6 +303,9 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
                                Session; IPv4 flows are hashed across them.
       --yandex-url=<URL>       URL for the yandex transport.
       --vyandex-url=<URL>      URL for the vyandex transport.
+      --yandex-cookies-file=<path>
+                               Netscape cookies.txt with a Yandex login for
+                               vyandex transports.
       --boards-url=<URL>       URL for the boards transport.
       --mailru-url=<WEBLINK>   Weblink for the mailru transport.
       --cupsonline-url=<URL>   URL for the cupsonline transport.
@@ -304,9 +315,14 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --direct-listen=<addr>   DirectTransport: listen addr on exit.
 
 INBOUND  (only with --role=client)
-  -i, --inbound=tun            utun (macOS) / NEPacketTunnel (iOS). Default on macOS.
+  -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
+                               and wintun.dll next to the binary) / NEPacketTunnel
+                               (iOS). Default on macOS.
   -i, --inbound=socks5         SOCKS5 + gVisor. Default on other platforms.
   -s, --socks5=<addr>          SOCKS5 listen address (default :1080).
+      --http-proxy=<addr>      Also serve an HTTP proxy (CONNECT and plain
+                               requests) on this address, e.g. for a system
+                               proxy that only speaks HTTP.
 
 MODE  (only with --role=exit)
   -m, --mode=l3                Packet forwarding (SNAT/DNAT). Default.
@@ -503,6 +519,17 @@ DEPRECATED (removed in v2)
 		// No ingress or exit mode.
 	default:
 		log.Fatalf("unknown --role=%q (want client|exit|bench-send|bench-sink)", *role)
+	}
+
+	// Windows full tunnel: bind the core's sockets to the real interface
+	// before any transport dials, so the carriers stay out of the tunnel
+	// once it takes the default route (see package netbind).
+	if *role == roleClient && *inbound == inboundTUN && runtime.GOOS == "windows" {
+		index, err := netbind.BindDefault()
+		if err != nil {
+			log.Fatalf("tun: %v", err)
+		}
+		log.Printf("core sockets bound to interface %d", index)
 	}
 
 	// Warn when the exit runs on l4 (gVisor): it works everywhere but is
@@ -720,6 +747,7 @@ DEPRECATED (removed in v2)
 				log.Fatalf("IPC listen %s: %v", *ipcSocketPath, err)
 			}
 			defer srv.Close()
+			statusServer = srv
 
 			// Checks for local transports go to the app as-is; checks the
 			// exit reports are marked Remote, to be passed from its address.
@@ -756,7 +784,11 @@ DEPRECATED (removed in v2)
 		case "boards":
 			inner = yandex.NewBoardsTransport(globalDocUrl, config)
 		case "vyandex":
-			inner = yandex.NewYandexVolgaTransport(globalDocUrl, config)
+			t, err := newVolgaTransport(globalDocUrl, config)
+			if err != nil {
+				log.Fatalf("vyandex: %v", err)
+			}
+			inner = t
 		case "yandex":
 			inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
 		case "oneme":
@@ -823,6 +855,10 @@ DEPRECATED (removed in v2)
 		log.Fatalf("Failed to start transport: %v", err)
 	}
 
+	if statusServer != nil && managerInst != nil {
+		utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst) })
+	}
+
 	// Periodically ask the exit node to refresh its cookies. Only the client
 	// initiates; the exit answers with SubtypeCookiesResponse.
 	if *role == roleClient && managerInst != nil {
@@ -856,9 +892,31 @@ DEPRECATED (removed in v2)
 		}
 		runExit(trans, exitMode)
 	case roleClient:
-		runClient(trans, *inbound, *socksAddr, exitMode)
+		runClient(trans, *inbound, *socksAddr, *httpProxyAddr, exitMode)
 	default:
 		log.Fatalf("unhandled role %q", *role)
+	}
+}
+
+// statusServer is the IPC bridge, set when --ipc-socket is given.
+var statusServer *ipc.Server
+
+// ipcStatusLoop reports the session to the app every second: whether a
+// carrier reaches the peer, traffic totals, uptime and the active carrier.
+func ipcStatusLoop(srv *ipc.Server, m *manager.Manager) {
+	started := time.Now()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		st := m.Stats()
+		_ = srv.SendStatus(&ipc.StatusPayload{
+			Running:   true,
+			Connected: m.IsConnected(),
+			BytesIn:   st.BytesReceived,
+			BytesOut:  st.BytesSent,
+			UptimeMs:  time.Since(started).Milliseconds(),
+			Active:    m.Session().ActiveTransport(),
+		})
 	}
 }
 
@@ -895,7 +953,7 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 	select {}
 }
 
-func runClient(trans transport.Transport, inbound, socksAddr string, exitMode tunnel.ExitMode) {
+func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr string, exitMode tunnel.ExitMode) {
 	switch inbound {
 	case inboundTUN:
 		runClientTUN(trans)
@@ -904,6 +962,14 @@ func runClient(trans transport.Transport, inbound, socksAddr string, exitMode tu
 		// for platforms without a tun client (see README).
 		log.Printf("Running as CLIENT (SOCKS5 on %s, legacy gVisor path)", socksAddr)
 		tun := tunnel.NewTCPTunnelMode(trans, false, exitMode)
+		if httpProxyAddr != "" {
+			ln, err := net.Listen("tcp", httpProxyAddr)
+			if err != nil {
+				log.Fatalf("--http-proxy %s: %v", httpProxyAddr, err)
+			}
+			log.Printf("HTTP proxy on %s", httpProxyAddr)
+			utils.SafeGo("http-proxy", func() { _ = tunnel.ServeHTTPProxy(ln, tun.DialTCP) })
+		}
 		socks5Server := socks5.NewSOCKS5Server(socksAddr, tun)
 		log.Fatal(socks5Server.Start())
 	default:
