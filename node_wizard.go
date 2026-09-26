@@ -3,10 +3,10 @@
 package main
 
 // --node-wizard: the desktop app's "Своя нода" wizard talks to the core
-// over stdin/stdout, one JSON object per line, like the phone calls
-// mobile/node.go. The core does the SSH work (package provision), checks the
-// channel's Yandex document and builds the channel's openflux:// link; the
-// app proves the channel by connecting to it as usual.
+// over stdin/stdout, one JSON object per line. The core does the SSH work
+// (package provision), checks the channel's Yandex document and builds the
+// channel's openflux:// link; the app proves the channel by connecting to it
+// as usual.
 //
 // Request:  {"id": 1, "method": "connect", "params": {...}}
 // Response: {"id": 1, "ok": true, ...} or {"id": 1, "ok": false, "error": "..."}
@@ -280,9 +280,9 @@ func (w *nodeWizard) checkDocument(documentURL string) map[string]interface{} {
 	return wizardOK(map[string]interface{}{"editable": true})
 }
 
-// nodeShareLink is the openflux:// link of a new channel, as the phone's
-// wizard builds it: the Yandex document first, direct to host:port as the
-// backup. It carries the channel key.
+// nodeShareLink is the openflux:// link of a new channel, as the wizard
+// builds it: the Yandex document first, direct to host:port as the backup.
+// It carries the channel key.
 func nodeShareLink(name, documentURL, key, host string, port int) (string, error) {
 	if host == "" || port <= 0 || port > 65535 {
 		return "", errors.New("нет адреса или порта ноды")

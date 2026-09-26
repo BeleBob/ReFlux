@@ -1,5 +1,5 @@
 // Package provision installs an OpenFlux exit channel on a user's VDS over
-// SSH. It is the phone side of deploy/node-install.sh: it connects, has the
+// SSH. It is the client side of deploy/node-install.sh: it connects, has the
 // VDS download the script by a pinned commit, checks the script's SHA-256
 // and runs it. Each channel is an independent node (its own document, key,
 // port and systemd instance), so installing one never touches another.
