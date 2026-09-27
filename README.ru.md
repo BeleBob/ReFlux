@@ -254,6 +254,7 @@ OpenFlux/
   network/                         # Контрольные суммы, разбор пакетов
   utils/                           # Логирование
   ios-app/                         # iOS-клиент на SwiftUI (XcodeGen)
+  mobile/                          # gomobile-мост для Android/iOS (см. ниже)
   build_all.sh                     # Кросс-сборка релизных бинарников
   build_ios.sh                     # Сборка статической библиотеки iOS (liboflux.a)
   build_ios_app.sh                 # Сборка + архив + экспорт IPA iOS
