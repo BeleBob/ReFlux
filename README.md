@@ -35,7 +35,7 @@ The original code is provided **as is**, **without any warranties**.
 |----------|----------|-------|
 | **macOS**   | build from source | CLI + utun L3 client (`--inbound=tun`, default on macOS) |
 | **Linux**   | build from source | CLI client (SOCKS5) / exit node (L3 or L4) |
-| **Windows** | build from source | CLI client (SOCKS5) / exit node (`l4`, or `l3` via QEMU - see TODO) |
+| **Windows** | build from source | CLI client (SOCKS5, or `--inbound=tun` via Wintun - needs administrator) / exit node (`l4`, or `l3` via QEMU - see TODO) |
 | **Android** | [OpenFluxAndroid releases](https://github.com/p1neappleXpress/OpenFluxAndroid) | Standalone APK |
 | **Android** | [OpenFlux-Android releases](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Fork: system-wide VPN or SOCKS5 proxy, multi-transport sessions, captcha handling, phone as exit node |
 | **iOS**     | [TestFlight beta](https://testflight.apple.com/join/BwnAcdus) | System-wide VPN via Network Extension |
@@ -156,7 +156,20 @@ RSTs generated locally by the exit-node kernel.
 - **macOS utun client** - `--inbound=tun` (default on macOS). Creates a utun
   interface, watches its own sockets to install bypass routes, then takes
   the default route. No SOCKS5, no gVisor on the client.
+- **Windows tun client** - `--inbound=tun` on Windows uses a Wintun adapter
+  (needs administrator and `wintun.dll` next to the binary) for the same
+  full-tunnel behavior as the macOS client: the core's own sockets are bound
+  to the real interface so carriers never loop into the tunnel, IPv6 is
+  routed into the adapter and dropped so programs fall back to IPv4, and the
+  routes only live as long as the adapter.
 - **iOS packet tunnel** - NEPacketTunnelProvider, pure L3 forwarding.
+- **Node provisioning wizard** - `--node-wizard` runs a JSON-over-stdin/stdout
+  protocol (one object per line) for a desktop app to provision a new exit
+  node over SSH non-interactively: it drives `provision/` to connect, has the
+  VDS download and verify a pinned, hash-checked install script, and returns
+  the finished node's `openflux://` link. Secrets (SSH/sudo passwords, the
+  private key, the channel key) only ever travel on stdin, never on the
+  command line or in a log.
 - **Legacy codec** - `--codec=legacy` reverts to the old per-packet LZ4 codec
   (compatible with older clients).
 - **Optional encryption** - `--encryption-key-file` wraps the transport in
@@ -292,6 +305,18 @@ Creates a utun interface, installs bypass routes for the transport, waits for
 the transport to connect, then takes the default route. No SOCKS5.
 Requires sudo. All traffic except the transport goes through the tunnel.
 
+### Client - Windows tun (Wintun, needs administrator)
+
+```
+./openflux --role=client --inbound=tun \
+    --transport=yandex \
+    --url="YOUR_YANDEX_DOC_URL"
+```
+
+Needs `wintun.dll` next to the binary (or on `PATH`) and an elevated
+(administrator) prompt. Same full-tunnel behavior as the macOS client: no
+SOCKS5, all traffic except the transport goes through the tunnel.
+
 ### Client - SOCKS5 (all platforms, fallback)
 
 ```
@@ -361,8 +386,8 @@ Add these options on **both** updated peers, using the same secret and codec:
 The handshake runs inside AES-GCM and confirms fresh random challenges, peer
 roles, IPv4/TCP/UDP support, ICMP-error support and maximum IPv4 packet size.
 L4 does not advertise raw ICMP forwarding. Only the intersection of capabilities
-is enabled. Data carries both session IDs and a sequence number; a 64-packet
-sliding replay window tolerates bounded reordering. The old batch-v2 envelope
+is enabled. Data carries both session IDs and a sequence number; a
+4096-packet sliding replay window tolerates bounded reordering. The old batch-v2 envelope
 and encryption key derivation are unchanged; this is not forward secrecy or a
 replacement for a future key-exchange/rekey design.
 
@@ -540,12 +565,13 @@ Measure raw goodput through the transport, without touching the host network:
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--role` | `-r` | `client` | `client` \| `exit` \| `bench-send` \| `bench-sink` |
-| `--inbound` | `-i` | (platform) | `tun` (macOS) \| `socks5` |
+| `--inbound` | `-i` | (platform) | `tun` (macOS/Windows via Wintun) \| `socks5` |
 | `--transport` | `-t` | `yandex` | `yandex` \| `vyandex` \| `boards` \| `oneme` \| `cupsonline` \| `mailru` |
 | `--mode` | `-m` | `l3` | Exit-node mode: `l3` \| `l4` |
 | `--codec` | `-c` | `batched` | `batched` \| `legacy` |
 | `--url` | `-u` | `http://#` | Document URL |
 | `--socks5` | `-s` | `:1080` | SOCKS5 listen address |
+| `--http-proxy` | | | Also serve an HTTP proxy (CONNECT + plain requests) on this address |
 | `--local-ip` | `-l` | (auto) | Egress IP for l3 SNAT / RST filter |
 | `--debug` | `-d`, `-dd`, `-ddd` | `0` | `1`: one line per packet (`-> 52 bytes - UDP ...`); `2`: plus operational logs; `3`: plus hexdumps |
 | `--sensitive` | | `false` | Also log key material and, with `-ddd`, plaintext frames (cookie jars, tokens) |
@@ -561,12 +587,14 @@ Measure raw goodput through the transport, without touching the host network:
 | `--direct-dial` | | | Exit address for `direct` (client) |
 | `--direct-listen` | | | Listen address for `direct` (exit) |
 | `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`, `--cupsonline-url` | | | Per-type document URL in a session |
+| `--yandex-cookies-file` | | | Netscape `cookies.txt` with a Yandex login, for `vyandex` |
 | `--oneme-token`, `--oneme-uid` | | | MAX credentials in a session |
 | `--config` | | | `.conf` file; flags override it |
 | `--cookie-store` | | `./cookies-<transport>.json` | Cookie jar file |
 | `--ipc-socket` | | | Unix socket for the app (captcha requests, cookies) |
 | `--share` | | `false` | Exit: print an `openflux://` link and QR code for clients |
 | `--share-host` | | (first public IPv4) | Exit: address clients dial for `direct` in that link |
+| `--node-wizard` | | | Sole argument: run the JSON-over-stdio provisioning protocol instead of normal CLI startup (see [Highlights](#highlights)) |
 
 Deprecated (kept for one release, mapped automatically to the new flags):
 `--client`, `--exit-node`, `--tun`, `--socks5-mode`, `--legacy`,

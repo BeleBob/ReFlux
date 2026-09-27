@@ -58,7 +58,7 @@ new challenge, as a restarted process would: a restarted exit knows nothing of
 the old session and never speaks first.
 
 Data must name both current challenges, use a negotiated protocol, fit the
-effective packet limit, and pass the 64-entry sequence replay window. Duplicates,
+effective packet limit, and pass the 4096-entry sequence replay window. Duplicates,
 zero sequence numbers and packets older than the window are discarded; bounded
 reordering is accepted. There is no delivery acknowledgment or retransmission.
 This avoids adding a reliability layer underneath UDP/QUIC.
