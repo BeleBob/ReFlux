@@ -555,7 +555,7 @@ DEPRECATED (removed in v2)
 	}
 	utils.Debugf("[INIT] debug level=%d sensitive=%v", utils.Level(), utils.Sensitive())
 
-	log.Printf("=== Universal Bypass Tool ===")
+	log.Printf("=== OpenFlux ===")
 	log.Printf("Role: %s", *role)
 	log.Printf("Transport: %s", *transportType)
 	if *role == roleClient {
