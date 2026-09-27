@@ -152,11 +152,11 @@ func classicTransport(transportType, documentURL, encryptionSecret, codec, maxTo
 		appendLog("[ANDROID] Шифрование транспорта отключено (ключ не задан)")
 		return inner, nil
 	}
-	// Same fallback as the CLI: the KDF context is the document URL, or
-	// the transport name when there isn't one (oneme). Both peers must
-	// derive the same context or the encrypted channel just won't work.
+	// Same context as the core: the document URL, or "http://#" when there
+	// isn't one (oneme, direct). Both peers must derive the same context or
+	// the encrypted channel just won't work.
 	encrypted, err := transport.NewEncryptedTransport(inner, encryptionSecret,
-		classicContext(transportType, documentURL), exit)
+		classicContext(documentURL), exit)
 	if err != nil {
 		return nil, err
 	}

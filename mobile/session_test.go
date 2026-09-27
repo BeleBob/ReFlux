@@ -77,3 +77,27 @@ func TestSessionContextPrefersHighestPriorityURL(t *testing.T) {
 		t.Fatalf("context without URLs = %q", got)
 	}
 }
+
+// The exit creates the cupsonline room list only when it starts, so the
+// core leaves it out of the context; the phone must too.
+func TestSessionContextSkipsCupsonline(t *testing.T) {
+	specs := []sessionSpec{
+		{Name: "cupsonline", Type: "cupsonline", URL: "room-list", Priority: 100},
+		{Name: "yandex", Type: "yandex", URL: "https://docs.example/d", Priority: 50},
+	}
+	if got := sessionContext(specs); got != "https://docs.example/d" {
+		t.Fatalf("context = %q", got)
+	}
+	if got := sessionContext(specs[:1]); got != "http://#" {
+		t.Fatalf("context of a cupsonline-only session = %q", got)
+	}
+}
+
+func TestClassicContextFallsBackToPlaceholder(t *testing.T) {
+	if got := classicContext(""); got != "http://#" {
+		t.Fatalf("context without a document = %q", got)
+	}
+	if got := classicContext("https://docs.example/d"); got != "https://docs.example/d" {
+		t.Fatalf("context = %q", got)
+	}
+}

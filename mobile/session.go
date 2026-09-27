@@ -3,7 +3,6 @@ package mobile
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	"openflux/transport"
 	"openflux/transport/manager"
@@ -121,16 +120,27 @@ func buildSessionWith(specsJSON, secret string, exit bool) (transport.Transport,
 	return demux, sess, nil
 }
 
-// sessionContext is the encryption context. The exit derives it from its
-// --url, so it is the document URL of the highest-priority transport that
-// has one; "http://#" matches the CLI's --url default when none has.
+// sessionContext is the encryption context, derived as the core's
+// pickSessionContext does for an exit without --url: the document URL of the
+// highest-priority transport that has one, cupsonline aside (its room list
+// only exists once the exit is up), else "http://#". Equal priorities keep
+// the first transport, as the core does.
 func sessionContext(specs []sessionSpec) string {
-	sorted := append([]sessionSpec(nil), specs...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Priority > sorted[j].Priority })
-	for _, s := range sorted {
-		if s.URL != "" {
-			return s.URL
+	best := -1
+	for i, s := range specs {
+		if s.Type == "cupsonline" || s.URL == "" || s.URL == placeholderURL {
+			continue
+		}
+		if best < 0 || s.Priority > specs[best].Priority {
+			best = i
 		}
 	}
-	return "http://#"
+	if best >= 0 {
+		return specs[best].URL
+	}
+	return placeholderURL
 }
+
+// placeholderURL is the core's --url default, the context of a channel that
+// has no document URL.
+const placeholderURL = "http://#"

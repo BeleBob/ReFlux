@@ -56,7 +56,7 @@ func ExitShareLink(host, name string) (string, error) {
 func exitShareClassic(transportType, documentURL, secret, codec string) *share.Config {
 	c := &share.Config{
 		Secret:     secret,
-		Context:    classicContext(transportType, documentURL),
+		Context:    classicContext(documentURL),
 		Transports: []share.Transport{{Type: transportType, URL: documentURL}},
 	}
 	if codec == "legacy" {
@@ -96,14 +96,12 @@ func exitShareSession(specsJSON, secret string) *share.Config {
 	return c
 }
 
-// classicContext is the classic mode's encryption context, as the CLI and
-// classicTransport derive it.
-func classicContext(transportType, documentURL string) string {
-	if documentURL != "" {
-		return documentURL
+// classicContext is the classic mode's encryption context, as the core
+// derives it for --transport with --url: the document URL, or "http://#"
+// when there is none (oneme, direct).
+func classicContext(documentURL string) string {
+	if documentURL == "" {
+		return placeholderURL
 	}
-	if transportType == "" {
-		return "yandex"
-	}
-	return transportType
+	return documentURL
 }
