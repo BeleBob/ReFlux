@@ -380,6 +380,15 @@ DEPRECATED (removed in v2)
 	os.Args = expandShortFlags(os.Args)
 	flag.Parse()
 
+	// isExit is the session/encryption-directionality role: which side of a
+	// negotiated or encrypted pair this process plays. bench-sink is the
+	// passive, always-listening side (like an exit), bench-send the active
+	// initiator (like a client) - without this, two bench processes both
+	// resolved to "client", so a negotiated session never had an exit side
+	// to answer hellos with a challenge, and two peers' encryption keys
+	// were derived in the same direction instead of swapped.
+	isExit := *role == roleExit || *role == roleBenchSink
+
 	// Apply .conf file if requested. Only flags that were not explicitly set
 	// on the command line are overridden.
 	//
@@ -435,14 +444,14 @@ DEPRECATED (removed in v2)
 				spec.Params = map[string]interface{}{
 					"dial":    t.Values["Dial"],
 					"listen":  t.Values["Listen"],
-					"is_exit": *role == roleExit,
+					"is_exit": isExit,
 				}
 			}
 			if spec.Type == "oneme" {
 				spec.Params = map[string]interface{}{
 					"token": t.Values["Token"],
 					"uid":   t.Values["UID"],
-					"exit":  *role == roleExit,
+					"exit":  isExit,
 				}
 			}
 			confTransports = append(confTransports, spec)
@@ -614,11 +623,11 @@ DEPRECATED (removed in v2)
 			urls["yandex"] = globalDocUrl
 		}
 		extra := map[string]map[string]interface{}{
-			"oneme": {"token": *onemeToken, "uid": *onemeUID, "exit": *role == roleExit},
+			"oneme": {"token": *onemeToken, "uid": *onemeUID, "exit": isExit},
 			"direct": {
 				"dial":    *directDial,
 				"listen":  *directListen,
-				"is_exit": *role == roleExit,
+				"is_exit": isExit,
 			},
 		}
 		specs = buildTransportSpecs(parsed, urls, extra)
@@ -631,12 +640,12 @@ DEPRECATED (removed in v2)
 		}}
 		if *transportType == "oneme" {
 			specs[0].Params = map[string]interface{}{
-				"token": maxToken, "uid": maxUid, "exit": *role == roleExit,
+				"token": maxToken, "uid": maxUid, "exit": isExit,
 			}
 		}
 		if *transportType == "direct" {
 			specs[0].Params = map[string]interface{}{
-				"dial": *directDial, "listen": *directListen, "is_exit": *role == roleExit,
+				"dial": *directDial, "listen": *directListen, "is_exit": isExit,
 			}
 		}
 	}
@@ -706,7 +715,7 @@ DEPRECATED (removed in v2)
 			Capabilities:  caps,
 			MaxPacketSize: *maxPacket,
 		}
-		sess, err := transport.NewSession(params, *role == roleExit)
+		sess, err := transport.NewSession(params, isExit)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -793,9 +802,9 @@ DEPRECATED (removed in v2)
 			inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
 		case "oneme":
 			uidint, _ := strconv.ParseInt(maxUid, 10, 64)
-			inner = oneme.NewOneMeTransport(*role == roleExit, maxToken, uidint, config)
+			inner = oneme.NewOneMeTransport(isExit, maxToken, uidint, config)
 		case "cupsonline":
-			inner = cupsonline.NewCupsonlineTransport(globalDocUrl, config, *role != roleExit)
+			inner = cupsonline.NewCupsonlineTransport(globalDocUrl, config, !isExit)
 		case "mailru":
 			inner = mailru.NewMailruDocsTransport(globalDocUrl, config)
 		default:
@@ -823,7 +832,7 @@ DEPRECATED (removed in v2)
 		}
 
 		if *encryptionKeyFile != "" {
-			encrypted, err := transport.NewEncryptedTransport(inner, secret, sessionContext, *role == roleExit)
+			encrypted, err := transport.NewEncryptedTransport(inner, secret, sessionContext, isExit)
 			if err != nil {
 				log.Fatalf("Configure encrypted transport: %v", err)
 			}
