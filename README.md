@@ -36,7 +36,8 @@ The original code is provided **as is**, **without any warranties**.
 | **macOS**   | build from source | CLI + utun L3 client (`--inbound=tun`, default on macOS) |
 | **Linux**   | build from source | CLI client (SOCKS5) / exit node (L3 or L4) |
 | **Windows** | build from source | CLI client (SOCKS5, or `--inbound=tun` via Wintun - needs administrator) / exit node (`l4`, or `l3` via QEMU - see TODO) |
-| **Android** | [OpenFluxAndroid releases](https://github.com/p1neappleXpress/OpenFluxAndroid) | Standalone APK |
+| **Desktop** | [OpenFluxDesktop releases](https://github.com/p1neappleXpress/OpenFluxDesktop) | Windows/macOS/Linux: full tunnel or SOCKS5/HTTP proxy, multi-transport sessions, encryption, an in-app node-deployment wizard over SSH |
+| **Android** | [OpenFluxAndroid releases](https://github.com/p1neappleXpress/OpenFluxAndroid) | System-wide VPN or local SOCKS5, multi-transport sessions with failover, encryption, captcha handling in a built-in browser |
 | **Android** | [OpenFlux-Android releases](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Fork: system-wide VPN or SOCKS5 proxy, multi-transport sessions, captcha handling, phone as exit node |
 | **iOS**     | [TestFlight beta](https://testflight.apple.com/join/BwnAcdus) | System-wide VPN via Network Extension |
 
@@ -53,7 +54,16 @@ The original code is provided **as is**, **without any warranties**.
 > transport (#60) and session resilience with exit captcha handling (#93) to this
 > repository. HUGE thanks!
 >
-> **Android app** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid).
+> **OpenFluxAndroid and OpenFluxDesktop** run a Compose Multiplatform app and a
+> shared module (multi-transport sessions, encryption, the built-in browser for
+> captcha, the SSH node-deployment wizard) originally written by
+> [@meepo161](https://github.com/meepo161) in
+> [OpenFluxClient](https://github.com/meepo161/OpenFluxClient) and moved into
+> these repositories with his agreement. HUGE thanks!
+>
+> **Android app** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid),
+> **desktop app** - [p1neappleXpress/OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop),
+> the module they share - [p1neappleXpress/OpenFluxClientShared](https://github.com/p1neappleXpress/OpenFluxClientShared).
 
 ## Architecture
 

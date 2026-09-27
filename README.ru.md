@@ -39,7 +39,8 @@
 | **macOS**   | сборка из исходников | CLI + utun L3-клиент (`--inbound=tun`, по умолчанию на macOS) |
 | **Linux**   | сборка из исходников | CLI-клиент (SOCKS5) / выходная нода (L3 или L4) |
 | **Windows** | сборка из исходников | CLI-клиент (SOCKS5, либо `--inbound=tun` через Wintun - нужны права администратора) / выходная нода (`l4`, либо `l3` через QEMU - см. TODO) |
-| **Android** | [Релизы OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid) | Отдельный APK |
+| **Desktop** | [Релизы OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop) | Windows/macOS/Linux: полный туннель или SOCKS5/HTTP-прокси, сессии с несколькими транспортами, шифрование, мастер разворачивания ноды по SSH из приложения |
+| **Android** | [Релизы OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid) | Системный VPN или локальный SOCKS5, сессии с несколькими транспортами и переключением между ними, шифрование, обработка капчи во встроенном браузере |
 | **Android** | [Релизы OpenFlux-Android](https://github.com/damnurmum/OpenFlux-Android/releases/latest) | Форк: системный VPN или SOCKS5-прокси, сессии с несколькими транспортами, обработка капчи, телефон как выходная нода |
 | **iOS**     | [TestFlight бета](https://testflight.apple.com/join/BwnAcdus) | Системный VPN через Network Extension |
 
@@ -57,7 +58,16 @@
 > транспорт Mail.ru (#60) и устойчивость сессий с обработкой капчи ноды (#93).
 > ОГРОМНОЕ спасибо!
 >
-> **Android-приложение** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid).
+> **OpenFluxAndroid и OpenFluxDesktop** используют Compose Multiplatform
+> приложение и общий модуль (сессии с несколькими транспортами, шифрование,
+> встроенный браузер для капчи, мастер разворачивания ноды по SSH),
+> изначально написанные [@meepo161](https://github.com/meepo161) в
+> [OpenFluxClient](https://github.com/meepo161/OpenFluxClient) и перенесённые
+> в эти репозитории с его согласия. ОГРОМНОЕ спасибо!
+>
+> **Android-приложение** - [p1neappleXpress/OpenFluxAndroid](https://github.com/p1neappleXpress/OpenFluxAndroid),
+> **desktop-приложение** - [p1neappleXpress/OpenFluxDesktop](https://github.com/p1neappleXpress/OpenFluxDesktop),
+> общий модуль обоих - [p1neappleXpress/OpenFluxClientShared](https://github.com/p1neappleXpress/OpenFluxClientShared).
 
 ## Архитектура
 
