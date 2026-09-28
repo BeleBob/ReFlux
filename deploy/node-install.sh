@@ -36,11 +36,11 @@
 set -u
 umask 077
 
-CORE_VERSION="node-v1.0.1"
+CORE_VERSION="node-v1.1.0"
 CORE_BASE="https://github.com/p1neappleXpress/OpenFlux/releases/download/$CORE_VERSION"
-SHA_amd64="9fa157550d2c20c0bc03c12823b4ad0140ba070199b5548eacf98c5a2cca6cb8"
-SHA_arm64="325335fa416d2f87cba84c5a85d865c596169cd79c7f4cfc916cd67a88612886"
-SHA_arm="7f280b01a53bee33e84a7525e035f1e09f51e9070b612b903e492c45c6edf300"
+SHA_amd64="9ec36c073749c1d02ca163516ba6fc257cc624a69833fb108de65ba4400e8f41"
+SHA_arm64="b6d74ae230d9f4711cc4e03ba19d9eb7b4e3987ae6eeb45f86257743da9623ed"
+SHA_arm="77c5afa26566db77b465e26bc0bdcde55e9f2babb08b386953a3d2f769667cf8"
 
 BIN_DIR="/opt/openflux-node/bin"
 CONF_ROOT="/etc/openflux-node"

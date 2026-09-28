@@ -3,10 +3,11 @@
 All notable changes to the OpenFlux core. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-28
 
 Every client now behaves alike: peers of different builds and modes find
-each other instead of dropping every packet in silence.
+each other instead of dropping every packet in silence. The node wizard
+(desktop and Android) installs this core as `node-v1.1.0`.
 
 ### Added
 
