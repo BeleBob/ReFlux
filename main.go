@@ -171,10 +171,14 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--node-wizard" {
 		os.Exit(runNodeWizard(os.Stdin, os.Stdout))
 	}
-	// The core's own openflux:// parser for apps and scripts, so a link is
-	// read the same way everywhere: JSON on stdout, before any banner.
+	// The core's own openflux:// parser and builder for apps and scripts,
+	// so a link is read and made the same way everywhere: JSON on stdout,
+	// before any banner.
 	if len(os.Args) == 3 && os.Args[1] == "--parse-link" {
 		os.Exit(runParseLink(os.Args[2], os.Stdin, os.Stdout))
+	}
+	if len(os.Args) == 3 && os.Args[1] == "--make-link" {
+		os.Exit(runMakeLink(os.Args[2], os.Stdin, os.Stdout))
 	}
 	fmt.Print("written by p1neappleXpress\n")
 

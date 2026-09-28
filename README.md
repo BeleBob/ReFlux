@@ -605,6 +605,8 @@ Measure raw goodput through the transport, without touching the host network:
 | `--share` | | `false` | Exit: print an `openflux://` link and QR code for clients |
 | `--share-host` | | (first public IPv4) | Exit: address clients dial for `direct` in that link |
 | `--node-wizard` | | | Sole argument: run the JSON-over-stdio provisioning protocol instead of normal CLI startup (see [Highlights](#highlights)) |
+| `--parse-link` | | | `--parse-link <link\|->`: read an openflux:// link (`-`: from stdin) and print `{"config","context"}` or `{"error","code","param"}` as JSON; the reading every client uses |
+| `--make-link` | | | `--make-link <json\|->`: build the link for a share configuration (`-`: from stdin) and print `{"link","config","context"}` or the error, as every client exports it |
 
 Deprecated (kept for one release, mapped automatically to the new flags):
 `--client`, `--exit-node`, `--tun`, `--socks5-mode`, `--legacy`,

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -9,7 +8,6 @@ import (
 	"os"
 
 	"openflux/share"
-	"openflux/transport"
 )
 
 // roomLister is a transport whose address for clients exists only once it
@@ -70,11 +68,12 @@ func printShare(c share.Config, skipped []string) {
 	for _, why := range skipped {
 		log.Printf("--share: left out %s", why)
 	}
-	link, err := share.Encode(c)
-	if err != nil {
-		log.Printf("--share: %v", err)
+	r := share.Make(c)
+	if r.Error != "" {
+		log.Printf("--share: %s", r.Error)
 		return
 	}
+	link := r.Link
 	qr, err := share.Terminal(link)
 	if err != nil {
 		log.Printf("--share: %v", err)
@@ -86,34 +85,39 @@ func printShare(c share.Config, skipped []string) {
 	fmt.Fprintln(os.Stderr, link)
 }
 
-// runParseLink decodes an openflux:// link (arg, or stdin for "-") with
-// the core's parser and prints {"config":...,"context":...} or
-// {"error":...}. context is the encryption context a client derives for
-// it (the link's own, else transport.KDFContexts).
+// runParseLink reads an openflux:// link (arg, or stdin for "-") with the
+// core's parser and prints share.Result as JSON: {"config":...,"context":...}
+// or {"error":...,"code":...,"param":...}. Apps word the code themselves.
 func runParseLink(arg string, stdin io.Reader, stdout io.Writer) int {
-	link := arg
-	if arg == "-" {
-		b, err := io.ReadAll(io.LimitReader(stdin, 64<<10))
-		if err != nil {
-			return writeParseResult(stdout, map[string]interface{}{"error": err.Error()})
-		}
-		link = string(b)
-	}
-	c, err := share.Decode(link)
+	link, err := argOrStdin(arg, stdin)
 	if err != nil {
-		return writeParseResult(stdout, map[string]interface{}{"error": err.Error()})
+		return writeLinkResult(stdout, share.Failed(err))
 	}
-	sources := make([]transport.ContextSource, len(c.Transports))
-	for i, t := range c.Transports {
-		sources[i] = transport.ContextSource{Type: t.Type, URL: t.URL, Priority: t.Priority}
-	}
-	context, _ := transport.KDFContexts(c.Context, "", sources)
-	return writeParseResult(stdout, map[string]interface{}{"config": c, "context": context})
+	return writeLinkResult(stdout, share.Read(link))
 }
 
-func writeParseResult(w io.Writer, v map[string]interface{}) int {
-	_ = json.NewEncoder(w).Encode(v)
-	if _, bad := v["error"]; bad {
+// runMakeLink builds the link for a share.Config JSON (arg, or stdin for
+// "-") the way every client exports one and prints share.Result as JSON:
+// {"link":...,"config":...,"context":...} or the error.
+func runMakeLink(arg string, stdin io.Reader, stdout io.Writer) int {
+	cfg, err := argOrStdin(arg, stdin)
+	if err != nil {
+		return writeLinkResult(stdout, share.Failed(err))
+	}
+	return writeLinkResult(stdout, share.MakeJSON(cfg))
+}
+
+func argOrStdin(arg string, stdin io.Reader) (string, error) {
+	if arg != "-" {
+		return arg, nil
+	}
+	b, err := io.ReadAll(io.LimitReader(stdin, 64<<10))
+	return string(b), err
+}
+
+func writeLinkResult(w io.Writer, r share.Result) int {
+	fmt.Fprintln(w, r.JSON())
+	if r.Error != "" {
 		return 1
 	}
 	return 0

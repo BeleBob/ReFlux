@@ -16,9 +16,24 @@ func ShareQRPNG(link string, size int) ([]byte, error) {
 	return share.PNG(link, size)
 }
 
+// ReadShareLink reads an openflux:// link with the core's parser and
+// returns share.Result as JSON, the same answer the CLI's --parse-link and
+// the iOS library give: {"config":...,"context":...} or
+// {"error":...,"code":...,"param":...}. The app words the code itself.
+func ReadShareLink(link string) string {
+	return share.Read(link).JSON()
+}
+
+// MakeShareLink builds the link for a share.Config JSON the way every
+// client exports one (share.Make) and returns share.Result as JSON:
+// {"link":...,"config":...,"context":...} or the error.
+func MakeShareLink(configJSON string) string {
+	return share.MakeJSON(configJSON).JSON()
+}
+
 // ParseShareLink decodes a scanned or opened openflux:// link and returns
 // its configuration as JSON (share.Config) for the app to turn into a
-// profile.
+// profile. ReadShareLink says why a link is rejected.
 func ParseShareLink(link string) (string, error) {
 	c, err := share.Decode(link)
 	if err != nil {
@@ -69,7 +84,7 @@ func ExitShareLink(host, name string) (string, error) {
 		}
 		c.Transports = append(c.Transports, t)
 	}
-	return share.Encode(c)
+	return share.MakeLink(c)
 }
 
 // exitShareClassic describes a classic single-transport exit to clients.
@@ -133,11 +148,14 @@ func ShareSessionSpecs(link string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sources := make([]transport.ContextSource, len(c.Transports))
+	return sessionSpecsOf(c), nil
+}
+
+// sessionSpecsOf is ShareSessionSpecs for a link already read.
+func sessionSpecsOf(c share.Config) string {
 	specs := make([]sessionSpec, 0, len(c.Transports))
 	seen := make(map[string]int)
-	for i, t := range c.Transports {
-		sources[i] = transport.ContextSource{Type: t.Type, URL: t.URL, Priority: t.Priority}
+	for _, t := range c.Transports {
 		name := t.Name
 		if name == "" {
 			seen[t.Type]++
@@ -153,10 +171,9 @@ func ShareSessionSpecs(link string) (string, error) {
 		}
 		specs = append(specs, spec)
 	}
-	context, _ := transport.KDFContexts(c.Context, "", sources)
-	b, err := json.Marshal(struct {
+	b, _ := json.Marshal(struct {
 		Context    string        `json:"context"`
 		Transports []sessionSpec `json:"transports"`
-	}{context, specs})
-	return string(b), err
+	}{share.ContextOf(c), specs})
+	return string(b)
 }

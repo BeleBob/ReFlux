@@ -371,14 +371,5 @@ func fetchIP(ctx context.Context, trans transport.Transport) (string, error) {
 // backup). The app saves it through the same import path as a scanned QR,
 // and shows it as a QR for another device. It carries the channel key.
 func NodeShareLink(name, documentURL, key, host string, port int) (string, error) {
-	return share.Encode(share.Config{
-		Name:      name,
-		Negotiate: true,
-		Secret:    key,
-		Context:   documentURL,
-		Transports: []share.Transport{
-			{Type: "vyandex", URL: documentURL, Priority: 100},
-			{Type: "direct", Dial: net.JoinHostPort(host, strconv.Itoa(port)), Priority: 50},
-		},
-	})
+	return share.MakeLink(share.NodeConfig(name, documentURL, key, net.JoinHostPort(host, strconv.Itoa(port))))
 }

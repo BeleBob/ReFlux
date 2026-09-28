@@ -287,14 +287,5 @@ func nodeShareLink(name, documentURL, key, host string, port int) (string, error
 	if host == "" || port <= 0 || port > 65535 {
 		return "", errors.New("нет адреса или порта ноды")
 	}
-	return share.Encode(share.Config{
-		Name:      name,
-		Negotiate: true,
-		Secret:    key,
-		Context:   documentURL,
-		Transports: []share.Transport{
-			{Type: "vyandex", URL: documentURL, Priority: 100},
-			{Type: "direct", Dial: net.JoinHostPort(host, strconv.Itoa(port)), Priority: 50},
-		},
-	})
+	return share.MakeLink(share.NodeConfig(name, documentURL, key, net.JoinHostPort(host, strconv.Itoa(port))))
 }

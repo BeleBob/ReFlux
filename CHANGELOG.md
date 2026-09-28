@@ -31,7 +31,16 @@ each other instead of dropping every packet in silence.
 - `mobile`: `ShareSessionSpecs`, `SetInitialCookies`, `SetLowMemory`
   (Volga's new `SlimVolgaConfig` for the iOS extension), `ReadTimeout`,
   `ConnectionMode`.
-- `--parse-link`: the core's reading of an openflux:// link as JSON.
+- Links are read and made by the core only. `share.Read` / `share.Make`
+  answer every entry point with the same JSON (`--parse-link`, new
+  `--make-link`, `mobile.ReadShareLink` / `MakeShareLink`, the iOS
+  `OpenFluxShareDecode` / `OpenFluxShareEncode`): the configuration and
+  its context, the link, or an error `code` (and `param`) that the apps
+  put in their own words. `share.Make` normalizes what apps spell
+  differently (the default codec is left out, an encrypted link always
+  names its context, by the one rule when not given), so one
+  configuration gives one link on every client; the node wizard's link,
+  desktop and Android, comes from one `share.NodeConfig`.
 - Logs a user can act on without `-dd`: key or context mismatch, the peer
   running the other layering, codec and context fallbacks, a second client
   taking over the exit, carriers failing to start, documents dropping, and

@@ -12,9 +12,9 @@ import (
 	"compress/flate"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -28,6 +28,51 @@ const Prefix = "openflux://v1/"
 // maxPayload bounds the decompressed JSON, so a crafted link cannot make
 // the decoder allocate without limit.
 const maxPayload = 16 << 10
+
+// Why a link cannot be read or made (Error.Code, Result.Code). The codes
+// are the contract with the apps: they word each one for their users, the
+// core only decides which it is.
+const (
+	CodeNotLink            = "not_link"
+	CodeUnsupportedVersion = "unsupported_version"
+	CodeCaseChanged        = "case_changed"
+	CodeDamaged            = "damaged" // not base64url or not DEFLATE: mangled or cut on the way
+	CodeTooLarge           = "too_large"
+	CodeBadPayload         = "bad_payload" // decompresses, but is not a configuration
+	CodeBadConfig          = "bad_config"  // Make: the configuration JSON does not parse
+	CodeNoTransports       = "no_transports"
+	CodeNeedsSession       = "several_need_session"
+	CodeSessionSecret      = "session_secret" // Param: the minimum length
+	CodeShortSecret        = "short_secret"   // Param: the minimum length
+	CodeUnknownCodec       = "unknown_codec"  // Param: the codec
+	CodeNotShareable       = "not_shareable"  // Param: the transport type (MAX)
+	CodeUnknownTransport   = "unknown_transport"
+	CodeDirectNoDial       = "direct_no_dial"
+	CodeDirectNeedsSession = "direct_needs_session"
+)
+
+// Error is a link that cannot be used: Code says which problem it is (for
+// the apps), Param the value it is about, Error() the English detail the
+// CLI prints.
+type Error struct {
+	Code  string
+	Param string
+	text  string
+	cause error
+}
+
+func (e *Error) Error() string {
+	if e.cause != nil {
+		return e.text + ": " + e.cause.Error()
+	}
+	return e.text
+}
+
+func (e *Error) Unwrap() error { return e.cause }
+
+func linkError(code, param, text string, cause error) error {
+	return &Error{Code: code, Param: param, text: text, cause: cause}
+}
 
 // Transport is one transport the client should run.
 type Transport struct {
@@ -66,35 +111,37 @@ var knownTypes = map[string]bool{
 // Validate reports whether c describes something a client can connect with.
 func (c *Config) Validate() error {
 	if len(c.Transports) == 0 {
-		return errors.New("share: no transports")
+		return linkError(CodeNoTransports, "", "share: no transports", nil)
 	}
 	if len(c.Transports) > 1 && !c.Negotiate {
-		return errors.New("share: several transports need a negotiated session")
+		return linkError(CodeNeedsSession, "", "share: several transports need a negotiated session", nil)
 	}
 	// Characters as Kotlin and Java count them (UTF-16 units), so a link
 	// is valid or not the same way on every client.
 	if c.Negotiate && utils.SecretChars(c.Secret) < utils.MinSecretChars {
-		return fmt.Errorf("share: a negotiated session needs a secret of at least %d characters", utils.MinSecretChars)
+		return linkError(CodeSessionSecret, strconv.Itoa(utils.MinSecretChars),
+			fmt.Sprintf("share: a negotiated session needs a secret of at least %d characters", utils.MinSecretChars), nil)
 	}
 	if c.Secret != "" && utils.SecretChars(c.Secret) < utils.MinSecretChars {
-		return fmt.Errorf("share: the secret must be at least %d characters", utils.MinSecretChars)
+		return linkError(CodeShortSecret, strconv.Itoa(utils.MinSecretChars),
+			fmt.Sprintf("share: the secret must be at least %d characters", utils.MinSecretChars), nil)
 	}
 	if c.Codec != "" && c.Codec != "batched" && c.Codec != "legacy" {
-		return fmt.Errorf("share: unknown codec %q", c.Codec)
+		return linkError(CodeUnknownCodec, c.Codec, fmt.Sprintf("share: unknown codec %q", c.Codec), nil)
 	}
 	for _, t := range c.Transports {
 		if !knownTypes[t.Type] {
 			if t.Type == "oneme" {
-				return errors.New("share: MAX (oneme) cannot be shared: its token belongs to one account")
+				return linkError(CodeNotShareable, t.Type, "share: MAX (oneme) cannot be shared: its token belongs to one account", nil)
 			}
-			return fmt.Errorf("share: unknown transport type %q", t.Type)
+			return linkError(CodeUnknownTransport, t.Type, fmt.Sprintf("share: unknown transport type %q", t.Type), nil)
 		}
 		if t.Type == "direct" {
 			if t.Dial == "" {
-				return errors.New("share: direct needs the exit's address")
+				return linkError(CodeDirectNoDial, "", "share: direct needs the exit's address", nil)
 			}
 			if !c.Negotiate {
-				return errors.New("share: direct only works in a negotiated session")
+				return linkError(CodeDirectNeedsSession, "", "share: direct only works in a negotiated session", nil)
 			}
 		}
 	}
@@ -135,28 +182,28 @@ func Decode(link string) (Config, error) {
 	link = strings.TrimSpace(link)
 	if !strings.HasPrefix(link, Prefix) {
 		if strings.HasPrefix(strings.ToLower(link), "openflux://") && !strings.HasPrefix(link, "openflux://") {
-			return Config{}, errors.New("share: the link's letters changed case on the way (openflux:// links are case-sensitive); copy it again")
+			return Config{}, linkError(CodeCaseChanged, "", "share: the link's letters changed case on the way (openflux:// links are case-sensitive); copy it again", nil)
 		}
 		if strings.HasPrefix(link, "openflux://") {
-			return Config{}, errors.New("share: unsupported link version; update OpenFlux")
+			return Config{}, linkError(CodeUnsupportedVersion, "", "share: unsupported link version; update OpenFlux", nil)
 		}
-		return Config{}, errors.New("share: not an openflux:// link")
+		return Config{}, linkError(CodeNotLink, "", "share: not an openflux:// link", nil)
 	}
 	body := normalizeBody(strings.TrimPrefix(link, Prefix))
 	packed, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
-		return Config{}, fmt.Errorf("share: bad link encoding (%d characters after the prefix; truncated or mangled?): %w", len(body), err)
+		return Config{}, linkError(CodeDamaged, "", fmt.Sprintf("share: bad link encoding (%d characters after the prefix; truncated or mangled?)", len(body)), err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(flate.NewReader(bytes.NewReader(packed)), maxPayload+1))
 	if err != nil {
-		return Config{}, fmt.Errorf("share: bad link payload (not raw DEFLATE; zlib/gzip-wrapped or truncated?): %w", err)
+		return Config{}, linkError(CodeDamaged, "", "share: bad link payload (not raw DEFLATE; zlib/gzip-wrapped or truncated?)", err)
 	}
 	if len(raw) > maxPayload {
-		return Config{}, errors.New("share: link payload too large")
+		return Config{}, linkError(CodeTooLarge, "", "share: link payload too large", nil)
 	}
 	var c Config
 	if err := json.Unmarshal(raw, &c); err != nil {
-		return Config{}, fmt.Errorf("share: bad link payload: %w", err)
+		return Config{}, linkError(CodeBadPayload, "", "share: bad link payload", err)
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err

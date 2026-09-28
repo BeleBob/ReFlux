@@ -31,7 +31,11 @@ Session profiles (several carriers, what a node's openflux:// link describes):
   profile, ready for `OpenFluxStartSession(session, secret, socksAddr)` or
   `OpenFluxStartSessionPacketTunnel(session, secret)`. Do not interpret the link in
   Swift: the context and carrier names in it must reach the core unchanged.
-- `OpenFluxShareEncode(configJSON)` → `{"link"}`.
+- `OpenFluxShareEncode(configJSON)` → `{"link","config","context"}`: the core fills in
+  the context and drops defaults, so the link is the one every client makes.
+- On failure both return `{"error","code","param"}`: `code` (`share.Code*`, e.g.
+  `damaged`, `unknown_transport`) is what the app words for the user, `param` the value
+  it is about; `error` is English detail for the log.
 
 State and checks:
 - `OpenFluxStop()`, `OpenFluxIsRunning()`, `OpenFluxIsConnected()`, `OpenFluxStatsJSON()`,

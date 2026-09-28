@@ -60,3 +60,35 @@ func TestShareConfigCarriesCreatedCupsRooms(t *testing.T) {
 		t.Fatalf("transports %+v, skipped %v", c.Transports, skipped)
 	}
 }
+
+// --parse-link and --make-link answer with share.Result, byte for byte
+// what package mobile and the iOS library answer, and the wizard's link is
+// the one share.Make builds for its configuration.
+func TestLinkCommandsAnswerLikeShare(t *testing.T) {
+	cfg := `{"name":"node","negotiate":true,"secret":"a shared secret of 32 characters",` +
+		`"transports":[{"type":"vyandex","url":"https://docs.yandex.ru/edit/d/AbC","priority":100}]}`
+	var out strings.Builder
+	if code := runMakeLink("-", strings.NewReader(cfg), &out); code != 0 {
+		t.Fatalf("--make-link exit %d: %s", code, out.String())
+	}
+	made := share.MakeJSON(cfg)
+	if out.String() != made.JSON()+"\n" {
+		t.Fatalf("--make-link %s, share.MakeJSON %s", out.String(), made.JSON())
+	}
+
+	wrapped := made.Link[:40] + "\r\n" + made.Link[40:]
+	out.Reset()
+	if code := runParseLink("-", strings.NewReader(wrapped), &out); code != 0 || out.String() != share.Read(made.Link).JSON()+"\n" {
+		t.Fatalf("--parse-link exit %d: %s", code, out.String())
+	}
+	out.Reset()
+	if code := runParseLink("https://example.com", nil, &out); code != 1 || !strings.Contains(out.String(), `"code":"not_link"`) {
+		t.Fatalf("--parse-link on garbage: exit %d %s", code, out.String())
+	}
+
+	link, err := nodeShareLink("node", "https://docs.yandex.ru/edit/d/AbC", "a shared secret of 32 characters", "203.0.113.7", 9443)
+	want := share.Make(share.NodeConfig("node", "https://docs.yandex.ru/edit/d/AbC", "a shared secret of 32 characters", "203.0.113.7:9443"))
+	if err != nil || link != want.Link {
+		t.Fatalf("wizard link %q (%v), share.Make %q", link, err, want.Link)
+	}
+}
