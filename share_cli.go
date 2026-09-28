@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 
 	"openflux/share"
+	"openflux/transport"
 )
 
 // roomLister is a transport whose address for clients exists only once it
@@ -79,6 +82,41 @@ func printShare(c share.Config, skipped []string) {
 	}
 	log.Printf("Share link for clients (contains the encryption key): %s", link)
 	fmt.Fprint(os.Stderr, qr)
+	// The bare link on a line of its own, to copy without the log prefix.
+	fmt.Fprintln(os.Stderr, link)
+}
+
+// runParseLink decodes an openflux:// link (arg, or stdin for "-") with
+// the core's parser and prints {"config":...,"context":...} or
+// {"error":...}. context is the encryption context a client derives for
+// it (the link's own, else transport.KDFContexts).
+func runParseLink(arg string, stdin io.Reader, stdout io.Writer) int {
+	link := arg
+	if arg == "-" {
+		b, err := io.ReadAll(io.LimitReader(stdin, 64<<10))
+		if err != nil {
+			return writeParseResult(stdout, map[string]interface{}{"error": err.Error()})
+		}
+		link = string(b)
+	}
+	c, err := share.Decode(link)
+	if err != nil {
+		return writeParseResult(stdout, map[string]interface{}{"error": err.Error()})
+	}
+	sources := make([]transport.ContextSource, len(c.Transports))
+	for i, t := range c.Transports {
+		sources[i] = transport.ContextSource{Type: t.Type, URL: t.URL, Priority: t.Priority}
+	}
+	context, _ := transport.KDFContexts(c.Context, "", sources)
+	return writeParseResult(stdout, map[string]interface{}{"config": c, "context": context})
+}
+
+func writeParseResult(w io.Writer, v map[string]interface{}) int {
+	_ = json.NewEncoder(w).Encode(v)
+	if _, bad := v["error"]; bad {
+		return 1
+	}
+	return 0
 }
 
 // publicIPv4 guesses the address clients should dial: the first global

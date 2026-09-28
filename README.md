@@ -213,8 +213,6 @@ OpenFlux/
   tun_watch.go                     # Socket watcher for bypass routes
   tun_learn.go, tun_other.go       # utun helpers / non-darwin stubs
   signals_{unix,windows}.go        # Shutdown signals
-  export_ios.go                    # cgo bridge for the iOS static library
-  export_ios_packet.go             # iOS packet tunnel bridge
   transport/
     transport.go                   # Transport interface
     batched.go                     # BatchedTransport (coalescing + zstd)
@@ -257,6 +255,8 @@ OpenFlux/
   network/                         # Checksums, packet parsing
   utils/                           # Logging
   ios-app/                         # SwiftUI iOS client (XcodeGen)
+  mobile/                          # App bridge: gomobile (Android) and the iOS
+                                   # C library (mobile/ios, liboflux.a)
   build_all.sh                     # Cross-build release binaries
   build_ios.sh                     # Build iOS static library (liboflux.a)
   build_ios_app.sh                 # Build + archive + export iOS app IPA

@@ -220,8 +220,6 @@ OpenFlux/
   tun_watch.go                     # Watcher сокетов для bypass-маршрутов
   tun_learn.go, tun_other.go       # Хелперы utun / заглушки для не-darwin
   signals_{unix,windows}.go        # Сигналы завершения
-  export_ios.go                    # cgo-мост для iOS-статической библиотеки
-  export_ios_packet.go             # Мост packet tunnel для iOS
   transport/
     transport.go                   # Интерфейс Transport
     batched.go                     # BatchedTransport (склейка + zstd)
@@ -264,7 +262,8 @@ OpenFlux/
   network/                         # Контрольные суммы, разбор пакетов
   utils/                           # Логирование
   ios-app/                         # iOS-клиент на SwiftUI (XcodeGen)
-  mobile/                          # gomobile-мост для Android/iOS (см. ниже)
+  mobile/                          # Мост для приложений: gomobile (Android) и
+                                   # C-библиотека iOS (mobile/ios, liboflux.a)
   build_all.sh                     # Кросс-сборка релизных бинарников
   build_ios.sh                     # Сборка статической библиотеки iOS (liboflux.a)
   build_ios_app.sh                 # Сборка + архив + экспорт IPA iOS

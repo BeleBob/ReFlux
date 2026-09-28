@@ -10,10 +10,38 @@ SOCKS5 tunnel over the Yandex.Docs transport on `127.0.0.1:1080`.
 - `ExportOptions.plist` — App Store export options (team 8GQH8GQ252, automatic signing).
 
 ## Go bridge API (liboflux.h)
-- `OpenFluxStartClient(transportType, url, socksAddr, maxToken, maxUid)` — start the client (returns 0 on success).
-- `OpenFluxStop()` — stop transport + SOCKS5 listener.
-- `OpenFluxIsRunning()` / `OpenFluxIsConnected()` — state.
-- `OpenFluxStatsJSON()` / `OpenFluxReadLog()` — stats + log tail (free with `OpenFluxFreeString`).
+Built from `mobile/ios` (`./build_ios.sh`) on package `mobile`, the same code
+the Android app runs: Session, KDF context, codec fallback and openflux://
+links behave the same on every client. An app outside this repository links
+this core as a submodule and builds the library with the same script.
+
+Classic profiles (one carrier, as the app has always started them):
+- `OpenFluxSetEncryption(secret)`, `OpenFluxSetCodec(codec)` — for the next start.
+  With a secret the client runs the Session and speaks classic to a node that
+  does not answer it (an older or classic node); without one, classic only.
+- `OpenFluxStartClient(transportType, url, socksAddr, maxToken, maxUid)` — SOCKS5 client
+  (a comma-separated `url` runs one carrier per document).
+- `OpenFluxStartPacketTunnel(transportType, url, maxToken, maxUid)` — Network Extension
+  (`OpenFluxTunWritePacket` / `OpenFluxTunReadPacket`, `OpenFluxPacketTunnelConnected`,
+  `OpenFluxStopPacketTunnel`, `OpenFluxSetTunnelUDP`, `OpenFluxSetGeositeDirect`,
+  `OpenFluxDrainDirectIPs`).
+
+Session profiles (several carriers, what a node's openflux:// link describes):
+- `OpenFluxShareDecode(link)` → `{"config","context","session"}`: `session` is the
+  profile, ready for `OpenFluxStartSession(session, secret, socksAddr)` or
+  `OpenFluxStartSessionPacketTunnel(session, secret)`. Do not interpret the link in
+  Swift: the context and carrier names in it must reach the core unchanged.
+- `OpenFluxShareEncode(configJSON)` → `{"link"}`.
+
+State and checks:
+- `OpenFluxStop()`, `OpenFluxIsRunning()`, `OpenFluxIsConnected()`, `OpenFluxStatsJSON()`,
+  `OpenFluxMode()` (`session` / `classic`), `OpenFluxActiveTransport()`.
+- `OpenFluxCaptchaPending()` (this phone's carrier), `OpenFluxRemoteCaptchaPending()` and
+  `OpenFluxRemoteCaptchaProxy()` (the exit's), `OpenFluxCaptchaReason()`,
+  `OpenFluxApplyCaptchaCookies(header)` / `OpenFluxOfferCaptchaCookies(header)`,
+  `OpenFluxCancelCaptcha()`, `OpenFluxSetInitialCookies(header)`, `OpenFluxSetCookieStore(path)`.
+- `OpenFluxReadLog()`, `OpenFluxSetDebug(on)`, `OpenFluxSetDebugLevel(0..3)`,
+  `OpenFluxSetDoTResolver(spec)`; free returned strings with `OpenFluxFreeString`.
 
 ## Build + archive + export (one command)
 From the repo root:
