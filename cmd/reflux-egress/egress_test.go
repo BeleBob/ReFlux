@@ -521,3 +521,14 @@ func TestSetBatchSplitsLongLists(t *testing.T) {
 		t.Errorf("%d lines, want 3", n)
 	}
 }
+
+// Redirected queries keep their source (the tunnel's address), so the
+// resolver must answer every source; it listens on loopback only.
+func TestResolverAnswersRedirectedQueries(t *testing.T) {
+	if !strings.Contains(unboundConf, "access-control: 0.0.0.0/0 allow\n") {
+		t.Error("unbound refuses queries redirected from non-loopback sources")
+	}
+	if !strings.Contains(unboundConf, "interface: 127.0.0.1\n") {
+		t.Error("unbound listens beyond loopback")
+	}
+}
