@@ -1,0 +1,85 @@
+name: ReFlux images
+
+# Builds the exit-node image from the upstream Dockerfile (unchanged) and
+# publishes it to GHCR as ghcr.io/<owner>/reflux-node. Pull requests only
+# build it, so a broken Dockerfile is caught before merge.
+#
+# Tags: "main" and "sha-<commit>" for pushes to main; "<version>" and
+# "latest" for a reflux-v<version> git tag.
+on:
+  push:
+    branches: [main]
+    tags: ['reflux-v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: reflux-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Image name
+        id: image
+        # GHCR needs a lowercase repository path.
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reflux-node" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=match,pattern=reflux-v(.*),group=1
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/reflux-v') }}
+          labels: |
+            org.opencontainers.image.title=reflux-node
+            org.opencontainers.image.description=OpenFlux exit node for ReFlux (based on OpenFlux)
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: reflux-node:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        # The binary must be in place and start inside the image.
+        run: |
+          docker run --rm --entrypoint openflux reflux-node:ci --help 2>&1 | grep -q '^USAGE'
+          docker run --rm --entrypoint sh reflux-node:ci -c 'test -x /usr/local/bin/openflux'
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
