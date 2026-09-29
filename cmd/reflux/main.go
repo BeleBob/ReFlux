@@ -29,6 +29,8 @@ USAGE
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, then apply
   reflux restart           recreate egress and all nodes
+  reflux heal              recreate nodes stranded by an egress restart
+                           (quiet; for cron: * * * * * reflux heal)
   reflux status            containers and tunnels
   reflux logs <name|egress> [--follow]
 
@@ -131,6 +133,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
 	case "logs":
 		return cmdLogs(rest, stdout)
+	case "heal":
+		return heal(s, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }
@@ -400,4 +404,53 @@ func checkHost() error {
 		return errors.New(p)
 	}
 	return nil
+}
+
+// heal recreates the nodes that started before the running egress: they
+// share its network namespace, and when egress restarts (a crash, a Docker
+// update) they are left in the old one, which has no way out. Only those
+// nodes are recreated; egress is left alone. It prints nothing when all is
+// well, so it can run from cron.
+func heal(s Store, stdout io.Writer) error {
+	clients, err := s.List()
+	if err != nil || len(clients) == 0 {
+		return err
+	}
+	names := []string{"reflux-egress"}
+	for _, c := range clients {
+		names = append(names, "reflux-node-"+c.Name)
+	}
+	var out strings.Builder
+	args := append([]string{"inspect", "--format", "{{.Name}} {{.State.Running}} {{.State.StartedAt}}"}, names...)
+	// inspect fails when a container is missing; what it printed still counts.
+	runDocker(&out, args...)
+	started := map[string]time.Time{}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 || f[1] != "true" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, f[2])
+		if err == nil {
+			started[strings.TrimPrefix(f[0], "/")] = t
+		}
+	}
+	egress, ok := started["reflux-egress"]
+	if !ok {
+		return nil // egress is down: nothing to rejoin yet
+	}
+	var stranded []string
+	for _, c := range clients {
+		if t, ok := started["reflux-node-"+c.Name]; ok && t.Before(egress) {
+			stranded = append(stranded, "node-"+c.Name)
+		}
+	}
+	if len(stranded) == 0 {
+		return nil
+	}
+	fmt.Fprintf(stdout, "%s: egress restarted; recreating %s\n", time.Now().Format(time.DateTime), strings.Join(stranded, ", "))
+	if err := render(s); err != nil {
+		return err
+	}
+	return runDocker(stdout, composeArgs(s, append([]string{"up", "--detach", "--no-deps", "--force-recreate"}, stranded...)...)...)
 }

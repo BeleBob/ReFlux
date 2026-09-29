@@ -85,15 +85,18 @@ func run() {
 	stop := make(chan struct{})
 
 	for {
-		ru, world, err := loadConfigs(configDir)
+		ru, direct, world, err := loadConfigs(configDir)
 		if err == nil {
-			c.ru, c.world = ru, world
-			log.Printf("configs: russia %s, world %d in order (%s first)", ru.Name, len(world), world[0].Name)
+			c.ru, c.ruDirect, c.world = ru, direct, world
+			russia := ru.Name
+			if direct {
+				russia = "direct (" + directFile + ")"
+			}
+			log.Printf("configs: russia %s, world %d in order (%s first)", russia, len(world), world[0].Name)
 			break
 		}
 		fail(c, "configs", err)
 	}
-	go superviseResolver(stop)
 	for {
 		err := c.setup()
 		if err == nil {
@@ -101,9 +104,16 @@ func run() {
 		}
 		fail(c, "setup", err)
 	}
-	log.Printf("up: russia via %s, world via %s", c.ru.Name, c.world[c.cur].Name)
+	russia := c.ru.Name
+	if c.ruDirect {
+		russia = "the uplink (direct)"
+	}
+	log.Printf("up: russia via %s, world via %s", russia, c.world[c.cur].Name)
 
 	loadPrefixes(c)
+	// Only now: a resolver started before the tunnels finds its upstreams
+	// unreachable and would not try them again for a while.
+	go superviseResolver(stop)
 	go refreshPrefixes(c, stop)
 	go c.watch(stop)
 
@@ -242,7 +252,8 @@ func superviseResolver(stop <-chan struct{}) {
 // TLS to Quad9 (blocks known malicious domains) and Cloudflare. Their
 // addresses are outside the RU prefixes, so queries leave through the world
 // tunnel, encrypted. serve-expired answers from the cache while a tunnel
-// fails over, so an open carrier document keeps resolving.
+// fails over, so an open carrier document keeps resolving; the infra
+// settings bring the upstreams back quickly once it has.
 const unboundConf = `server:
 	interface: 127.0.0.1
 	port: 53
@@ -264,8 +275,41 @@ const unboundConf = `server:
 	serve-expired: yes
 	serve-expired-ttl: 86400
 	cache-min-ttl: 60
+	# An upstream that timed out (a tunnel failing over) is tried again
+	# within a minute instead of being left out for 15.
+	infra-host-ttl: 60
+	infra-keep-probing: yes
+	# The carriers' zones are unsigned; proving that needs the parent's DS
+	# records through the world tunnel. Skipping it keeps them resolving
+	# while that tunnel is down.
+	domain-insecure: "mail.ru"
+	domain-insecure: "datacloudmail.ru"
+	domain-insecure: "yandex.ru"
+	domain-insecure: "yandex.net"
 	hide-identity: yes
 	hide-version: yes
+
+# The carriers' own domains resolve by the Russian route (plain DNS to
+# Yandex, inside the Russian tunnel unless Russia is direct; its
+# DNS-over-TLS drops the handshake), so a carrier
+# document keeps working while the world tunnel is down. Nothing is
+# disclosed: the carrier connection itself goes there anyway.
+forward-zone:
+	name: "mail.ru"
+	forward-addr: 77.88.8.8
+	forward-addr: 77.88.8.1
+forward-zone:
+	name: "datacloudmail.ru"
+	forward-addr: 77.88.8.8
+	forward-addr: 77.88.8.1
+forward-zone:
+	name: "yandex.ru"
+	forward-addr: 77.88.8.8
+	forward-addr: 77.88.8.1
+forward-zone:
+	name: "yandex.net"
+	forward-addr: 77.88.8.8
+	forward-addr: 77.88.8.1
 
 forward-zone:
 	name: "."

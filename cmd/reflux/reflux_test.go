@@ -383,3 +383,55 @@ func TestRevokeNeedsTheNameTyped(t *testing.T) {
 		t.Errorf("revoke with the name typed: %v", err)
 	}
 }
+
+func TestHealRecreatesOnlyStrandedNodes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	for _, n := range []string{"old", "new"} {
+		if err := run([]string{"add", n, "--url", testURL + n, "--no-apply"}, nil, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var calls []string
+	runDocker = func(stdout io.Writer, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "inspect" {
+			io.WriteString(stdout, "/reflux-egress true 2026-09-29T17:31:57.1Z\n"+
+				"/reflux-node-old true 2026-09-29T17:03:25.5Z\n"+
+				"/reflux-node-new true 2026-09-29T17:32:10Z\n")
+		}
+		return nil
+	}
+	var out strings.Builder
+	if err := run([]string{"heal"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	last := calls[len(calls)-1]
+	if !strings.HasSuffix(last, "up --detach --no-deps --force-recreate node-old") {
+		t.Errorf("heal ran %q", last)
+	}
+	if !strings.Contains(out.String(), "recreating node-old") {
+		t.Errorf("heal said %q", out.String())
+	}
+}
+
+func TestHealIsQuietWhenNothingIsStranded(t *testing.T) {
+	t.Setenv("REFLUX_HOME", t.TempDir())
+	fakeDocker(t, "")
+	if err := run([]string{"add", "phone", "--url", testURL, "--no-apply"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	runDocker = func(stdout io.Writer, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		if args[0] == "inspect" {
+			io.WriteString(stdout, "/reflux-egress true 2026-09-29T17:00:00Z\n/reflux-node-phone true 2026-09-29T17:00:05Z\n")
+		}
+		return nil
+	}
+	var out strings.Builder
+	if err := run([]string{"heal"}, nil, &out); err != nil || out.Len() != 0 || len(calls) != 1 {
+		t.Errorf("heal: err=%v out=%q calls=%q", err, out.String(), calls)
+	}
+}
