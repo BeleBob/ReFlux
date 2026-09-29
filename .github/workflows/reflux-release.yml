@@ -1,0 +1,42 @@
+name: ReFlux release
+
+# A reflux-v<version> tag builds the reflux manager for Linux and publishes
+# it as a GitHub release with SHA256SUMS. (Upstream's release.yml reacts to
+# v* tags only, so the two never collide.)
+on:
+  push:
+    tags: ['reflux-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go test ./cmd/reflux -count=1
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w" -o "dist/reflux-linux-$arch" ./cmd/reflux
+          done
+          cd dist && sha256sum reflux-linux-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ReFlux manager ${GITHUB_REF_NAME#reflux-v}" \
+            --notes "reflux, the exit-node manager. Check the download against SHA256SUMS."
