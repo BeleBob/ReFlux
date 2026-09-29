@@ -185,7 +185,7 @@ func main() {
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
 	inbound := flag.String("inbound", "", "tun | socks5 (client only; default: tun on macOS, socks5 elsewhere)")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme, cupsonline, mailru)")
-	mode := flag.String("mode", "", "Exit-node mode: l3 (default, Linux only) or l4 (works everywhere)")
+	mode := flag.String("mode", "", "Exit-node mode: l3 (default; Linux as root, or Windows as Administrator with WinDivert) or l4 (works everywhere)")
 
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
 	negotiate := flag.Bool("negotiate", false, "Require encrypted, session-bound IPv4 capability negotiation on both peers (no legacy fallback)")
@@ -303,7 +303,9 @@ INBOUND  (only with --role=client)
                                proxy that only speaks HTTP.
 
 MODE  (only with --role=exit)
-  -m, --mode=l3                Packet forwarding (SNAT/DNAT). Default.
+  -m, --mode=l3                Packet forwarding (SNAT/DNAT). Default. Linux
+                               as root; Windows as Administrator with
+                               WinDivert.dll + WinDivert64.sys beside the core.
   -m, --mode=l4                Stream proxy (TCP termination + re-dial).
   -l, --local-ip=<ip>          Egress IP for SNAT. Auto-detected.
 
@@ -525,9 +527,9 @@ DEPRECATED (removed in v2)
 	}
 
 	// Warn when the exit runs on l4 (gVisor): it works everywhere but is
-	// slower than l3 (SNAT/DNAT, Linux only, needs root + iptables).
+	// slower than l3 (SNAT/DNAT: Linux as root, Windows with WinDivert).
 	if *role == roleExit && *mode == "l4" {
-		log.Printf("warning: exit on l4 (gVisor). l3 is faster on Linux with root.")
+		log.Printf("warning: exit on l4 (gVisor). l3 is faster: Linux as root, Windows as Administrator.")
 	}
 
 	exitMode, err := tunnel.ParseExitMode(*mode)
@@ -1032,8 +1034,9 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 
 	// L3 SNAT rewrites source IPs; the kernel sees return packets for
 	// connections it never opened and emits RST, tearing them down.
-	// The operator must drop outbound RSTs matching the egress IP.
-	if exitMode == tunnel.ExitModeL3 {
+	// On Linux the operator must drop outbound RSTs matching the egress IP;
+	// the Windows backend drops them itself, per flow, through WinDivert.
+	if exitMode == tunnel.ExitModeL3 && runtime.GOOS == "linux" {
 		if localIP != "" {
 			log.Printf("! Run: sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s %s -j DROP", localIP)
 		} else {
