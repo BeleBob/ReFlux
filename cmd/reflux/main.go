@@ -102,7 +102,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err := render(s); err != nil {
 			return err
 		}
-		if err := runDocker(stdout, composeArgs(s, "pull")...); err != nil {
+		// compose pull only pulls the services in compose.yml: with no
+		// clients yet the node image was never pulled, and the next add
+		// started a node from a stale cached image. Pull both by name.
+		o := options()
+		if err := runDocker(stdout, "pull", "--quiet", o.NodeImage); err != nil {
+			return err
+		}
+		if err := runDocker(stdout, "pull", "--quiet", o.EgressImage); err != nil {
 			return err
 		}
 		return apply(s, stdout)
