@@ -873,6 +873,17 @@ DEPRECATED (removed in v2)
 		}
 
 		trans = inner
+
+		// The app's IPC bridge works here too: traffic totals for its speed
+		// counters, and cookies it offers go to the carrier.
+		if *ipcSocketPath != "" {
+			srv := ipc.NewServer(*ipcSocketPath, &coreIPCHandler{exchanger: exchanger})
+			if err := srv.Listen(); err != nil {
+				log.Fatalf("IPC listen %s: %v", *ipcSocketPath, err)
+			}
+			defer srv.Close()
+			statusServer = srv
+		}
 	}
 
 	_ = exchanger
@@ -896,8 +907,12 @@ DEPRECATED (removed in v2)
 		log.Fatalf("Failed to start transport: %v", err)
 	}
 
-	if statusServer != nil && managerInst != nil {
-		utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst) })
+	if statusServer != nil {
+		if managerInst != nil {
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport) })
+		} else {
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil) })
+		}
 	}
 
 	// Periodically ask the exit node to refresh its cookies. Only the client
@@ -971,22 +986,32 @@ DEPRECATED (removed in v2)
 // statusServer is the IPC bridge, set when --ipc-socket is given.
 var statusServer *ipc.Server
 
-// ipcStatusLoop reports the session to the app every second: whether a
-// carrier reaches the peer, traffic totals, uptime and the active carrier.
-func ipcStatusLoop(srv *ipc.Server, m *manager.Manager) {
+// statusSource is what the IPC status reports on: a Session's manager or
+// a classic carrier without one.
+type statusSource interface {
+	IsConnected() bool
+	Stats() transport.TransportStats
+}
+
+// ipcStatusLoop reports to the app every second: whether a carrier reaches
+// the peer, traffic totals, uptime and (Sessions) the active carrier.
+func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string) {
 	started := time.Now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for range tick.C {
-		st := m.Stats()
-		_ = srv.SendStatus(&ipc.StatusPayload{
+		st := src.Stats()
+		p := &ipc.StatusPayload{
 			Running:   true,
-			Connected: m.IsConnected(),
+			Connected: src.IsConnected(),
 			BytesIn:   st.BytesReceived,
 			BytesOut:  st.BytesSent,
 			UptimeMs:  time.Since(started).Milliseconds(),
-			Active:    m.Session().ActiveTransport(),
-		})
+		}
+		if active != nil {
+			p.Active = active()
+		}
+		_ = srv.SendStatus(p)
 	}
 }
 
