@@ -54,6 +54,7 @@ type composeFile struct {
 	Name     string                    `json:"name"`
 	Services map[string]composeService `json:"services"`
 	Networks map[string]composeNetwork `json:"networks"`
+	Volumes  map[string]struct{}       `json:"volumes"`
 }
 
 type composeService struct {
@@ -130,20 +131,32 @@ func composeYAML(root string, clients []Client, o Options) ([]byte, error) {
 				IPAM:       composeIPAM{Config: []map[string]string{{"subnet": EgressSubnet}}},
 			},
 		},
+		// The egress's cached RU prefix list.
+		Volumes: map[string]struct{}{"egress-state": {}},
 	}
+	// The egress runs as root for netlink, but with only the capabilities
+	// it needs: NET_ADMIN (tunnels, routes, nftables), NET_RAW (probes)
+	// and DAC_READ_SEARCH (reading the owner's 0600 tunnel configs, never
+	// writing them). IPv6 is off: the tunnels and the kill switch are IPv4.
 	f.Services["egress"] = composeService{
 		Image:         o.EgressImage,
 		ContainerName: "reflux-egress",
 		Restart:       "unless-stopped",
 		CapDrop:       []string{"ALL"},
-		CapAdd:        []string{"NET_ADMIN"},
+		CapAdd:        []string{"NET_ADMIN", "NET_RAW", "DAC_READ_SEARCH"},
 		SecurityOpt:   []string{"no-new-privileges:true"},
 		Environment:   noProxy,
-		Devices:       []string{"/dev/net/tun"},
-		Sysctls:       map[string]string{"net.ipv4.conf.all.src_valid_mark": "1"},
-		Volumes:       []string{filepath.Join(root, "egress") + ":/etc/reflux/egress:ro"},
-		Networks:      map[string]composeServiceNet{"egress": {}},
-		Logging:       defaultLogging,
+		Sysctls: map[string]string{
+			"net.ipv4.conf.all.src_valid_mark":   "1",
+			"net.ipv6.conf.all.disable_ipv6":     "1",
+			"net.ipv6.conf.default.disable_ipv6": "1",
+		},
+		Volumes: []string{
+			filepath.Join(root, "egress") + ":/etc/reflux/egress:ro",
+			"egress-state:/var/lib/reflux-egress",
+		},
+		Networks: map[string]composeServiceNet{"egress": {}},
+		Logging:  defaultLogging,
 	}
 	for _, c := range clients {
 		f.Services["node-"+c.Name] = composeService{

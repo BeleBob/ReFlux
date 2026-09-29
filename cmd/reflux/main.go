@@ -28,7 +28,8 @@ USAGE
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, then apply
-  reflux status
+  reflux restart           recreate egress and all nodes
+  reflux status            containers and tunnels
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -104,7 +105,30 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return apply(s, stdout)
 	case "status":
-		return runDocker(stdout, composeArgs(s, "ps", "--all")...)
+		if err := runDocker(stdout, composeArgs(s, "ps", "--all")...); err != nil {
+			return err
+		}
+		fmt.Fprintln(stdout)
+		if err := runDocker(stdout, "exec", "reflux-egress", "reflux-egress", "status"); err != nil {
+			fmt.Fprintln(stdout, "egress: no status (not running?)")
+		}
+		if err := checkHost(); err != nil {
+			fmt.Fprintln(stdout, "WARNING:", err)
+		}
+		return nil
+	case "restart":
+		// Nodes live in the egress container's network namespace; when
+		// egress restarts, they must be recreated to join the new one.
+		if err := s.Init(); err != nil {
+			return err
+		}
+		if err := render(s); err != nil {
+			return err
+		}
+		if err := checkHost(); err != nil {
+			return err
+		}
+		return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
 	case "logs":
 		return cmdLogs(rest, stdout)
 	}
@@ -352,7 +376,8 @@ func render(s Store) error {
 }
 
 // apply renders compose.yml and brings the containers in line with it,
-// removing the nodes of revoked clients.
+// removing the nodes of revoked clients. It refuses while the host would
+// route the egress tunnels through a VPN of its own.
 func apply(s Store, stdout io.Writer) error {
 	if err := s.Init(); err != nil {
 		return err
@@ -360,5 +385,19 @@ func apply(s Store, stdout io.Writer) error {
 	if err := render(s); err != nil {
 		return err
 	}
+	if err := checkHost(); err != nil {
+		return err
+	}
 	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans")...)
+}
+
+func checkHost() error {
+	rules, err := readRules()
+	if err != nil {
+		return fmt.Errorf("cannot read the host's routing rules (ip -4 rule show): %w", err)
+	}
+	if p := hostRuleProblem(rules); p != "" {
+		return errors.New(p)
+	}
+	return nil
 }

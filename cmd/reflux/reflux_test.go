@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -242,8 +243,15 @@ func TestComposeKeepsNodesBehindEgress(t *testing.T) {
 			t.Errorf("%s does not blank HTTPS_PROXY: %v", name, env)
 		}
 	}
-	if _, ok := services["egress"]; !ok {
-		t.Error("no egress service")
+	egress, ok := services["egress"].(map[string]any)
+	if !ok {
+		t.Fatal("no egress service")
+	}
+	if caps := fmt.Sprint(egress["cap_add"]); caps != "[NET_ADMIN NET_RAW DAC_READ_SEARCH]" {
+		t.Errorf("egress cap_add = %s", caps)
+	}
+	if egress["sysctls"].(map[string]any)["net.ipv6.conf.all.disable_ipv6"] != "1" {
+		t.Error("egress keeps IPv6 on")
 	}
 	if !strings.Contains(body, EgressSubnet) {
 		t.Error("egress network lacks its fixed subnet")
@@ -281,8 +289,51 @@ func fakeDocker(t *testing.T, fail string) *[]string {
 		}
 		return nil
 	}
-	t.Cleanup(func() { runDocker = old })
+	oldRules := readRules
+	readRules = func() (string, error) { return plainHostRules, nil }
+	t.Cleanup(func() { runDocker, readRules = old, oldRules })
 	return &calls
+}
+
+const plainHostRules = "0:\tfrom all lookup local\n32766:\tfrom all lookup main\n32767:\tfrom all lookup default\n"
+
+// The rules on the ReFlux server: wg-quick's full-tunnel awg0.
+const awgHostRules = `0:	from all lookup local
+32764:	from all lookup main suppress_prefixlength 0
+32765:	not from all fwmark 0xca6c lookup 51820
+32766:	from all lookup main
+32767:	from all lookup default
+`
+
+func TestHostRuleCheck(t *testing.T) {
+	ours := "100:\tfrom " + EgressSubnet + " lookup main\n"
+	cases := []struct {
+		name, rules string
+		ok          bool
+	}{
+		{"plain host needs nothing", plainHostRules, true},
+		{"vpn host without the rule", awgHostRules, false},
+		{"vpn host with the rule first", ours + awgHostRules, true},
+		{"vpn restarted after the rule", "98:\tnot from all fwmark 0xca6c lookup 51820\n" + ours + awgHostRules, false},
+		{"garbage lines", "\n:\nx: y\n" + plainHostRules, true},
+	}
+	for _, c := range cases {
+		if got := hostRuleProblem(c.rules) == ""; got != c.ok {
+			t.Errorf("%s: ok=%v, want %v (%s)", c.name, got, c.ok, hostRuleProblem(c.rules))
+		}
+	}
+}
+
+func TestApplyRefusesWithoutTheHostRule(t *testing.T) {
+	t.Setenv("REFLUX_HOME", t.TempDir())
+	calls := fakeDocker(t, "")
+	readRules = func() (string, error) { return awgHostRules, nil }
+	if err := run([]string{"apply"}, nil, io.Discard); err == nil {
+		t.Error("apply went ahead on a VPN host without the egress rule")
+	}
+	if len(*calls) != 0 {
+		t.Errorf("docker called: %q", *calls)
+	}
 }
 
 func TestRevokeStopsTheNodeBeforeDeletingItsKey(t *testing.T) {
