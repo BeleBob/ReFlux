@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +21,11 @@ import (
 const (
 	ruIface    = "awg-ru"
 	worldIface = "awg-world"
+
+	// Fixed UDP ports of the tunnels (see awgConf.withListenPort).
+	ruPort    = 51821
+	worldPort = 51822
+
 	uplink     = "eth0"
 	defaultMTU = 1380
 
@@ -29,10 +36,13 @@ const (
 )
 
 // Probe targets: answered by anycast resolvers worldwide, and outside the
-// RU prefixes, so they leave through the world tunnel. ruProbe is inside
-// them and leaves through the Russian one.
+// RU prefixes, so they leave through the world tunnel. ruProbes are inside
+// them and leave through the Russian one. Some providers drop ICMP, so the
+// world tunnel also counts as up when a TCP connection to worldTCP opens
+// (port 443: port 53 would be redirected to the local resolver).
 var (
 	worldProbes = []string{"9.9.9.9", "1.1.1.1"}
+	worldTCP    = []string{"1.1.1.1", "9.9.9.9"}
 	ruProbes    = []string{"77.88.8.8"}
 )
 
@@ -75,6 +85,7 @@ type status struct {
 	RUOK       bool      `json:"ru_ok"`
 	RUPrefixes int       `json:"ru_prefixes"`
 	RUListAt   time.Time `json:"ru_list_updated"`
+	Dropped    int64     `json:"killswitch_dropped"` // packets the kill switch stopped
 	Error      string    `json:"error,omitempty"`
 }
 
@@ -115,6 +126,11 @@ func loadConfigs(dir string) (awgConf, []awgConf, error) {
 	return ru[0], world, nil
 }
 
+// carrierDNS are the resolvers unbound asks for the carriers' domains
+// (Yandex DNS, through the Russian tunnel): the DNS redirect must let
+// unbound's own queries to them through, or it would answer itself.
+const carrierDNS = "77.88.8.8, 77.88.8.1"
+
 // killSwitch is the nftables ruleset applied before any tunnel exists:
 // out of the uplink only UDP to the active tunnel servers may leave, so a
 // packet either goes through a tunnel or nowhere. Every DNS query, to any
@@ -130,10 +146,11 @@ table inet reflux {
 		type filter hook output priority 0; policy accept;
 		oifname "lo" accept
 		oifname "` + uplink + `" ip daddr @endpoints meta l4proto udp accept
-		oifname "` + uplink + `" drop
+		oifname "` + uplink + `" counter drop
 	}
 	chain dns {
 		type nat hook output priority -150; policy accept;
+		ip daddr { ` + carrierDNS + ` } meta l4proto { udp, tcp } th dport 53 accept
 		ip daddr != 127.0.0.1 udp dport 53 redirect to :53
 		ip daddr != 127.0.0.1 tcp dport 53 redirect to :53
 	}
@@ -218,8 +235,12 @@ func (c *controller) up(iface string, conf awgConf) error {
 	if err := c.openEndpoint(conf.Endpoint.Addr()); err != nil {
 		return err
 	}
+	port := worldPort
+	if iface == ruIface {
+		port = ruPort
+	}
 	f := filepath.Join(c.runDir, iface+".conf")
-	if err := os.WriteFile(f, []byte(conf.SetConf), 0o600); err != nil {
+	if err := os.WriteFile(f, []byte(conf.withListenPort(port)), 0o600); err != nil {
 		return err
 	}
 	_, err := c.run("", "awg", "setconf", iface, f)
@@ -267,7 +288,13 @@ func (c *controller) failover() error {
 	if old.Endpoint.Addr() != next.Endpoint.Addr() {
 		c.closeEndpoint(old.Endpoint.Addr())
 	}
-	return c.up(worldIface, next)
+	if err := c.up(worldIface, next); err != nil {
+		return err
+	}
+	// up flushes the interface's address, and the kernel drops every route
+	// through an interface that loses its last IPv4 address: the default
+	// route has to be put back.
+	return c.ip("route", "replace", "default", "dev", worldIface, "metric", "0")
 }
 
 // setPrefixes routes the RU prefixes into the Russian tunnel, changing only
@@ -294,10 +321,16 @@ func (c *controller) setPrefixes(next []netip.Prefix, at time.Time) error {
 	return nil
 }
 
-// probe reports whether any target answers a ping through iface.
-func (c *controller) probe(iface string, targets []string) bool {
+// probe reports whether any target answers a ping through iface, or any
+// tcpTargets accepts a connection on port 443 (routed through iface).
+func (c *controller) probe(iface string, targets, tcpTargets []string) bool {
 	for _, t := range targets {
 		if _, err := c.run("", "ping", "-c", "1", "-W", "3", "-I", iface, t); err == nil {
+			return true
+		}
+	}
+	for _, t := range tcpTargets {
+		if _, err := c.run("", "nc", "-z", "-w", "3", t, "443"); err == nil {
 			return true
 		}
 	}
@@ -308,18 +341,26 @@ func (c *controller) probe(iface string, targets []string) bool {
 // never returns to an earlier config on its own: each switch breaks the
 // clients' connections, so a working tunnel is kept.
 func (c *controller) watch(stop <-chan struct{}) {
-	failures := 0
+	failures, ruFailures := 0, 0
 	c.mu.Lock()
 	c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
+	c.st.RUOK = true
 	c.mu.Unlock()
 	for {
-		worldOK := c.probe(worldIface, worldProbes)
-		ruOK := c.probe(ruIface, ruProbes)
+		worldOK := c.probe(worldIface, worldProbes, worldTCP)
 		if worldOK {
 			failures = 0
 		} else {
 			failures++
 		}
+		// One lost ping is not an outage: the Russian tunnel is reported
+		// down, like the world one is failed over, after failLimit rounds.
+		if c.probe(ruIface, ruProbes, nil) {
+			ruFailures = 0
+		} else {
+			ruFailures++
+		}
+		ruOK := ruFailures < failLimit
 		var errText string
 		if failures >= failLimit && len(c.world) > 1 {
 			if err := c.failover(); err != nil {
@@ -331,7 +372,11 @@ func (c *controller) watch(stop <-chan struct{}) {
 			c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
 			c.mu.Unlock()
 		}
+		dropped := c.dropped()
 		c.mu.Lock()
+		if dropped >= 0 {
+			c.st.Dropped = dropped
+		}
 		if c.st.RUOK != ruOK {
 			log.Printf("ru: tunnel %s", map[bool]string{true: "up", false: "down"}[ruOK])
 		}
@@ -348,6 +393,25 @@ func (c *controller) watch(stop <-chan struct{}) {
 		case <-time.After(probeEvery):
 		}
 	}
+}
+
+var droppedRe = regexp.MustCompile(`oifname "` + uplink + `" counter packets (\d+) bytes \d+ drop`)
+
+// dropped is how many packets the kill switch has stopped, or -1.
+func (c *controller) dropped() int64 {
+	out, err := c.run("", "nft", "list", "chain", "inet", "reflux", "output")
+	if err != nil {
+		return -1
+	}
+	m := droppedRe.FindStringSubmatch(out)
+	if m == nil {
+		return -1
+	}
+	n, err := strconv.ParseInt(m[1], 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 func writeStatus(path string, st status) error {
@@ -391,6 +455,7 @@ func statusText(st status, now time.Time) string {
 	yes := map[bool]string{true: "up", false: "DOWN"}
 	fmt.Fprintf(&b, "world  %-5s via %s (since %s)\n", yes[st.WorldOK], st.World, st.WorldSince.Format(time.DateTime))
 	fmt.Fprintf(&b, "russia %-5s %d prefixes (list from %s)\n", yes[st.RUOK], st.RUPrefixes, st.RUListAt.Format(time.DateOnly))
+	fmt.Fprintf(&b, "kill switch stopped %d packets\n", st.Dropped)
 	fmt.Fprintf(&b, "checked %s ago\n", now.Sub(st.Updated).Round(time.Second))
 	if st.Error != "" {
 		fmt.Fprintf(&b, "error: %s\n", st.Error)

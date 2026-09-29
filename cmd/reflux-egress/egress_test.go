@@ -127,16 +127,17 @@ func TestKillSwitchLetsOnlyTunnelServersOut(t *testing.T) {
 	ks := killSwitch()
 	for _, want := range []string{
 		`oifname "eth0" ip daddr @endpoints meta l4proto udp accept`,
-		`oifname "eth0" drop`,
+		`oifname "eth0" counter drop`,
 		`udp dport 53 redirect to :53`,
 		`tcp dport 53 redirect to :53`,
+		`ip daddr { 77.88.8.8, 77.88.8.1 } meta l4proto { udp, tcp } th dport 53 accept`,
 	} {
 		if !strings.Contains(ks, want) {
 			t.Errorf("kill switch lacks %q", want)
 		}
 	}
 	accept := strings.Index(ks, `@endpoints meta l4proto udp accept`)
-	drop := strings.Index(ks, `oifname "eth0" drop`)
+	drop := strings.Index(ks, `oifname "eth0" counter drop`)
 	if accept > drop {
 		t.Error("the uplink drop comes before the endpoint accept")
 	}
@@ -268,6 +269,13 @@ func TestWorldFailsOverAfterRepeatedFailures(t *testing.T) {
 			t.Errorf("failover never ran %q:\n%s", want, strings.Join(f.calls, "\n"))
 		}
 	}
+	// The kernel drops the default route with the interface's last
+	// address: failover must put it back after the new address is set.
+	addr := indexOf(f.calls, "ip address add 10.98.184.37/32 dev awg-world")
+	route := indexOf(f.calls, "ip route replace default dev awg-world metric 0")
+	if addr < 0 || route < addr {
+		t.Errorf("default route not restored after the address change (address %d, route %d)", addr, route)
+	}
 	// The Russian server stays open whatever happens to the world tunnel.
 	if indexOf(f.calls, "nft delete element inet reflux endpoints { 45.9.15.198 }") >= 0 {
 		t.Error("failover closed the Russian server")
@@ -338,5 +346,98 @@ func TestLoadConfigsOrdersWorldByName(t *testing.T) {
 	}
 	if ru.Name != "ru-1.conf" || len(world) != 2 || world[0].Name != "world-1.conf" || world[1].Name != "world-2.conf" {
 		t.Errorf("ru=%s world=%v", ru.Name, []string{world[0].Name, world[1].Name})
+	}
+}
+
+func TestProbeFallsBackToTCPWhenICMPIsDropped(t *testing.T) {
+	f := &fakeNet{failing: map[string]bool{"ping ": true}}
+	c := testController(t, f)
+	if !c.probe(worldIface, worldProbes, worldTCP) {
+		t.Error("world down although a TCP connection opens")
+	}
+	if indexOf(f.calls, "nc -z -w 3 1.1.1.1 443") < 0 {
+		t.Errorf("no TCP probe: %v", f.calls)
+	}
+	f.failing["nc "] = true
+	if c.probe(worldIface, worldProbes, worldTCP) {
+		t.Error("world up with neither ICMP nor TCP answering")
+	}
+}
+
+func TestDroppedReadsTheKillSwitchCounter(t *testing.T) {
+	c := &controller{run: func(stdin, name string, args ...string) (string, error) {
+		return `table inet reflux {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		oifname "lo" accept
+		oifname "eth0" ip daddr @endpoints meta l4proto udp accept
+		oifname "eth0" counter packets 42 bytes 2520 drop
+	}
+}`, nil
+	}}
+	if n := c.dropped(); n != 42 {
+		t.Errorf("dropped = %d, want 42", n)
+	}
+}
+
+func TestListenPortIsFixedAndProviderPortDropped(t *testing.T) {
+	conf := strings.Replace(sampleConf, "[Interface]\n", "[Interface]\nListenPort = 12345\n", 1)
+	c, err := parseAWG("x.conf", []byte(conf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.withListenPort(worldPort)
+	if strings.Contains(got, "12345") {
+		t.Error("the provider's ListenPort survived")
+	}
+	if !strings.HasPrefix(got, "[Interface]\nListenPort = 51822\n") {
+		t.Errorf("setconf starts %q", got[:40])
+	}
+}
+
+func TestCarrierDomainsResolveThroughRussia(t *testing.T) {
+	for _, zone := range []string{"mail.ru", "datacloudmail.ru", "yandex.ru", "yandex.net"} {
+		block := "name: \"" + zone + "\"\n\tforward-addr: 77.88.8.8\n\tforward-addr: 77.88.8.1\n"
+		if !strings.Contains(unboundConf, block) {
+			t.Errorf("%s does not go to Yandex DNS", zone)
+		}
+		if !strings.Contains(unboundConf, "domain-insecure: \""+zone+"\"\n") {
+			t.Errorf("%s needs the world tunnel for its DNSSEC proof", zone)
+		}
+	}
+	for _, a := range []string{"77.88.8.8", "77.88.8.1"} {
+		if !isRU(t, a) {
+			t.Errorf("%s would not leave through the Russian tunnel", a)
+		}
+	}
+}
+
+// isRU checks an address against the RU prefixes of a small delegated
+// sample that covers Yandex DNS (77.88.0.0/18 is Yandex's, allocated RU).
+func isRU(t *testing.T, a string) bool {
+	ps, err := parseDelegated(strings.NewReader("ripencc|RU|ipv4|77.88.0.0|16384|20060101|allocated|x\n"), "RU")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := netip.MustParseAddr(a)
+	for _, p := range ps {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCarrierDNSIsExemptBeforeTheRedirect(t *testing.T) {
+	ks := killSwitch()
+	exempt := strings.Index(ks, "th dport 53 accept")
+	redirect := strings.Index(ks, "udp dport 53 redirect")
+	if exempt < 0 || exempt > redirect {
+		t.Error("unbound's queries to the carrier resolvers would be redirected back to itself")
+	}
+	for _, a := range strings.Split(carrierDNS, ", ") {
+		if !strings.Contains(unboundConf, "forward-addr: "+a+"\n") {
+			t.Errorf("exempt %s is not a carrier resolver in unbound.conf", a)
+		}
 	}
 }

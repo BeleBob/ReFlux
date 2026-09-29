@@ -26,6 +26,8 @@ type awgConf struct {
 var quickOnly = map[string]bool{
 	"address": true, "dns": true, "mtu": true, "table": true, "saveconfig": true,
 	"preup": true, "postup": true, "predown": true, "postdown": true,
+	// The controller sets the port itself: see listenPort.
+	"listenport": true,
 }
 
 func parseAWG(name string, data []byte) (awgConf, error) {
@@ -115,4 +117,11 @@ func (c *awgConf) setAddress(value string) error {
 		}
 	}
 	return nil
+}
+
+// withListenPort returns the setconf text with the interface's UDP port
+// fixed, so the tunnels keep one NAT mapping across failovers and restarts
+// instead of a random port each time.
+func (c awgConf) withListenPort(port int) string {
+	return strings.Replace(c.SetConf, "[Interface]\n", fmt.Sprintf("[Interface]\nListenPort = %d\n", port), 1)
 }
