@@ -133,19 +133,3 @@ func transportLines(ts []ChannelTransport) string {
 	}
 	return b.String()
 }
-
-// ChannelCookies turns the app's Cookie header for the channel's Yandex
-// document into what Channel.Cookies takes (see CookieStore), keyed by the
-// document as the node's config names it.
-func ChannelCookies(ts []ChannelTransport, header string) (string, error) {
-	ts, err := CheckTransports(ts)
-	if err != nil {
-		return "", err
-	}
-	doc := TransportURL(ts, "vyandex")
-	if doc == "" {
-		return "", errors.New("вход в Яндекс нужен только каналу с документом Яндекса")
-	}
-	cookies, _, err := CookieStore(doc, header)
-	return cookies, err
-}

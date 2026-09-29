@@ -60,3 +60,4 @@ watch_stats.sh
 *.log
 openflux
 *.bak
+core.bin

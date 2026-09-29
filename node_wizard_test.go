@@ -55,7 +55,7 @@ func TestNodeWizardProtocolLines(t *testing.T) {
 
 func TestNodeWizardNeedsConnection(t *testing.T) {
 	w := newNodeWizard()
-	for _, m := range []string{"plan", "apply", "setCookies", "remove"} {
+	for _, m := range []string{"plan", "apply", "remove"} {
 		r := wizardCall(t, w, m, map[string]string{"channel": "c1"})
 		if r["ok"] != false || r["error"] != "нет подключения к серверу" {
 			t.Fatalf("%s: %v", m, r)
@@ -136,12 +136,6 @@ func TestNodeWizardShareLinkAndSignIn(t *testing.T) {
 	}
 	if r := wizardCall(t, w, "shareLink", wizardParams{DocumentURL: doc, Key: key}); r["ok"] != false {
 		t.Fatalf("no host: %v", r)
-	}
-	if r := wizardCall(t, w, "signedIn", wizardParams{Cookies: "yandexuid=1; Session_id=s"}); r["signedIn"] != true {
-		t.Fatalf("signed in: %v", r)
-	}
-	if r := wizardCall(t, w, "signedIn", wizardParams{Cookies: "yandexuid=1"}); r["signedIn"] != false {
-		t.Fatalf("anonymous: %v", r)
 	}
 }
 

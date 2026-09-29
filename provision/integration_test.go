@@ -74,7 +74,7 @@ func TestInstallOnVDS(t *testing.T) {
 		good = Pinned()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	root := Target{Host: host, Port: port, User: "root", Password: os.Getenv("OPENFLUX_TEST_ROOT_PASSWORD")}
@@ -134,7 +134,7 @@ func TestInstallOnVDS(t *testing.T) {
 		{Type: "mailru", URL: "https://cloud.mail.ru/public/AbCd/EfGhIjKlM"},
 		{Type: "cupsonline", URL: "WyJyb29tLTEiLCJyb29tLTIiXQ"},
 	}
-	plan, err := c.Plan(Channel{ID: id, Transports: volga, AutoUpdate: true}, true)
+	plan, err := c.Plan(Channel{ID: id, Transports: volga, AutoUpdate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +147,7 @@ func TestInstallOnVDS(t *testing.T) {
 		t.Fatalf("plan actions: %s", actions)
 	}
 	key, _ := NewKey()
-	cookies, signedIn, err := CookieStore(os.Getenv("OPENFLUX_TEST_DOC"), "Session_id=test-login-value; spravka=pass")
-	if err != nil || !signedIn {
-		t.Fatalf("CookieStore: %v %v", signedIn, err)
-	}
-	ch := Channel{ID: id, Transports: volga, Key: key, Port: plan.Port, Cookies: cookies, AutoUpdate: true}
+	ch := Channel{ID: id, Transports: volga, Key: key, Port: plan.Port, AutoUpdate: true}
 
 	if err := c.Apply(ch, "wrong-password"); !errors.Is(err, ErrSudoPassword) {
 		t.Fatalf("wrong sudo password: got %v", err)
@@ -174,30 +170,14 @@ func TestInstallOnVDS(t *testing.T) {
 	if out, _, _ := c.run("ps -eo args", nil); strings.Contains(string(out), key) {
 		t.Fatal("channel key visible in the process list")
 	}
-	if out, _, _ := c.run("stat -c '%a %U' /var/lib/openflux-node/"+id+"/cookies.json", nil); strings.TrimSpace(string(out)) != "600 openflux-node" {
-		t.Fatalf("cookies.json: %q", out)
-	}
-	if out, _, _ := c.run("sudo -S -p '' cat /var/lib/openflux-node/"+id+"/cookies.json", []byte(userPass+"\n")); !strings.Contains(string(out), "test-login-value") {
-		t.Fatalf("cookies.json content: %q", out)
-	}
-	if out, _, _ := c.run("ps -eo args; sudo -S -p '' journalctl -u openflux-node@"+id+" --no-pager", []byte(userPass+"\n")); strings.Contains(string(out), "test-login-value") {
-		t.Fatal("the Yandex login leaked into ps or the node's log")
-	}
-	fresh, _, _ := CookieStore(os.Getenv("OPENFLUX_TEST_DOC"), "Session_id=renewed-login")
-	if err := c.SetCookies(id, fresh, userPass); err != nil {
-		t.Fatal(err)
-	}
-	if out, _, _ := c.run("sudo -S -p '' cat /var/lib/openflux-node/"+id+"/cookies.json", []byte(userPass+"\n")); !strings.Contains(string(out), "renewed-login") {
-		t.Fatalf("set-cookies did not replace the login: %q", out)
-	}
-	if _, err := c.Plan(Channel{ID: id, Transports: volga}, true); err == nil {
+	if _, err := c.Plan(Channel{ID: id, Transports: volga}); err == nil {
 		t.Fatal("planning an existing channel must fail")
 	}
-	again, err := c.Plan(Channel{ID: "other", Port: plan.Port}, false)
+	again, err := c.Plan(Channel{ID: "other", Port: plan.Port})
 	if err == nil {
 		t.Fatalf("the channel's port must count as taken: %+v", again)
 	}
-	next, err := c.Plan(Channel{ID: "other"}, false)
+	next, err := c.Plan(Channel{ID: "other"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +245,7 @@ func TestInstallOnVDS(t *testing.T) {
 		t.Fatalf("autoupdate on: %s", out)
 	}
 	// An app with an older pinned script must not take the server back.
-	older, err := c.Plan(Channel{ID: "other"}, false)
+	older, err := c.Plan(Channel{ID: "other"})
 	if err != nil || older.Core != "node-v1.1.0" {
 		t.Fatalf("plan after an update: %+v %v", older, err)
 	}
@@ -275,7 +255,7 @@ func TestInstallOnVDS(t *testing.T) {
 	if err := c.FetchScript(Script{URL: base + "/other-install.sh", SHA256: ScriptHash(otherRepo)}); err != nil {
 		t.Fatal(err)
 	}
-	switched, err := c.Plan(Channel{ID: "other"}, false)
+	switched, err := c.Plan(Channel{ID: "other"})
 	if err != nil || switched.Core != "node-v1.0.1" || !strings.Contains(strings.Join(switched.Actions, "\n"), "someone/OpenFlux") {
 		t.Fatalf("plan from another repository: %+v %v", switched, err)
 	}
@@ -289,6 +269,48 @@ func TestInstallOnVDS(t *testing.T) {
 	}
 	if out, _, _ := c.run("test -e /etc/systemd/system/openflux-node-update.timer && echo left", nil); strings.TrimSpace(string(out)) != "" {
 		t.Fatal("updater left after the last channel was removed")
+	}
+
+	// By hand on the server: list, remove one channel by name, uninstall.
+	if err := c.FetchScript(good); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "second"} {
+		p, err := c.Plan(Channel{ID: name, AutoUpdate: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, _ := NewKey()
+		if err := c.Apply(Channel{ID: name, Key: k, Port: p.Port, AutoUpdate: true}, userPass); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// systemd sets the mode (StateDirectoryMode); without StateDirectory= apply's 0750 stays.
+	if out := sudo("stat -c '%U' /var/lib/openflux-node/first"); out != "openflux-node" {
+		t.Fatalf("state directory: %q", out)
+	}
+	if out := sudo("sh /opt/openflux-node/node-install.sh list"); !strings.Contains(out, `"channel":"first","state":"active"`) ||
+		!strings.Contains(out, `"channel":"second","state":"active"`) || !strings.Contains(out, `"autoupdate":true`) {
+		t.Fatalf("list: %s", out)
+	}
+	if out := sudo("sh /opt/openflux-node/node-install.sh remove first"); !strings.Contains(out, `"ok":true`) {
+		t.Fatalf("remove by name: %s", out)
+	}
+	if out := sudo(`sh -c 'test -e /etc/openflux-node/first && echo left; systemctl is-active openflux-node@first; systemctl is-active openflux-node@second'`); out != "inactive\nactive" {
+		t.Fatalf("after remove first: %q", out)
+	}
+	if out := sudo("sh /opt/openflux-node/node-install.sh remove nosuch"); !strings.Contains(out, `"ok":false`) {
+		t.Fatalf("remove of a missing channel: %s", out)
+	}
+	if out := sudo("sh /opt/openflux-node/node-install.sh uninstall"); !strings.Contains(out, `"removed":["second"]`) {
+		t.Fatalf("uninstall: %s", out)
+	}
+	// sudo runs one command: the check is a script for sh.
+	left := sudo(`sh -c 'for p in /opt/openflux-node /etc/openflux-node /var/lib/openflux-node /etc/systemd/system/openflux-node@.service ` +
+		`/etc/systemd/system/openflux-node-update.timer /etc/systemd/system/openflux-node-update.service; do test -e $p && echo $p; done; ` +
+		`id openflux-node >/dev/null 2>&1 && echo user; systemctl is-active openflux-node@second; ps -eo args | grep -c "[o]penflux --config"'`)
+	if left != "inactive\n0" {
+		t.Fatalf("left after uninstall: %q", left)
 	}
 }
 
