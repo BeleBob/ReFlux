@@ -57,8 +57,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   (nftables, only UDP to active AWG endpoints leaves `eth0`, DNS redirected to
   local unbound), `awg-ru` + `awg-world` on the host's amneziawg kernel module,
   RU prefixes (RIPE delegated, baked in image, refreshed daily) routed to
-  `awg-ru`, world failover in file order without automatic return. Never exits
-  on errors: nodes share its netns (restart ⇒ `reflux restart`).
+  `awg-ru` (or, with `egress/ru-direct`, out of `eth0` with the kill switch
+  opening only nft set `ru4`), world failover in file order without automatic
+  return. Never exits on errors: nodes share its netns; after an egress
+  restart `reflux heal` (cron) recreates the stranded nodes.
 - `deploy/reflux/egress/Dockerfile` (build from repo root),
   `deploy/reflux/host/reflux-egress-route.service` (host `ip rule`, tied to awg0),
   `docs/reflux/SERVER.ru.md` (operator guide).
