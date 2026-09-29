@@ -44,6 +44,29 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 - Сохранять совместимость с upstream: своё — предпочтительно в новых файлах и
   каталогах, а не правками upstream-файлов.
 
+## ReFlux components (all new files; no upstream file is changed)
+
+- `cmd/reflux` — host CLI (`add/list/show/revoke/apply/update/restart/status/logs`).
+  Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
+  `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
+  `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**
+  (`.conf` without `[Transport]` sections) so classic and Session apps both
+  connect; `network_mode: service:egress`, no ports, proxy env blanked.
+  `apply` refuses while `hostRuleProblem` finds the egress `ip rule` missing.
+- `cmd/reflux-egress` — controller inside the egress container: kill switch
+  (nftables, only UDP to active AWG endpoints leaves `eth0`, DNS redirected to
+  local unbound), `awg-ru` + `awg-world` on the host's amneziawg kernel module,
+  RU prefixes (RIPE delegated, baked in image, refreshed daily) routed to
+  `awg-ru`, world failover in file order without automatic return. Never exits
+  on errors: nodes share its netns (restart ⇒ `reflux restart`).
+- `deploy/reflux/egress/Dockerfile` (build from repo root),
+  `deploy/reflux/host/reflux-egress-route.service` (host `ip rule`, tied to awg0),
+  `docs/reflux/SERVER.ru.md` (operator guide).
+- Workflows: `reflux-images.yml` (reflux-node + reflux-egress → GHCR),
+  `reflux-release.yml` (`reflux-v*` tag → reflux binaries).
+- Local image builds on the dev machine need `docker build --network host`
+  (its DNS blocks the Alpine CDN inside containers).
+
 ## Commands
 
 The CI gate (`.github/workflows/ci.yml`), run from the repo root:
