@@ -2,6 +2,12 @@
 
 **English** | [Русский](README.ru.md)
 
+> **ReFlux** is a modified fork of [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
+> by p1neappleXpress, changed since September 2026 and distributed under the same
+> GNU GPL v3.0 or later. The fork adds tooling to deploy exit nodes with Docker
+> and to manage access for several clients. The documentation below is the
+> upstream OpenFlux documentation.
+
 Network stack research tool. IPv4 TCP/UDP tunnel with pluggable transports,
 batched+zstd codec, and two exit-node backends (L3 raw forward / L4 gVisor proxy).
 
