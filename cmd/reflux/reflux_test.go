@@ -435,3 +435,19 @@ func TestHealIsQuietWhenNothingIsStranded(t *testing.T) {
 		t.Errorf("heal: err=%v out=%q calls=%q", err, out.String(), calls)
 	}
 }
+
+func TestUpdatePullsBothImagesEvenWithoutClients(t *testing.T) {
+	t.Setenv("REFLUX_HOME", t.TempDir())
+	t.Setenv("REFLUX_NODE_IMAGE", "node:test")
+	t.Setenv("REFLUX_EGRESS_IMAGE", "egress:test")
+	calls := fakeDocker(t, "")
+	if err := run([]string{"update"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(*calls, "\n")
+	for _, want := range []string{"pull --quiet node:test", "pull --quiet egress:test"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("update did not run %q:\n%s", want, joined)
+		}
+	}
+}

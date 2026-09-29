@@ -257,7 +257,11 @@ func superviseResolver(stop <-chan struct{}) {
 const unboundConf = `server:
 	interface: 127.0.0.1
 	port: 53
-	access-control: 127.0.0.0/8 allow
+	# Queries reach it through the DNS redirect with their original source:
+	# the tunnel address, not 127.0.0.1. A phone's VPN sends its queries to
+	# 1.1.1.1:53 and got REFUSED with 127.0.0.0/8 only. It listens on
+	# 127.0.0.1, so only processes in this namespace can reach it anyway.
+	access-control: 0.0.0.0/0 allow
 	do-ip6: no
 	username: ""
 	chroot: ""
