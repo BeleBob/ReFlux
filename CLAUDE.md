@@ -36,7 +36,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 - Небольшие логичные коммиты с понятными сообщениями.
 - Комментарии в коде и сообщения коммитов — только на английском.
 - После изменений Go-кода проверять, что проходит `go build ./...`.
-- Не менять логику транспортов и туннеля (`transport/`, `tunnel/`) без обсуждения.
+- Баги в коде OpenFlux (`transport/`, `tunnel/`, корень) можно исправлять по
+  своему решению (владелец разрешил); прочие изменения логики транспортов и
+  туннеля — только после обсуждения. Такие правки — отдельными коммитами с
+  регрессионным тестом, чтобы их можно было предложить в upstream.
 - Никаких секретов (ключей, токенов, URL документов, cookies) в репозитории —
   только через `.env` (в `.gitignore`) и `.env.example`.
 - Не трогать LICENSE, COPYRIGHT, NOTICE и копирайты в коде. В README должно
@@ -66,6 +69,13 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `docs/reflux/SERVER.ru.md` (operator guide).
 - Workflows: `reflux-images.yml` (reflux-node + reflux-egress → GHCR),
   `reflux-release.yml` (`reflux-v*` tag → reflux binaries).
+- Mail.ru carrier = OnlyOffice co-authoring over Socket.IO. When a second
+  editor joins, the server locks the document for the first one
+  (`connectState` with `waitAuth: true`); it must answer `unLockDocument`
+  (`unlock: true`) or it is dropped after 30 s (`disconnectReason` 4007) —
+  without that, peers kept knocking each other off. `Stop()` leaves with the
+  editor's `close` message; exits and SOCKS clients stop transports on SIGTERM
+  (`shutdown.go`). `-dd` logs unhandled server messages.
 - Local image builds on the dev machine need `docker build --network host`
   (its DNS blocks the Alpine CDN inside containers).
 
