@@ -124,7 +124,7 @@ func TestDiffPrefixes(t *testing.T) {
 }
 
 func TestKillSwitchLetsOnlyTunnelServersOut(t *testing.T) {
-	ks := killSwitch()
+	ks := killSwitch(false)
 	for _, want := range []string{
 		`oifname "eth0" ip daddr @endpoints meta l4proto udp accept`,
 		`oifname "eth0" counter drop`,
@@ -340,12 +340,23 @@ func TestLoadConfigsOrdersWorldByName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ru, world, err := loadConfigs(dir)
+	ru, direct, world, err := loadConfigs(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ru.Name != "ru-1.conf" || len(world) != 2 || world[0].Name != "world-1.conf" || world[1].Name != "world-2.conf" {
-		t.Errorf("ru=%s world=%v", ru.Name, []string{world[0].Name, world[1].Name})
+	if direct || ru.Name != "ru-1.conf" || len(world) != 2 || world[0].Name != "world-1.conf" || world[1].Name != "world-2.conf" {
+		t.Errorf("ru=%s direct=%v world=%v", ru.Name, direct, []string{world[0].Name, world[1].Name})
+	}
+	// ru-direct wins over a Russian config, and a Russian config is then
+	// not needed at all.
+	os.WriteFile(filepath.Join(dir, directFile), nil, 0o600)
+	os.Remove(filepath.Join(dir, "ru-1.conf"))
+	if _, direct, _, err := loadConfigs(dir); err != nil || !direct {
+		t.Errorf("with %s: direct=%v err=%v", directFile, direct, err)
+	}
+	os.Remove(filepath.Join(dir, directFile))
+	if _, _, _, err := loadConfigs(dir); err == nil {
+		t.Error("no ru-*.conf and no ru-direct accepted")
 	}
 }
 
@@ -429,7 +440,7 @@ func isRU(t *testing.T, a string) bool {
 }
 
 func TestCarrierDNSIsExemptBeforeTheRedirect(t *testing.T) {
-	ks := killSwitch()
+	ks := killSwitch(false)
 	exempt := strings.Index(ks, "th dport 53 accept")
 	redirect := strings.Index(ks, "udp dport 53 redirect")
 	if exempt < 0 || exempt > redirect {
@@ -439,5 +450,74 @@ func TestCarrierDNSIsExemptBeforeTheRedirect(t *testing.T) {
 		if !strings.Contains(unboundConf, "forward-addr: "+a+"\n") {
 			t.Errorf("exempt %s is not a carrier resolver in unbound.conf", a)
 		}
+	}
+}
+
+func TestKillSwitchOpensRussiaOnlyInDirectMode(t *testing.T) {
+	if strings.Contains(killSwitch(false), "@ru4 accept") {
+		t.Error("tunnel mode lets Russian addresses out of the uplink")
+	}
+	ks := killSwitch(true)
+	ru := strings.Index(ks, `oifname "eth0" ip daddr @ru4 accept`)
+	drop := strings.Index(ks, `oifname "eth0" counter drop`)
+	if ru < 0 || ru > drop {
+		t.Errorf("direct mode: Russia not let out before the drop:\n%s", ks)
+	}
+}
+
+func TestDirectModeSkipsTheRussianTunnel(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n"}
+	c := testController(t, f)
+	c.ruDirect, c.ru = true, awgConf{}
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(f.calls, "ip link add awg-ru") >= 0 {
+		t.Error("awg-ru created in direct mode")
+	}
+	if !strings.Contains(f.stdin[0], "@ru4 accept") {
+		t.Error("kill switch applied without the Russian set")
+	}
+	var ps []netip.Prefix
+	for i := 0; i < minRUPrefixes; i++ {
+		ps = append(ps, netip.PrefixFrom(addr(uint32(i+1)<<8), 24))
+	}
+	f.calls, f.stdin = nil, nil
+	if err := c.setPrefixes(ps, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	set := indexOf(f.calls, "nft -f -")
+	routes := indexOf(f.calls, "ip -batch -")
+	if set < 0 || routes < 0 || set > routes {
+		t.Fatalf("the kill switch must open before routing out: %v", f.calls)
+	}
+	if !strings.HasPrefix(f.stdin[set], "add element inet reflux ru4 { 0.0.1.0/24, ") {
+		t.Errorf("set batch starts %q", f.stdin[set][:60])
+	}
+	if !strings.HasPrefix(f.stdin[routes], "route replace 0.0.1.0/24 via 172.31.250.1 dev eth0\n") {
+		t.Errorf("route batch starts %q", f.stdin[routes][:60])
+	}
+	// Dropping a prefix: routes go first, the set closes after.
+	f.calls, f.stdin = nil, nil
+	if err := c.setPrefixes(ps[1:], time.Now()); err == nil {
+		t.Fatal("list below the minimum accepted")
+	}
+	more := append(append([]netip.Prefix{}, ps[1:]...), netip.MustParsePrefix("100.0.0.0/24"), netip.MustParsePrefix("100.0.1.0/24"))
+	if err := c.setPrefixes(more, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	last := len(f.calls) - 1
+	if f.calls[last] != "nft -f -" || !strings.HasPrefix(f.stdin[last], "delete element inet reflux ru4 { 0.0.1.0/24 }") {
+		t.Errorf("last step %q %q", f.calls[last], f.stdin[last])
+	}
+}
+
+func TestSetBatchSplitsLongLists(t *testing.T) {
+	var ps []netip.Prefix
+	for i := 0; i < 1201; i++ {
+		ps = append(ps, netip.PrefixFrom(addr(uint32(i)<<8), 24))
+	}
+	if n := strings.Count(setBatch("add", "ru4", ps), "\n"); n != 3 {
+		t.Errorf("%d lines, want 3", n)
 	}
 }

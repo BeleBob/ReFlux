@@ -85,10 +85,14 @@ func run() {
 	stop := make(chan struct{})
 
 	for {
-		ru, world, err := loadConfigs(configDir)
+		ru, direct, world, err := loadConfigs(configDir)
 		if err == nil {
-			c.ru, c.world = ru, world
-			log.Printf("configs: russia %s, world %d in order (%s first)", ru.Name, len(world), world[0].Name)
+			c.ru, c.ruDirect, c.world = ru, direct, world
+			russia := ru.Name
+			if direct {
+				russia = "direct (" + directFile + ")"
+			}
+			log.Printf("configs: russia %s, world %d in order (%s first)", russia, len(world), world[0].Name)
 			break
 		}
 		fail(c, "configs", err)
@@ -100,7 +104,11 @@ func run() {
 		}
 		fail(c, "setup", err)
 	}
-	log.Printf("up: russia via %s, world via %s", c.ru.Name, c.world[c.cur].Name)
+	russia := c.ru.Name
+	if c.ruDirect {
+		russia = "the uplink (direct)"
+	}
+	log.Printf("up: russia via %s, world via %s", russia, c.world[c.cur].Name)
 
 	loadPrefixes(c)
 	// Only now: a resolver started before the tunnels finds its upstreams
@@ -281,8 +289,9 @@ const unboundConf = `server:
 	hide-identity: yes
 	hide-version: yes
 
-# The carriers' own domains resolve through the Russian tunnel (plain DNS
-# to Yandex inside it; its DNS-over-TLS drops the handshake), so a carrier
+# The carriers' own domains resolve by the Russian route (plain DNS to
+# Yandex, inside the Russian tunnel unless Russia is direct; its
+# DNS-over-TLS drops the handshake), so a carrier
 # document keeps working while the world tunnel is down. Nothing is
 # disclosed: the carrier connection itself goes there anyway.
 forward-zone:
