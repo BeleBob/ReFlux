@@ -65,6 +65,10 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 // docWriteTimeout bounds one WebSocket write to the document.
 const docWriteTimeout = 20 * time.Second
 
+// unlockDocument releases the document's auth lock (see handleMessage),
+// with the fields the editor sends (sdkjs DocsCoApi.unLockDocument).
+const unlockDocument = `42["message",{"type":"unLockDocument","isSave":false,"unlock":true,"deleteIndex":null,"releaseLocks":false}]`
+
 type MailruDocsTransport struct {
 	*transport.BaseTransport
 
@@ -388,6 +392,27 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
+	// When a second editor joins, the co-authoring server locks the
+	// document in the name of the first one and tells it so (connectState
+	// with waitAuth); the newcomer gets "waitAuth" and is let in only once
+	// the first one releases the lock, as the editor does after switching
+	// to co-editing. Nobody did: after 30 s the server dropped the lock
+	// holder (disconnectReason 4007) to let the newcomer in, the dropped
+	// side rejoined, and the peers kept knocking each other off the
+	// document every ~30 s - a peer that rejoined could not stay.
+	if strings.Contains(text, `"type":"connectState"`) && strings.Contains(text, `"waitAuth":true`) {
+		utils.Debugf("[M-DOCS] a peer is waiting for the document lock: releasing it")
+		if session != nil && session.Conn != nil {
+			session.safeWrite(websocket.TextMessage, []byte(unlockDocument))
+		}
+		return
+	}
+
+	if strings.Contains(text, `"type":"disconnectReason"`) {
+		utils.Infof("[M-DOCS] the document server dropped this connection: %s", text)
+		return
+	}
+
 	if strings.Contains(text, "cursor") {
 		base64Str := t.extractBase64String(text)
 		if base64Str == "" {
@@ -402,7 +427,16 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 		t.RecordReceive(len(decoded))
 		t.CallReceive(decoded)
+		return
 	}
+
+	// Everything else the co-authoring server sends (participants, locks,
+	// changes) is not needed for the tunnel, but it explains the server's
+	// behaviour when something goes wrong.
+	if len(text) > 300 {
+		text = text[:300] + "..."
+	}
+	utils.Debugf("[M-DOCS] unhandled message: %s", text)
 }
 
 func (t *MailruDocsTransport) extractBase64String(response string) string {
