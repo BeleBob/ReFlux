@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"openflux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 )
 
 // clientSession is the running client Session's manager and its

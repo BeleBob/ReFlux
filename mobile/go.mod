@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	golang.org/x/net v0.59.0
-	openflux v0.0.0
+	github.com/p1neappleXpress/OpenFlux v0.0.0
 )
 
 require (
@@ -46,6 +46,6 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260530041128-23ef90c42be7 // indirect
 )
 
-replace openflux => ..
+replace github.com/p1neappleXpress/OpenFlux => ..
 
 tool golang.org/x/mobile/cmd/gobind

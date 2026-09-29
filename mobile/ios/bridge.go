@@ -32,9 +32,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 	mobile "openflux-mobile"
-	"openflux/transport"
-	"openflux/utils"
 )
 
 func main() {}

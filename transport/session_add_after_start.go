@@ -3,7 +3,7 @@ package transport
 import (
 	"fmt"
 
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // AddTransportPostStart is the runtime version of AddTransport: it is safe

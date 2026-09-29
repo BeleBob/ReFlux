@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"openflux/provision"
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/provision"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // The link an exit prints must decode to what a client needs: the exit's

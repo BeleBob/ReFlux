@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
-	"openflux/socks5"
-	"openflux/transport"
-	"openflux/tunnel"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/socks5"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/tunnel"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 var proxy = proxyState{}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport/control"
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
 )
 
 // Compatibility between the layerings, codecs and KDF contexts that peers

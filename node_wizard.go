@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"openflux/provision"
-	"openflux/transport/cupsonline"
-	"openflux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/provision"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
 type wizardRequest struct {

@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"openflux/transport/control"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // Session is one logical session between a client and an exit node.

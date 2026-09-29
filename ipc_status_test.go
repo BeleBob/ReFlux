@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport"
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 type fixedStats struct{ in, out uint64 }

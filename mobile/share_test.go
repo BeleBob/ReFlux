@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // Phone-as-exit to phone-as-client: the exit's link, decoded and turned

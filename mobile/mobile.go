@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"openflux/transport"
-	"openflux/transport/cupsonline"
-	"openflux/transport/mailru"
-	"openflux/transport/oneme"
-	"openflux/transport/yandex"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
+	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
+	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 var client = packetClient{}

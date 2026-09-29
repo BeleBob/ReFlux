@@ -1,10 +1,10 @@
 package main
 
 import (
-	"openflux/transport"
-	"openflux/transport/ipc"
-	"openflux/transport/manager"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // coreIPCHandler is the app-facing side of the IPC bridge.

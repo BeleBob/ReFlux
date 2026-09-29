@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"openflux/share"
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/share"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // ChannelTransport is one of a channel's carriers besides direct, which

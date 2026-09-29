@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"openflux/provision"
-	"openflux/share"
-	"openflux/transport"
-	"openflux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/provision"
+	"github.com/p1neappleXpress/OpenFlux/share"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
 func wizardCall(t *testing.T, w *nodeWizard, method string, params interface{}) map[string]interface{} {

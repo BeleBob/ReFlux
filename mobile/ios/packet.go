@@ -22,9 +22,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/p1neappleXpress/OpenFlux/network"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 	mobile "openflux-mobile"
-	"openflux/network"
-	"openflux/utils"
 )
 
 // Packet-tunnel (NEPacketTunnelProvider) mode: pure L3 forwarding.

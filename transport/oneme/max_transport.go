@@ -1,8 +1,8 @@
 package oneme
 
 import (
-	"openflux/transport"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 type OneMeTransport struct {

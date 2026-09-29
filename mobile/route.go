@@ -3,7 +3,7 @@ package mobile
 import (
 	"sync"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // route tracks which carrier the running connection uses, for the UI.
