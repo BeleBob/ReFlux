@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"openflux/provision"
 	"openflux/share"
 )
 
@@ -86,8 +87,11 @@ func TestLinkCommandsAnswerLikeShare(t *testing.T) {
 		t.Fatalf("--parse-link on garbage: exit %d %s", code, out.String())
 	}
 
-	link, err := nodeShareLink("node", "https://docs.yandex.ru/edit/d/AbC", "a shared secret of 32 characters", "203.0.113.7", 9443)
-	want := share.Make(share.NodeConfig("node", "https://docs.yandex.ru/edit/d/AbC", "a shared secret of 32 characters", "203.0.113.7:9443"))
+	// The wizard's link for a Yandex-document channel is share.NodeConfig's.
+	doc := "https://docs.yandex.ru/edit/d/AbCdEfGhIjKlMnOpQrStUv"
+	link, err := provision.ShareLink("node", "a shared secret of 32 characters", "203.0.113.7", 9443,
+		[]provision.ChannelTransport{{Type: "vyandex", URL: doc}})
+	want := share.Make(share.NodeConfig("node", doc, "a shared secret of 32 characters", "203.0.113.7:9443"))
 	if err != nil || link != want.Link {
 		t.Fatalf("wizard link %q (%v), share.Make %q", link, err, want.Link)
 	}

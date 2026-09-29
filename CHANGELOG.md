@@ -3,6 +3,22 @@
 All notable changes to the OpenFlux core. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- The node wizard (`--node-wizard`, `mobile.Node*`) lets a new channel use
+  any mix of a Yandex document, a Mail.ru public document and cups.online
+  rooms besides direct (`provision.ChannelTransport`); the rooms are created
+  by the app (`cupsonline.CreateRoomList`) so the node keeps them, and its
+  link, across restarts. `provision.ShareLink` builds the link from the same
+  priorities and encryption context `node-install.sh` writes to node.conf.
+- `node-install.sh update` and the optional `openflux-node-update.timer`:
+  the node moves itself to the newest `node-v*` release, verified against
+  that release's `node-install.sh` and `SHA256SUMS`, and rolls back if a
+  channel does not stay up. An app with an older pinned script no longer
+  downgrades a server the updater has moved on.
+
 ## [0.2.0] - 2026-09-28
 
 Every client now behaves alike: peers of different builds and modes find
