@@ -1,8 +1,10 @@
 name: ReFlux images
 
-# Builds the exit-node image from the upstream Dockerfile (unchanged) and
-# publishes it to GHCR as ghcr.io/<owner>/reflux-node. Pull requests only
-# build it, so a broken Dockerfile is caught before merge.
+# Builds the ReFlux images and publishes them to GHCR as
+# ghcr.io/<owner>/reflux-<name>:
+#   node    the upstream Dockerfile, unchanged: the OpenFlux exit node
+#   egress  deploy/reflux/egress: AmneziaWG tunnels, kill switch, DNS
+# Pull requests only build and smoke-test them.
 #
 # Tags: "main" and "sha-<commit>" for pushes to main; "<version>" and
 # "latest" for a reflux-v<version> git tag.
@@ -22,8 +24,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  node:
+  image:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: node
+            file: Dockerfile
+            description: OpenFlux exit node for ReFlux (based on OpenFlux)
+            # The binary must be in place and start inside the image.
+            smoke: |
+              docker run --rm --entrypoint openflux "$IMAGE" --help 2>&1 | grep -q '^USAGE'
+          - name: egress
+            file: deploy/reflux/egress/Dockerfile
+            description: ReFlux egress (AmneziaWG tunnels, kill switch, DNS over TLS)
+            # Tools present, the RU list baked in, the resolver config valid.
+            smoke: |
+              docker run --rm --entrypoint sh "$IMAGE" -ec '
+                awg --version; nft --version; ip -V
+                test "$(wc -l < /usr/share/reflux-egress/ru.cidr)" -gt 3000
+                test -s /usr/share/dnssec-root/trusted-key.key
+                rc=0; reflux-egress bogus || rc=$?; test "$rc" -eq 2'
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +54,7 @@ jobs:
       - name: Image name
         id: image
         # GHCR needs a lowercase repository path.
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reflux-node" >> "$GITHUB_OUTPUT"
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reflux-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/metadata-action@v5
         id: meta
@@ -44,26 +66,25 @@ jobs:
             type=match,pattern=reflux-v(.*),group=1
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/reflux-v') }}
           labels: |
-            org.opencontainers.image.title=reflux-node
-            org.opencontainers.image.description=OpenFlux exit node for ReFlux (based on OpenFlux)
+            org.opencontainers.image.title=reflux-${{ matrix.name }}
+            org.opencontainers.image.description=${{ matrix.description }}
             org.opencontainers.image.licenses=GPL-3.0-or-later
 
       - name: Build
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64
           load: true
-          tags: reflux-node:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: reflux-${{ matrix.name }}:ci
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       - name: Smoke test
-        # The binary must be in place and start inside the image.
-        run: |
-          docker run --rm --entrypoint openflux reflux-node:ci --help 2>&1 | grep -q '^USAGE'
-          docker run --rm --entrypoint sh reflux-node:ci -c 'test -x /usr/local/bin/openflux'
+        env:
+          IMAGE: reflux-${{ matrix.name }}:ci
+        run: ${{ matrix.smoke }}
 
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
@@ -77,9 +98,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=${{ matrix.name }}

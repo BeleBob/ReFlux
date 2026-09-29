@@ -1,0 +1,33 @@
+# ReFlux: send the egress container's tunnels out of the plain uplink.
+#
+# On a host whose own traffic goes through a full-tunnel VPN (awg0 here,
+# wg-quick style: "not fwmark ... lookup 51820"), forwarded traffic from
+# Docker networks would follow that VPN too. This rule looks the egress
+# subnet up in the main table first, so the egress reaches its AmneziaWG
+# servers directly; everything the exit nodes send is inside those tunnels.
+#
+# A rule added without a priority lands in front of the lowest existing
+# one, so awg0 must add its rules first, and any restart of awg0 must
+# re-add this one: After= and PartOf= below. `reflux apply` refuses to
+# start the egress while this rule is missing or not in front.
+#
+# Install (as root):
+#   cp reflux-egress-route.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now reflux-egress-route
+# If the host VPN unit is not awg0.service, change the three mentions.
+
+[Unit]
+Description=ReFlux: route the egress subnet around the host VPN
+After=awg0.service
+PartOf=awg0.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/ip rule del from 172.31.250.0/24 lookup main priority 100
+ExecStart=/usr/sbin/ip rule add from 172.31.250.0/24 lookup main priority 100
+ExecStop=/usr/sbin/ip rule del from 172.31.250.0/24 lookup main priority 100
+
+[Install]
+WantedBy=multi-user.target awg0.service
