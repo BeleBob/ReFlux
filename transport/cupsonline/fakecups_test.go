@@ -602,9 +602,12 @@ func TestClientRetriesRoomItCouldNotEnterAtStart(t *testing.T) {
 		}
 	}
 	expectSet(t, client, want)
-	if exit.wss[1].stats.packetsSent.Load() == before {
-		t.Fatal("the late room carried no traffic")
-	}
+	// The writer counts a batch only after its last chunk is out, so the
+	// client can hold the packets before the count moves: wait for it
+	// instead of reading it once (that read failed now and then in CI).
+	waitFor(t, 2*time.Second, "the late room to carry traffic", func() bool {
+		return exit.wss[1].stats.packetsSent.Load() > before
+	})
 }
 
 func TestExitKeepsSavedRoomsThroughNetworkTrouble(t *testing.T) {
