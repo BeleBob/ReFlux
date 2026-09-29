@@ -1020,7 +1020,7 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 		}
 	}
 
-	select {}
+	stopOnSignal(trans, ex.Stop)
 }
 
 func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr string, exitMode tunnel.ExitMode) {
@@ -1041,7 +1041,8 @@ func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr stri
 			utils.SafeGo("http-proxy", func() { _ = tunnel.ServeHTTPProxy(ln, tun.DialTCP) })
 		}
 		socks5Server := socks5.NewSOCKS5Server(socksAddr, tun)
-		log.Fatal(socks5Server.Start())
+		utils.SafeGo("socks5", func() { log.Fatal(socks5Server.Start()) })
+		stopOnSignal(trans)
 	default:
 		log.Fatalf("--inbound: unknown value %q (want tun|socks5)", inbound)
 	}

@@ -123,6 +123,37 @@ func (t *MailruDocsTransport) Start() error {
 	return nil
 }
 
+// Stop leaves the document before closing the connection. A participant
+// that just disappears (the process exits, the socket closes without a
+// word) keeps its place on Mail.ru's co-authoring server for minutes, and
+// during that time the server closes every new connection to the document
+// right after the WebSocket handshake: a restarted exit could not rejoin,
+// so its clients stayed cut off for 3.5 minutes to over 10.
+func (t *MailruDocsTransport) Stop() error {
+	err := t.BaseTransport.Stop()
+	t.Mu.Lock()
+	session := t.session
+	t.Mu.Unlock()
+	if session != nil && session.Conn != nil {
+		session.leave()
+	}
+	return err
+}
+
+// leave says goodbye the way the editor does when its tab closes: the
+// co-authoring "close" message (the server drops the participant at once;
+// a dropped socket alone leaves it listed for minutes, in case it comes
+// back), a Socket.IO disconnect, then a normal WebSocket close.
+func (s *DocSession) leave() {
+	_ = s.safeWrite(websocket.TextMessage, []byte(`42["message",{"type":"close"}]`))
+	_ = s.safeWrite(websocket.TextMessage, []byte("41"))
+	s.writeMu.Lock()
+	_ = s.Conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(2*time.Second))
+	s.writeMu.Unlock()
+	_ = s.Conn.Close()
+}
+
 func (t *MailruDocsTransport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
