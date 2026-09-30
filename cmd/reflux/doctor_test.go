@@ -67,7 +67,7 @@ func fakeHost(t *testing.T, st hostState) Store {
 	}
 	egress := fmt.Sprintf(`{"world":"world-1.conf","world_ok":%t,"world_since":"2026-09-29T19:56:08Z",`+
 		`"ru_ok":true,"ru_mode":"direct","ru_fallback":%t,"ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0,`+
-			`"carrier_direct":true,"carrier_addrs":["95.163.59.187","217.69.139.1"]}`,
+		`"carrier_direct":true,"carrier_addrs":["95.163.59.187","217.69.139.1"]}`,
 		st.worldUp, st.ruFallback)
 	runDocker = func(stdout io.Writer, args ...string) error {
 		switch call := strings.Join(args, " "); {
