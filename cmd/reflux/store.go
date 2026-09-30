@@ -34,6 +34,10 @@ type Client struct {
 	Transport string    `json:"transport"`
 	URL       string    `json:"url"`
 	Created   time.Time `json:"created"`
+	// Paused and Expires switch access off without revoking it: the node
+	// is not run, while the key, the document and the state are kept.
+	Paused  bool      `json:"paused,omitempty"`
+	Expires time.Time `json:"expires,omitzero"`
 }
 
 // Transports a channel can use. vyandex needs a Yandex login (a cookies
@@ -171,6 +175,23 @@ func (s Store) SyncConf(c Client) error {
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, want, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Save rewrites an existing channel's client.json; the key stays.
+func (s Store) Save(c Client) error {
+	if _, err := s.Get(c.Name); err != nil {
+		return err
+	}
+	meta, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.clientDir(c.Name), "client.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(meta, '\n'), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

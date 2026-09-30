@@ -22,9 +22,14 @@ import (
 const usage = `reflux — manage ReFlux exit nodes (one per client) on this host.
 
 USAGE
-  reflux add <name> --transport <type> --url <document-url>
+  reflux add <name> --transport <type> --url <document-url> [--expires <when>]
   reflux list
   reflux show <name> [--png <file>]
+  reflux pause <name>      stop the node, keep the key and the document
+  reflux resume <name>
+  reflux expire <name> <when>
+                           when: never, a date (through that day), 30d, 2w, 12h;
+                           heal stops expired nodes
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, then apply
@@ -78,6 +83,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdShow(s, rest, stdout)
 	case "revoke":
 		return cmdRevoke(s, rest, stdin, stdout)
+	case "pause":
+		return cmdPause(s, rest, stdout)
+	case "resume":
+		return cmdResume(s, rest, stdout)
+	case "expire":
+		return cmdExpire(s, rest, stdout)
 	case "apply":
 		fs := newFlagSet("apply")
 		dryRun := fs.Bool("dry-run", false, "only write compose.yml; do not touch containers")
@@ -208,7 +219,12 @@ func cmdAdd(s Store, args []string, stdout io.Writer) error {
 	transport := fs.String("transport", "mailru", "carrier type")
 	url := fs.String("url", "", "document URL (a new document for every client)")
 	noApply := fs.Bool("no-apply", false, "do not start the node")
+	expires := fs.String("expires", "never", "when access ends: never, a date, 30d, 2w, 12h")
 	name, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	when, err := parseExpiry(*expires, time.Now())
 	if err != nil {
 		return err
 	}
@@ -216,7 +232,13 @@ func cmdAdd(s Store, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Added %s (%s).\n", c.Name, c.Transport)
+	if !when.IsZero() {
+		c.Expires = when
+		if err := s.Save(c); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintf(stdout, "Added %s (%s), access %s.\n", c.Name, c.Transport, accessText(c, time.Now()))
 	if !*noApply {
 		if err := apply(s, stdout); err != nil {
 			return fmt.Errorf("added %s, but starting it failed: %w", c.Name, err)
@@ -243,7 +265,8 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 	}
 	live := nodeStatuses(s, clients)
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTRANSPORT\tNODE\tCLIENT\tDOWN\tUP")
+	fmt.Fprintln(w, "NAME\tTRANSPORT\tACCESS\tNODE\tCLIENT\tDOWN\tUP")
+	now := time.Now()
 	for _, c := range clients {
 		node := states["reflux-node-"+c.Name]
 		if node == "" {
@@ -258,7 +281,7 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 			// The node's view: what it sends goes down to the client.
 			down, up = humanBytes(st.BytesOut), humanBytes(st.BytesIn)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", c.Name, c.Transport, node, client, down, up)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c.Name, c.Transport, accessText(c, now), node, client, down, up)
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -295,6 +318,7 @@ func cmdShow(s Store, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(stdout, "Access: %s\n", accessText(c, time.Now()))
 	return printAccess(s, c, stdout, *png)
 }
 
@@ -407,7 +431,7 @@ func render(s Store) error {
 			return fmt.Errorf("%s: node.conf: %w", c.Name, err)
 		}
 	}
-	b, err := composeYAML(s.Root, clients, options())
+	b, err := composeYAML(s.Root, activeClients(clients, time.Now()), options())
 	if err != nil {
 		return err
 	}
@@ -441,9 +465,13 @@ func apply(s Store, stdout io.Writer) error {
 // changed: compose sees the file only as a mounted directory and would
 // leave them running on the old config.
 func recreateStale(s Store, stdout io.Writer) error {
-	clients, err := s.List()
-	if err != nil || len(clients) == 0 {
+	all, err := s.List()
+	if err != nil {
 		return err
+	}
+	clients := activeClients(all, time.Now())
+	if len(clients) == 0 {
+		return nil
 	}
 	started := startTimes(clients)
 	var stale []string
@@ -500,17 +528,28 @@ func checkHost() error {
 	return nil
 }
 
-// heal recreates the nodes that started before the running egress: they
-// share its network namespace, and when egress restarts (a crash, a Docker
-// update) they are left in the old one, which has no way out. Only those
-// nodes are recreated; egress is left alone. It prints nothing when all is
-// well, so it can run from cron.
+// heal stops the nodes whose access expired and recreates the nodes that
+// started before the running egress: they share its network namespace,
+// and when egress restarts (a crash, a Docker update) they are left in the
+// old one, which has no way out. Only those nodes are recreated; egress is
+// left alone. It prints nothing when all is well, so it can run from cron.
 func heal(s Store, stdout io.Writer) error {
 	clients, err := s.List()
 	if err != nil || len(clients) == 0 {
 		return err
 	}
 	started := startTimes(clients)
+	now := time.Now()
+	var ended []string
+	for _, c := range clients {
+		if _, running := started["reflux-node-"+c.Name]; running && !c.Active(now) {
+			ended = append(ended, c.Name)
+		}
+	}
+	if len(ended) > 0 {
+		fmt.Fprintf(stdout, "%s: access ended for %s; stopping\n", now.Format(time.DateTime), strings.Join(ended, ", "))
+		return apply(s, stdout)
+	}
 	egress, ok := started["reflux-egress"]
 	if !ok {
 		return nil // egress is down: nothing to rejoin yet

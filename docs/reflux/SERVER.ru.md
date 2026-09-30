@@ -72,6 +72,9 @@ AmneziaWG-туннели и никогда не уходит с адреса с�
 reflux add phone --transport mailru --url https://cloud.mail.ru/public/XXXX/YYYY
 reflux list
 reflux show phone            # данные для клиента ещё раз
+reflux pause phone           # временно отключить (ключ и документ сохраняются)
+reflux resume phone          # включить обратно
+reflux expire phone 30d      # доступ на 30 дней (или 2w, 12h, 2026-12-31, never)
 reflux revoke phone          # остановить ноду и удалить ключ
 reflux logs phone | reflux logs egress
 ```
@@ -88,10 +91,12 @@ reflux logs phone | reflux logs egress
 `list` (и `status`) показывает по каждому клиенту:
 
 ```
-NAME   TRANSPORT  NODE                CLIENT  DOWN    UP
-phone  mailru     Up 16 hours         online  1.4 GB  52 MB
+NAME   TRANSPORT  ACCESS             NODE         CLIENT  DOWN    UP
+phone  mailru     active             Up 16 hours  online  1.4 GB  52 MB
+guest  mailru     until 2026-10-30…  Up 2 days    offline 80 MB   3 MB
 ```
 
+- `ACCESS` — `active`, `paused`, `until <дата>` или `expired`;
 - `NODE` — состояние контейнера ноды;
 - `CLIENT` — подключён ли клиент к каналу сейчас (`online`) или нет
   (`offline`; клиент выключен или нет связи);
@@ -99,6 +104,18 @@ phone  mailru     Up 16 hours         online  1.4 GB  52 MB
 
 Данные берутся у самой ноды через её IPC-сокет (`~/reflux/state/<имя>/ipc.sock`).
 `-` в этих столбцах: нода остановлена или ещё запускается.
+
+### Пауза и срок доступа
+
+`pause` останавливает ноду клиента, но оставляет ключ, документ и cookies:
+`resume` включает его с той же ссылкой, выдавать данные заново не нужно.
+
+Срок доступа задаётся при добавлении (`add ... --expires 30d`) или потом
+(`expire <имя> <срок>`). Срок — `never`, дата (доступ действует весь этот день
+по времени сервера), число дней или недель (`30d`, `2w`) или часы (`12h`).
+Когда срок вышел, `reflux heal` из cron в течение минуты останавливает ноду.
+Продлить: `expire <имя> 30d` — нода запустится снова; `resume` просроченного
+клиента не включает.
 
 Ссылка и ключ дают доступ к каналу: передавайте их только его владельцу.
 `revoke` удаляет ключ навсегда; запись о канале остаётся в `~/reflux/revoked/`.
@@ -123,7 +140,7 @@ AWG-сервер давал ~1 Мбит/с. Вернуть туннель: уд�
 |---|---|
 | `reflux update` | скачивает новые образы и перезапускает изменившиеся контейнеры |
 | `reflux restart` | пересоздаёт egress и все ноды |
-| `reflux heal` | пересоздаёт только ноды, оставшиеся без сети после перезапуска egress |
+| `reflux heal` | останавливает ноды с истёкшим сроком; пересоздаёт ноды, оставшиеся без сети после перезапуска egress |
 | `reflux apply --dry-run` | только переписывает `~/reflux/compose.yml` и `node.conf` клиентов |
 
 Если новая версия `reflux` меняет `node.conf` (он создаётся из `client.json`),
