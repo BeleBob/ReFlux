@@ -91,7 +91,7 @@ var messages = map[string][2]string{
 	// speed test
 	"speed.russia": {"russia", "Россия"},
 	"speed.world":  {"world", "мир"},
-	"speed.ok":     {"%s (%s): %.1f Mbit/s (%.0f MB in %.1f s)", "%s (%s): %.1f Мбит/с (%.0f МБ за %.1f с)"},
+	"speed.ok":     {"%s (%s): %.1f Mbit/s (%.0f MB in %.1f s from %s)", "%s (%s): %.1f Мбит/с (%.0f МБ за %.1f с с %s)"},
 	"speed.fail":   {"%s (%s): failed: %v", "%s (%s): не удалось: %v"},
 
 	// durations
