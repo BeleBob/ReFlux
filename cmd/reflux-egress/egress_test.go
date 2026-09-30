@@ -642,3 +642,43 @@ func TestStatusTextNamesTheFallback(t *testing.T) {
 		t.Errorf("status:\n%s", txt)
 	}
 }
+
+// The owner's choice of world server applies once: after a failover away
+// from it the egress does not force it back, and an unknown name changes
+// nothing.
+func TestWorldServerChoice(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n"}
+	c := testController(t, f)
+	c.confDir = t.TempDir()
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	choose := func(name string) {
+		if err := os.WriteFile(filepath.Join(c.confDir, selectFile), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if moved, err := c.applySelection(); moved || err != nil {
+		t.Fatalf("moved=%v err=%v with no choice", moved, err)
+	}
+	choose("world-2.conf")
+	f.calls = nil
+	if moved, err := c.applySelection(); !moved || err != nil || c.cur != 1 {
+		t.Fatalf("moved=%v err=%v cur=%d; want world-2", moved, err, c.cur)
+	}
+	for _, want := range []string{"nft add element inet reflux endpoints { 46.246.127.133 }", "ip route replace default dev awg-world metric 0"} {
+		if indexOf(f.calls, want) < 0 {
+			t.Errorf("switch never ran %q", want)
+		}
+	}
+	if err := c.failover(); err != nil || c.cur != 0 {
+		t.Fatalf("failover: cur=%d err=%v", c.cur, err)
+	}
+	if moved, _ := c.applySelection(); moved || c.cur != 0 {
+		t.Error("the choice was forced back after a failover")
+	}
+	choose("world-9.conf")
+	if moved, _ := c.applySelection(); moved || c.cur != 0 {
+		t.Error("an unknown server moved the tunnel")
+	}
+}

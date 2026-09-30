@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "speedtest", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "speedtest", "gateway", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -145,6 +145,8 @@ func (b *bot) message(text string) screen {
 		return b.rename(args[0], args[1])
 	case "/speedtest":
 		return b.speed()
+	case "/gateway":
+		return b.gatewayScreen()
 	case "/revoke":
 		return one(b.revokeAsk)
 	case "/restart":
@@ -250,6 +252,24 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setLang(lang(arg)), ""
 	case "mute":
 		return b.toggleMute(arg), ""
+	case "gw":
+		return b.gatewayScreen(), ""
+	case "gws":
+		return b.chooseWorld(arg)
+	case "gwr":
+		return b.russiaAsk(arg), ""
+	case "gwr!":
+		mode, at, _ := strings.Cut(arg, ":")
+		if !fresh(at) {
+			return b.gatewayScreen(), b.tr("ui.expired.button")
+		}
+		return b.setRussia(mode), ""
+	case "rnk":
+		c, err := b.s.Get(arg)
+		if err != nil || c.Telegram == nil || nick(*c.Telegram) == "" {
+			return b.telegramScreen(arg), ""
+		}
+		return b.rename(arg, nick(*c.Telegram)), ""
 	}
 	return b.home(), ""
 }
@@ -370,47 +390,9 @@ func (b *bot) home() screen {
 	return screen{t.String(), keyboard{
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
-		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
+		{b.btn("b.gateway", "gw"), b.btn("b.speed", "sp")},
+		{b.btn("b.settings", "set")},
 	}}
-}
-
-func (b *bot) doctorScreen() screen {
-	fs := runChecks(b.s)
-	warns, fails := count(fs)
-	var t strings.Builder
-	t.WriteString(b.tr("ui.doctor.title") + "\n\n")
-	for _, f := range fs {
-		t.WriteString(alertLine(f, b.lang) + "\n")
-	}
-	t.WriteString("\n" + b.tr("ui.doctor.sum", fails, warns) + "\n" + b.tr("ui.updated", time.Now().Format("15:04:05")))
-	return screen{t.String(), keyboard{
-		{b.btn("b.refresh", "doc"), b.btn("b.restart", "rs")},
-		{b.btn("b.home", "home")},
-	}}
-}
-
-func (b *bot) clientsScreen() screen {
-	clients, err := b.s.List()
-	if err != nil {
-		return screen{html.EscapeString(err.Error()), keyboard{{b.btn("b.home", "home")}}}
-	}
-	kb := keyboard{}
-	var row []tgButton
-	for _, v := range b.clientViews(clients) {
-		row = append(row, tgButton{Text: v.mark() + " " + v.c.Name, Data: "c:" + v.c.Name})
-		if len(row) == 2 {
-			kb, row = append(kb, row), nil
-		}
-	}
-	if row != nil {
-		kb = append(kb, row)
-	}
-	kb = append(kb, []tgButton{b.btn("b.add", "add"), b.btn("b.home", "home")})
-	text := b.tr("ui.clients.title", len(clients)) + "\n" + b.tr("ui.clients.hint")
-	if len(clients) == 0 {
-		text = b.tr("ui.clients.title", 0) + "\n" + b.tr("ui.clients.none")
-	}
-	return screen{text, kb}
 }
 
 func (b *bot) clientScreen(name string) screen {
@@ -428,7 +410,7 @@ func (b *bot) clientScreen(name string) screen {
 	case !v.active:
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.stopped")) + "\n")
 	case !v.running:
-		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.down")) + "\n")
+		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.notrunning")) + "\n")
 	case v.status == nil:
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.nostatus")) + "\n")
 	default:
@@ -570,7 +552,7 @@ func (b *bot) accessScreen(name string) screen {
 	t.WriteString("\n\n" + b.tr("ui.access.hint"))
 	var plus []tgButton
 	for _, d := range accessDays {
-		plus = append(plus, tgButton{Text: b.tr("b.plusdays", d), Data: fmt.Sprintf("ax:%s:+%d", c.Name, d)})
+		plus = append(plus, tgButton{Text: b.tr(fmt.Sprintf("b.plus%d", d)), Data: fmt.Sprintf("ax:%s:+%d", c.Name, d)})
 	}
 	return screen{t.String(), keyboard{
 		plus[:3], plus[3:],
@@ -625,6 +607,9 @@ func (b *bot) telegramScreen(name string) screen {
 	}
 	kb := keyboard{{b.btn("b.tg.me", "tgme:"+c.Name)}}
 	if c.Telegram != nil {
+		if n := nick(*c.Telegram); n != "" && n != c.Name {
+			kb = append(kb, []tgButton{b.btn("b.tg.rename", "rnk:"+c.Name, n)})
+		}
 		kb = append(kb, []tgButton{b.btn("b.tg.off", "tgoff:"+c.Name)})
 	}
 	kb = append(kb, []tgButton{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")})
@@ -653,7 +638,18 @@ func (b *bot) link(name string, me bool) screen {
 	if err != nil {
 		return b.failed(err, b.btn("b.back", "tg:"+name))
 	}
-	return b.clientScreen(name)
+	// The Telegram screen: it offers the account's nickname as the name.
+	return b.telegramScreen(name)
+}
+
+// nick is a Telegram username as a client name (lowercase, dashes for
+// underscores), "" when there is none or it does not fit.
+func nick(a TGAccount) string {
+	n := strings.Trim(strings.ReplaceAll(strings.ToLower(a.Username), "_", "-"), "-")
+	if validName(n) != nil {
+		return ""
+	}
+	return n
 }
 
 func (b *bot) rename(name, to string) screen {

@@ -41,6 +41,8 @@ USAGE
   reflux status            egress tunnels, nodes, who is online
   reflux doctor            check the host, egress and every node; says what to fix
   reflux speedtest         download speed through the egress: Russia and the world
+  reflux gateway [world-N.conf|auto|russia <fallback|tunnel|direct>]
+                           choose the world server, or how Russia leaves
   reflux bot <setup|install|test|run>
                            Telegram bot: alerts when a doctor check changes,
                            /status, /doctor, /pause, /resume, /expire
@@ -189,6 +191,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdDoctor(s, stdout)
 	case "speedtest":
 		return cmdSpeedtest(stdout)
+	case "gateway":
+		return cmdGateway(s, rest, stdout)
 	case "bot":
 		return cmdBot(s, rest, stdin, stdout)
 	}
@@ -201,7 +205,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
-	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true,
+	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true,
 }
 

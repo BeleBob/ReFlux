@@ -137,8 +137,8 @@ func (d *doctor) host(s Store) {
 	dir := filepath.Join(s.Root, "egress")
 	world, _ := filepath.Glob(filepath.Join(dir, "world-*.conf"))
 	ru, _ := filepath.Glob(filepath.Join(dir, "ru-*.conf"))
-	_, directErr := os.Stat(filepath.Join(dir, "ru-direct"))
-	_, fallbackErr := os.Stat(filepath.Join(dir, "ru-fallback-direct"))
+	_, directErr := os.Stat(filepath.Join(dir, ruDirectFile))
+	_, fallbackErr := os.Stat(filepath.Join(dir, ruFallbackFile))
 	russia := ph("ru.tunnelconf", strings.Join(baseNames(ru), ", "))
 	switch {
 	case directErr == nil:
