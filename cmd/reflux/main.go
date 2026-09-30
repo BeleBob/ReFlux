@@ -32,7 +32,7 @@ USAGE
                            heal stops expired nodes
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
-  reflux update            pull new images, then apply
+  reflux update            pull new images, apply, remove old ReFlux images
   reflux restart           recreate egress and all nodes
   reflux heal              recreate nodes stranded by an egress restart
                            (quiet; for cron: * * * * * reflux heal)
@@ -127,7 +127,15 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if err := runDocker(stdout, "pull", "--quiet", o.EgressImage); err != nil {
 			return err
 		}
-		return apply(s, stdout)
+		if err := apply(s, stdout); err != nil {
+			return err
+		}
+		// Every pull of :main leaves the previous image dangling, 40 MB a
+		// time. Remove those of ReFlux only; other images stay.
+		if err := runDocker(io.Discard, "image", "prune", "--force", "--filter", "label="+imageSourceLabel); err != nil {
+			fmt.Fprintln(stdout, "warning: removing old ReFlux images failed:", err)
+		}
+		return nil
 	case "status":
 		states := containerStates()
 		egress := states["reflux-egress"]
@@ -168,6 +176,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }
+
+// imageSourceLabel marks the images built from this repository.
+const imageSourceLabel = "org.opencontainers.image.source=https://github.com/BeleBob/ReFlux"
 
 func dataDir() (string, error) {
 	if d := os.Getenv("REFLUX_HOME"); d != "" {

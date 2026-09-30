@@ -445,7 +445,8 @@ func TestUpdatePullsBothImagesEvenWithoutClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(*calls, "\n")
-	for _, want := range []string{"pull --quiet node:test", "pull --quiet egress:test"} {
+	for _, want := range []string{"pull --quiet node:test", "pull --quiet egress:test",
+		"image prune --force --filter label=org.opencontainers.image.source=https://github.com/BeleBob/ReFlux"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("update did not run %q:\n%s", want, joined)
 		}
