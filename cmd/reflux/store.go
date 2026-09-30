@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -33,6 +34,10 @@ type Client struct {
 	Transport string    `json:"transport"`
 	URL       string    `json:"url"`
 	Created   time.Time `json:"created"`
+	// Paused and Expires switch access off without revoking it: the node
+	// is not run, while the key, the document and the state are kept.
+	Paused  bool      `json:"paused,omitempty"`
+	Expires time.Time `json:"expires,omitzero"`
 }
 
 // Transports a channel can use. vyandex needs a Yandex login (a cookies
@@ -153,6 +158,43 @@ func (s Store) write(c Client, key string) error {
 		}
 	}
 	return nil
+}
+
+// SyncConf rewrites c's node.conf when it differs from what this reflux
+// renders, as after an update that adds a setting. A running node read its
+// config at start: apply recreates the nodes whose config is newer.
+func (s Store) SyncConf(c Client) error {
+	path := filepath.Join(s.clientDir(c.Name), "node.conf")
+	want := []byte(nodeConf(c))
+	have, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(have, want) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, want, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Save rewrites an existing channel's client.json; the key stays.
+func (s Store) Save(c Client) error {
+	if _, err := s.Get(c.Name); err != nil {
+		return err
+	}
+	meta, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.clientDir(c.Name), "client.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(meta, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Get reads one channel.
