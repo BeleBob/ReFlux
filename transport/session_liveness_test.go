@@ -75,15 +75,21 @@ func TestSessionPrefersHigherPriorityCarrier(t *testing.T) {
 	exit.Receive(func([]byte) { got.Add(1) })
 	startPair(t, client, exit)
 
-	before := sentCount(cw["yandex"])
+	// The lower-priority carrier stays live (nothing times out in this
+	// window) but loses whatever the client sends on it: data that took
+	// it would never arrive. Counting its packets instead failed on a busy
+	// CI runner, where a late handshake or keepalive packet, which every
+	// live carrier carries, fell into the window.
+	blackhole(cw["yandex"])
+	before := sentCount(cw["direct"])
 	for i := 0; i < 5; i++ {
 		if err := client.Send(testIPv4(40, 6)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	eventually(t, "data delivery", func() bool { return got.Load() == 5 })
-	if after := sentCount(cw["yandex"]); after != before {
-		t.Fatalf("lower-priority carrier carried data while the preferred one was live (%d -> %d)", before, after)
+	eventually(t, "data delivery over the preferred carrier", func() bool { return got.Load() == 5 })
+	if sentCount(cw["direct"]) == before {
+		t.Fatal("nothing went over the preferred carrier")
 	}
 }
 
