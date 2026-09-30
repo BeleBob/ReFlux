@@ -338,10 +338,6 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 	return "home", pageData{Title: tr(l, "web.nav.home"), Active: "home", Refresh: 15, Body: d}, err
 }
 
-func (w *webServer) server(r *http.Request) (string, pageData, error) {
-	return "server", pageData{Title: tr(w.lang(), "web.nav.server"), Active: "server", Refresh: 15, Body: w.tiles()}, nil
-}
-
 func (w *webServer) events(r *http.Request) (string, pageData, error) {
 	return "events", pageData{Title: tr(w.lang(), "web.nav.events"), Active: "events", Refresh: 60, Body: w.s.readEvents(200)}, nil
 }
@@ -621,7 +617,7 @@ func (w *webServer) doctor(r *http.Request) (string, pageData, error) {
 	if warns+fails > 0 {
 		summary = tr(l, "ui.doctor.sum", fails, warns)
 	}
-	return "doctor", pageData{Title: tr(l, "b.doctor"), Active: "doctor", Refresh: 60,
+	return "doctor", pageData{Title: tr(l, "web.nav.doctor"), Active: "doctor", Refresh: 60,
 		Body: map[string]any{"Summary": summary, "Sections": secs}}, nil
 }
 
@@ -646,7 +642,7 @@ func (w *webServer) gateway(r *http.Request) (string, pageData, error) {
 		d.Russia = tr(l, ruMode(st).id)
 		d.Carriers = len(st.Carriers)
 	}
-	return "gateway", pageData{Title: tr(l, "b.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil
+	return "gateway", pageData{Title: tr(l, "web.nav.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil
 }
 
 func (w *webServer) gatewayAction(r *http.Request) (string, error) {
@@ -681,11 +677,11 @@ func (w *webServer) gatewayAction(r *http.Request) (string, error) {
 }
 
 func (w *webServer) speedForm(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed"}, nil
+	return "speed", pageData{Title: tr(w.lang(), "web.nav.speed"), Active: "speed"}, nil
 }
 
 func (w *webServer) speed(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed", Body: speedLines(w.lang(), speedTest())}, nil
+	return "speed", pageData{Title: tr(w.lang(), "web.nav.speed"), Active: "speed", Body: speedLines(w.lang(), speedTest())}, nil
 }
 
 // ---- command ----
