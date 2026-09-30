@@ -79,7 +79,8 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   while `awg-ru` fails `failLimit` rounds, back after `recoverRounds`),
   the owner's world server choice in `egress/world-select` (`reflux gateway`,
   applied once per change, failover still moves on), world failover in file order without automatic
-  return. Never exits on errors: nodes share its netns; after an egress
+  return; after a restart it starts with the owner's choice, else the last world
+  server that held `rememberAfter` (`world-last` in the `egress-state` volume). Never exits on errors: nodes share its netns; after an egress
   restart `reflux heal` (cron) recreates the stranded nodes.
 - `deploy/reflux/egress/Dockerfile` (build from repo root),
   `deploy/reflux/host/reflux-egress-route.service` (host `ip rule`, tied to awg0),

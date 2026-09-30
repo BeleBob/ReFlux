@@ -67,9 +67,10 @@ func execRunner(stdin, name string, args ...string) (string, error) {
 }
 
 type controller struct {
-	run     runner
-	runDir  string // setconf files and status.json
-	confDir string // the configs, and the owner's choice of world server
+	run      runner
+	runDir   string // setconf files and status.json
+	confDir  string // the configs, and the owner's choice of world server
+	stateDir string // kept across restarts: the last world server that held
 
 	ru         awgConf
 	ruDirect   bool // Russia leaves through the uplink, never a tunnel
@@ -77,6 +78,7 @@ type controller struct {
 	world      []awgConf
 	cur        int    // index into world of the active tunnel
 	picked     string // the world server choice last acted on
+	remembered string // the world server last saved as the one that held
 	gw         netip.Addr
 
 	// routeMu serializes the changes of the Russian routes: the prefix
@@ -127,6 +129,49 @@ func (c *controller) selection() string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// lastFile in the state directory names the last world server that held
+// for rememberAfter. After a restart the egress starts with it rather than
+// with the first config: the first ones may be the servers that failed
+// before, and each failover takes 30 seconds.
+const (
+	lastFile      = "world-last"
+	rememberAfter = 2 * time.Minute
+)
+
+// firstWorld is the world server to start with: the owner's choice, else
+// the last one that held, else the first config.
+func (c *controller) firstWorld() int {
+	if i := c.worldIndex(c.selection()); i >= 0 {
+		return i
+	}
+	b, err := os.ReadFile(filepath.Join(c.stateDir, lastFile))
+	if err != nil {
+		return 0
+	}
+	c.remembered = strings.TrimSpace(string(b))
+	return max(c.worldIndex(c.remembered), 0)
+}
+
+// remember saves the active world server once it has held for
+// rememberAfter.
+func (c *controller) remember(worldOK bool, since, now time.Time) {
+	name := c.world[c.cur].Name
+	if c.stateDir == "" || !worldOK || now.Sub(since) < rememberAfter || name == c.remembered {
+		return
+	}
+	if err := os.MkdirAll(c.stateDir, 0o700); err == nil {
+		tmp := filepath.Join(c.stateDir, lastFile+".tmp")
+		if err = os.WriteFile(tmp, []byte(name+"\n"), 0o600); err == nil {
+			err = os.Rename(tmp, filepath.Join(c.stateDir, lastFile))
+		}
+		if err != nil {
+			log.Printf("world: remembering %s: %v", name, err)
+			return
+		}
+	}
+	c.remembered = name
 }
 
 func (c *controller) worldIndex(name string) int {
@@ -583,6 +628,10 @@ func (c *controller) watch(stop <-chan struct{}) {
 		} else {
 			failures++
 		}
+		c.mu.Lock()
+		since := c.st.WorldSince
+		c.mu.Unlock()
+		c.remember(worldOK && failures == 0, since, time.Now())
 		// One lost ping is not an outage: Russia is reported down, like the
 		// world tunnel is failed over, after failLimit rounds.
 		ruOK, ruErr := c.russia(&ru)
