@@ -14,17 +14,24 @@ func (c Client) Active(now time.Time) bool {
 	return !c.Paused && (c.Expires.IsZero() || now.Before(c.Expires))
 }
 
-// accessText is the ACCESS column of the list.
-func accessText(c Client, now time.Time) string {
+// accessPhrase says what c's access is at now: active, paused, expired or
+// until a time.
+func accessPhrase(c Client, now time.Time) phrase {
 	switch {
 	case c.Paused:
-		return "paused"
+		return ph("access.paused")
 	case c.Expires.IsZero():
-		return "active"
+		return ph("access.active")
 	case !now.Before(c.Expires):
-		return "expired"
+		return ph("access.expired")
 	}
-	return "until " + c.Expires.Local().Format("2006-01-02 15:04")
+	return ph("access.until", c.Expires.Local().Format("2006-01-02 15:04"))
+}
+
+// accessText is accessPhrase in English: the ACCESS column of the list.
+func accessText(c Client, now time.Time) string {
+	p := accessPhrase(c, now)
+	return tr(langEN, p.id, p.args...)
 }
 
 var relExpiryRe = regexp.MustCompile(`^([0-9]+)([dw])$`)

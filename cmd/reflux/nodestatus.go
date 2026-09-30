@@ -98,15 +98,21 @@ func humanBytes(n uint64) string {
 	return fmt.Sprintf("%.0f %cB", v, "KMGTPE"[exp])
 }
 
-// humanDuration formats an uptime coarsely: 45s, 12m, 5h, 3d.
-func humanDuration(d time.Duration) string {
+// durationPhrase says an uptime coarsely: 45s, 12m, 5h, 3d.
+func durationPhrase(d time.Duration) phrase {
 	switch {
 	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
+		return ph("dur.s", int(d.Seconds()))
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		return ph("dur.m", int(d.Minutes()))
 	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
+		return ph("dur.h", int(d.Hours()))
 	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
+	return ph("dur.d", int(d.Hours()/24))
+}
+
+// durationIn is durationPhrase in l.
+func durationIn(l lang, d time.Duration) string {
+	p := durationPhrase(d)
+	return tr(l, p.id, p.args...)
 }

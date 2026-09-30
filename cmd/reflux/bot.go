@@ -15,8 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"openflux/share"
 )
 
 // The Telegram bot tells the owner when a check of `reflux doctor` changes
@@ -35,6 +33,7 @@ const botUsage = `usage:
 type botConfig struct {
 	Token string `json:"token"`
 	Chat  int64  `json:"chat"`
+	Lang  string `json:"lang,omitempty"` // "ru" (default) or "en"
 }
 
 func (s Store) botConfigPath() string { return filepath.Join(s.Root, "telegram.json") }
@@ -86,7 +85,7 @@ func cmdBot(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if err := newTelegram(c.Token).send(c.Chat, "ReFlux bot test: messages reach you."); err != nil {
+		if _, err := newTelegram(c.Token).send(c.Chat, "ReFlux bot test: messages reach you."); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "Sent.")
@@ -239,15 +238,21 @@ type bot struct {
 	s    Store
 	t    *telegram
 	chat int64
-	// mu serializes the checks and the commands: both run docker and
-	// swap dockerStderr.
-	mu     sync.Mutex
-	mon    monitor
-	outbox []string // alerts not delivered yet
+	// mu serializes the checks, the commands and the buttons: they run
+	// docker and swap dockerStderr, and share the fields below.
+	mu       sync.Mutex
+	lang     lang
+	awaitAdd time.Time // when the owner was asked for a new client's details
+	mon      monitor
+	outbox   []string // alerts not delivered yet
 }
 
 func newBot(s Store, c botConfig) *bot {
-	return &bot{s: s, t: newTelegram(c.Token), chat: c.Chat, mon: monitor{confirm: confirmRuns}}
+	l := lang(c.Lang)
+	if l != langEN {
+		l = langRU
+	}
+	return &bot{s: s, t: newTelegram(c.Token), chat: c.Chat, lang: l, mon: monitor{confirm: confirmRuns}}
 }
 
 func (b *bot) run() error {
@@ -256,9 +261,9 @@ func (b *bot) run() error {
 		return err
 	}
 	cronEvery = time.Hour
-	if err := b.t.setCommands(botCommands); err != nil {
-		log.Printf("bot: command menu: %v", err)
-	}
+	b.mu.Lock()
+	b.setMenu()
+	b.mu.Unlock()
 	log.Print("bot: started")
 	go b.watch()
 	for {
@@ -284,11 +289,11 @@ func (b *bot) watch() {
 	for first := true; ; first = false {
 		b.mu.Lock()
 		fs := runChecks(b.s)
-		b.mu.Unlock()
-		news := b.mon.update(fs)
+		news := b.mon.update(fs, b.lang)
 		if first {
-			news = []string{startMessage(fs)}
+			news = []string{startMessage(fs, b.lang)}
 		}
+		b.mu.Unlock()
 		b.deliver(news)
 		time.Sleep(checkEvery)
 	}
@@ -304,7 +309,7 @@ func (b *bot) deliver(news []string) {
 		b.outbox = b.outbox[len(b.outbox)-20:]
 	}
 	for len(b.outbox) > 0 {
-		if err := b.t.send(b.chat, b.outbox[0]); err != nil {
+		if _, err := b.t.send(b.chat, b.outbox[0]); err != nil {
 			log.Printf("bot: alert not sent, retrying next run: %v", err)
 			return
 		}
@@ -312,21 +317,21 @@ func (b *bot) deliver(news []string) {
 	}
 }
 
-func startMessage(fs []finding) string {
+func startMessage(fs []finding, l lang) string {
 	host, _ := os.Hostname()
 	warns, fails := count(fs)
-	msg := fmt.Sprintf("ReFlux bot started on %s: %d problem(s), %d warning(s).", html.EscapeString(host), fails, warns)
+	msg := tr(l, "ui.started", html.EscapeString(host), fails, warns)
 	for _, f := range fs {
 		if f.Level != levelOK {
-			msg += "\n" + alertLine(f)
+			msg += "\n" + alertLine(f, l)
 		}
 	}
 	return msg
 }
 
-func alertLine(f finding) string {
+func alertLine(f finding, l lang) string {
 	mark := map[level]string{levelOK: "✅", levelWarn: "⚠️", levelFail: "❌"}[f.Level]
-	return mark + " " + html.EscapeString(f.Text)
+	return mark + " " + html.EscapeString(f.text(l))
 }
 
 // monitor turns runs of the checks into news: a check whose signature
@@ -342,7 +347,7 @@ type pendingChange struct {
 	runs int
 }
 
-func (m *monitor) update(fs []finding) []string {
+func (m *monitor) update(fs []finding, l lang) []string {
 	cur := map[string]finding{}
 	var keys []string
 	for _, f := range fs {
@@ -394,120 +399,14 @@ func (m *monitor) update(fs []finding) []string {
 		m.reported[k] = c
 		switch {
 		case c.Level != levelOK:
-			news = append(news, alertLine(c))
+			news = append(news, alertLine(c, l))
 		case was && r.Level != levelOK:
-			news = append(news, alertLine(c)) // resolved
+			news = append(news, alertLine(c, l)) // resolved
 		case was:
-			news = append(news, "ℹ️ "+html.EscapeString(c.Text)) // a failover, an update
+			news = append(news, "ℹ️ "+html.EscapeString(c.text(l))) // a failover, an update
 		}
 	}
 	return news
-}
-
-// botCommands fill the bot's command menu; botHelp says the same.
-var botCommands = [][2]string{
-	{"status", "tunnels and clients"},
-	{"doctor", "every check"},
-	{"add", "<name> <document-url> [expiry]: new client"},
-	{"show", "<name>: link, key and QR for the client's app"},
-	{"pause", "<name>: switch a client off"},
-	{"resume", "<name>: switch it back on"},
-	{"expire", "<name> <never|2026-12-31|30d|2w|12h>"},
-	{"revoke", "<name>: delete a client's key for good"},
-	{"restart", "recreate egress and every node"},
-	{"logs", "<name|egress>: the last log lines"},
-	{"help", "this list"},
-}
-
-func botHelp() string {
-	var b strings.Builder
-	b.WriteString("ReFlux bot. It writes when a check of reflux doctor changes.\n")
-	for _, c := range botCommands {
-		fmt.Fprintf(&b, "/%s %s\n", c[0], html.EscapeString(c[1]))
-	}
-	return b.String()
-}
-
-// showKeep is how long the access data sent by /show stays in the chat.
-var showKeep = 10 * time.Minute
-
-// confirmFor is how long a confirmation button stays valid.
-const confirmFor = 10 * time.Minute
-
-// handle answers the owner's chat; anyone else is ignored.
-func (b *bot) handle(u tgUpdate) {
-	if cb := u.Callback; cb != nil {
-		if cb.Message != nil && cb.Message.Chat.ID == b.chat {
-			b.press(cb)
-		}
-		return
-	}
-	m := u.Message
-	if m == nil || m.Chat.ID != b.chat {
-		return
-	}
-	f := strings.Fields(m.Text)
-	if len(f) == 0 {
-		return
-	}
-	cmd, _, _ := strings.Cut(f[0], "@") // /status@SomeBot in groups
-	args := f[1:]
-	b.mu.Lock()
-	reply, buttons := b.command(cmd, args)
-	b.mu.Unlock()
-	if reply == "" {
-		return
-	}
-	if _, err := b.t.sendButtons(b.chat, reply, buttons); err != nil {
-		log.Printf("bot: reply not sent: %v", err)
-	}
-}
-
-// command runs one command and returns the reply, with buttons when the
-// command waits for a confirmation. The caller holds b.mu.
-func (b *bot) command(cmd string, args []string) (string, []tgButton) {
-	switch cmd {
-	case "/start", "/help":
-		return botHelp(), nil
-	case "/status", "/list":
-		return pre(botStatus(b.s)), nil
-	case "/doctor":
-		fs := runChecks(b.s)
-		warns, fails := count(fs)
-		return pre(formatFindings(fs) + fmt.Sprintf("\n%d problem(s), %d warning(s)", fails, warns)), nil
-	case "/pause", "/resume", "/expire":
-		cmds := map[string]func(Store, []string, io.Writer) error{"/pause": cmdPause, "/resume": cmdResume, "/expire": cmdExpire}
-		var out strings.Builder
-		err := b.change(func() error { return cmds[cmd](b.s, args, &out) })
-		return pre(withError(out.String(), err)), nil
-	case "/add":
-		return b.add(args), nil
-	case "/show":
-		if len(args) != 1 {
-			return "usage: /show &lt;name&gt;", nil
-		}
-		b.show(args[0])
-		return "", nil
-	case "/revoke":
-		if len(args) != 1 {
-			return "usage: /revoke &lt;name&gt;", nil
-		}
-		if _, err := b.s.Get(args[0]); err != nil {
-			return html.EscapeString(err.Error()), nil
-		}
-		name := html.EscapeString(args[0])
-		return "Revoke <b>" + name + "</b>? Its node stops and its key is deleted for good; the client needs a new link.",
-			[]tgButton{{Text: "Revoke " + args[0], Data: "revoke:" + args[0]}, {Text: "Cancel", Data: "cancel"}}
-	case "/restart":
-		return "Recreate egress and every node? Clients lose the channel for about a minute, and the world tunnel may take 1-3 minutes to pick a server.",
-			[]tgButton{{Text: "Restart", Data: "restart"}, {Text: "Cancel", Data: "cancel"}}
-	case "/logs":
-		if len(args) != 1 {
-			return "usage: /logs &lt;name|egress&gt;", nil
-		}
-		return b.logs(args[0]), nil
-	}
-	return "Unknown command. /help", nil
 }
 
 // change runs fn under the data directory lock, like a CLI command.
@@ -518,157 +417,6 @@ func (b *bot) change(fn func() error) error {
 	}
 	defer unlock()
 	return fn()
-}
-
-func withError(out string, err error) string {
-	if err != nil {
-		out += "\nerror: " + err.Error()
-	}
-	return out
-}
-
-// add creates a client: /add <name> <document-url> [expiry].
-func (b *bot) add(args []string) string {
-	if len(args) < 2 || len(args) > 3 {
-		return "usage: /add &lt;name&gt; &lt;document-url&gt; [never|2026-12-31|30d|2w|12h]\nEvery client needs a new document."
-	}
-	expires := "never"
-	if len(args) == 3 {
-		expires = args[2]
-	}
-	when, err := parseExpiry(expires, time.Now())
-	if err != nil {
-		return html.EscapeString(err.Error())
-	}
-	var c Client
-	err = b.change(func() error {
-		if c, err = b.s.Add(args[0], "mailru", args[1]); err != nil {
-			return err
-		}
-		if !when.IsZero() {
-			c.Expires = when
-			if err := b.s.Save(c); err != nil {
-				return err
-			}
-		}
-		if err := apply(b.s, io.Discard); err != nil {
-			return fmt.Errorf("added %s, but starting its node failed: %w", c.Name, err)
-		}
-		return nil
-	})
-	if err != nil {
-		return html.EscapeString(err.Error())
-	}
-	name := html.EscapeString(c.Name)
-	return fmt.Sprintf("Added <b>%s</b>, access %s; its node is starting.\n/show %s gives the link and the QR code for the client's app.",
-		name, html.EscapeString(accessText(c, time.Now())), name)
-}
-
-// show sends what a client's app needs: the QR code and the fields for
-// manual entry. Both are secrets, so they are deleted after showKeep.
-func (b *bot) show(name string) {
-	fail := func(err error) { b.t.send(b.chat, html.EscapeString(err.Error())) }
-	c, err := b.s.Get(name)
-	if err != nil {
-		fail(err)
-		return
-	}
-	key, err := b.s.Key(c.Name)
-	if err != nil {
-		fail(err)
-		return
-	}
-	link, err := share.MakeLink(shareConfig(c, key))
-	if err != nil {
-		fail(err)
-		return
-	}
-	png, err := share.PNG(link, 512)
-	if err != nil {
-		fail(err)
-		return
-	}
-	e := html.EscapeString
-	keep := fmt.Sprintf("deleted in %d minutes", int(showKeep.Minutes()))
-	photo, err := b.t.sendPhoto(b.chat, png, fmt.Sprintf("<b>%s</b>: scan in the OpenFlux app (%s)", e(c.Name), keep))
-	if err != nil {
-		log.Printf("bot: /show: %v", err)
-		fail(errors.New("could not send the QR code"))
-		return
-	}
-	text, err := b.t.sendButtons(b.chat, fmt.Sprintf(`<b>%s</b>: access to the channel, pass it to its owner only (%s).
-Access: %s
-
-Manual entry:
-Transport: <code>%s</code>
-Document URL: <code>%s</code>
-Encryption key: <code>%s</code>
-Legacy codec: off
-
-Link:
-<code>%s</code>`, e(c.Name), keep, e(accessText(c, time.Now())), e(c.Transport), e(c.URL), e(key), e(link)), nil)
-	if err != nil {
-		log.Printf("bot: /show: %v", err)
-	}
-	time.AfterFunc(showKeep, func() {
-		for _, id := range []int64{photo, text} {
-			if id != 0 {
-				if err := b.t.deleteMessage(b.chat, id); err != nil {
-					log.Printf("bot: deleting /show message: %v", err)
-				}
-			}
-		}
-	})
-}
-
-// logs returns the tail of a node's or the egress's log.
-func (b *bot) logs(name string) string {
-	container := "reflux-egress"
-	if name != "egress" {
-		if err := validName(name); err != nil {
-			return html.EscapeString(err.Error())
-		}
-		container = "reflux-node-" + name
-	}
-	var out strings.Builder
-	old := dockerStderr
-	dockerStderr = &out // the core and the egress log to stderr
-	err := runDocker(&out, "logs", "--tail", "40", container)
-	dockerStderr = old
-	return preTail(withError(out.String(), err))
-}
-
-// press handles a confirmation button.
-func (b *bot) press(cb *tgCallback) {
-	m := cb.Message
-	if time.Since(time.Unix(m.Date, 0)) > confirmFor {
-		b.t.answer(cb.ID, "Too late: send the command again.")
-		b.t.edit(b.chat, m.MessageID, "Expired; send the command again.")
-		return
-	}
-	b.t.answer(cb.ID, "")
-	var result string
-	b.mu.Lock()
-	switch action, name, _ := strings.Cut(cb.Data, ":"); action {
-	case "revoke":
-		var out strings.Builder
-		err := b.change(func() error { return cmdRevoke(b.s, []string{name, "--yes"}, nil, &out) })
-		result = pre(withError(firstLine(out.String()), err))
-	case "restart":
-		err := b.change(func() error { return cmdRestart(b.s, io.Discard) })
-		result = pre(withError("Restarted egress and every node.", err))
-	default:
-		result = "Cancelled."
-	}
-	b.mu.Unlock()
-	if err := b.t.edit(b.chat, m.MessageID, result); err != nil {
-		log.Printf("bot: %v", err)
-	}
-}
-
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return line
 }
 
 // pre marks text up as preformatted, cut to fit a message.
@@ -695,58 +443,4 @@ func preTail(text string) string {
 		text = "…\n" + text
 	}
 	return "<pre>" + text + "</pre>"
-}
-
-// botStatus is status for a phone screen: one short line per tunnel and
-// per client.
-func botStatus(s Store) string {
-	var b strings.Builder
-	var st strings.Builder
-	if err := quiet(&st, "exec", "reflux-egress", "reflux-egress", "status"); err != nil {
-		b.WriteString("egress: no status (not running?)\n")
-	}
-	for _, l := range strings.Split(st.String(), "\n") {
-		f := strings.Fields(l)
-		if len(f) < 2 || (f[0] != "world" && f[0] != "russia") {
-			continue
-		}
-		// "world up via world-3.conf (since ...)", "russia up direct, 8652
-		// prefixes (...)": up to the first comma or parenthesis.
-		var short []string
-		for _, w := range f {
-			if strings.HasPrefix(w, "(") {
-				break
-			}
-			short = append(short, strings.TrimSuffix(w, ","))
-			if strings.HasSuffix(w, ",") {
-				break
-			}
-		}
-		fmt.Fprintf(&b, "%-7s%s\n", short[0], strings.Join(short[1:], " "))
-	}
-	clients, err := s.List()
-	if err != nil {
-		return b.String() + "clients: " + err.Error()
-	}
-	now := time.Now()
-	states := containerStates()
-	live := nodeStatuses(s, activeClients(clients, now))
-	for _, c := range clients {
-		line := accessText(c, now)
-		if c.Active(now) {
-			switch st, ok := live[c.Name]; {
-			case states["reflux-node-"+c.Name] == "":
-				line = "node not running"
-			case !ok:
-				line = "no status"
-			default:
-				line = fmt.Sprintf("%-7s %s↓ %s↑", onlineText(st), humanBytes(st.BytesOut), humanBytes(st.BytesIn))
-			}
-		}
-		fmt.Fprintf(&b, "%-7s%s\n", c.Name, line)
-	}
-	if len(clients) == 0 {
-		b.WriteString("no clients\n")
-	}
-	return b.String()
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,10 +54,8 @@ func runDoctor(t *testing.T, st hostState) (string, error) {
 			}
 		}()
 	}
-	world := "world  up    via world-1.conf (since 2026-09-29 19:56:08)"
-	if !st.worldUp {
-		world = "world  DOWN  via world-1.conf (since 2026-09-29 19:56:08)"
-	}
+	egress := fmt.Sprintf(`{"world":"world-1.conf","world_ok":%t,"world_since":"2026-09-29T19:56:08Z",`+
+		`"ru_ok":true,"ru_mode":"direct","ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0}`, st.worldUp)
 	runDocker = func(stdout io.Writer, args ...string) error {
 		switch call := strings.Join(args, " "); {
 		case strings.HasPrefix(call, "version"):
@@ -69,9 +68,8 @@ func runDoctor(t *testing.T, st hostState) (string, error) {
 			io.WriteString(stdout, "running healthy\n")
 		case strings.HasPrefix(call, "inspect"):
 			io.WriteString(stdout, "/reflux-egress true 2026-09-29T17:00:00Z\n/reflux-node-phone true "+st.nodeStart+"\n")
-		case strings.HasPrefix(call, "exec reflux-egress reflux-egress status"):
-			io.WriteString(stdout, world+"\nrussia up    direct, 8652 prefixes (list from 2026-09-29)\n"+
-				"kill switch stopped 0 packets\nchecked 3s ago\n")
+		case call == "exec reflux-egress cat /run/reflux-egress/status.json":
+			io.WriteString(stdout, egress)
 		case strings.HasPrefix(call, "logs"):
 			for i := 0; i < st.docDrops; i++ {
 				io.WriteString(dockerStderr, "2026/09/30 11:00:00 [M-DOCS] connection to the document dropped: websocket: close 1005 (no status); reconnecting\n")

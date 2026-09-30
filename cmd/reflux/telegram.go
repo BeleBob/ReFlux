@@ -142,24 +142,23 @@ func (t *telegram) getUpdates(offset int64, wait time.Duration) ([]tgUpdate, err
 	return ups, err
 }
 
-// send posts an HTML message to chat. The Bot API takes up to 4096
-// characters; callers cut long text before marking it up (see pre).
-func (t *telegram) send(chat int64, html string) error {
-	_, err := t.sendButtons(chat, html, nil)
-	return err
+// send posts an HTML message to chat and returns its id. The Bot API
+// takes up to 4096 characters; callers cut long text before marking it up
+// (see pre).
+func (t *telegram) send(chat int64, html string) (int64, error) {
+	return t.sendKeyboard(chat, html, nil)
 }
 
-// sendButtons posts an HTML message with a row of inline buttons under it
-// (none if buttons is empty) and returns its id.
-func (t *telegram) sendButtons(chat int64, html string, buttons []tgButton) (int64, error) {
+// sendKeyboard posts an HTML message with rows of inline buttons under it.
+func (t *telegram) sendKeyboard(chat int64, html string, kb [][]tgButton) (int64, error) {
 	params := map[string]any{
 		"chat_id":                  chat,
 		"text":                     html,
 		"parse_mode":               "HTML",
 		"disable_web_page_preview": true,
 	}
-	if len(buttons) > 0 {
-		params["reply_markup"] = map[string]any{"inline_keyboard": [][]tgButton{buttons}}
+	if len(kb) > 0 {
+		params["reply_markup"] = map[string]any{"inline_keyboard": kb}
 	}
 	var m tgMessage
 	err := t.call("sendMessage", params, 20*time.Second, &m)
@@ -196,11 +195,14 @@ func (t *telegram) deleteMessage(chat, id int64) error {
 	return t.call("deleteMessage", map[string]any{"chat_id": chat, "message_id": id}, 20*time.Second, nil)
 }
 
-// edit replaces a message's text and drops its buttons.
-func (t *telegram) edit(chat, id int64, html string) error {
-	return t.call("editMessageText", map[string]any{
+// editKeyboard replaces a message's text and buttons.
+func (t *telegram) editKeyboard(chat, id int64, html string, kb [][]tgButton) error {
+	params := map[string]any{
 		"chat_id": chat, "message_id": id, "text": html, "parse_mode": "HTML",
-	}, 20*time.Second, nil)
+		"disable_web_page_preview": true,
+		"reply_markup":             map[string]any{"inline_keyboard": append([][]tgButton{}, kb...)},
+	}
+	return t.call("editMessageText", params, 20*time.Second, nil)
 }
 
 // answer acknowledges a button press, or the client shows a spinner.

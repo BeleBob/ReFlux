@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -32,10 +33,15 @@ type fakeTG struct {
 }
 
 type sentMsg struct {
-	Chat    int64           `json:"chat_id"`
-	Text    string          `json:"text"`
-	Buttons json.RawMessage `json:"reply_markup"`
+	Chat    int64   `json:"chat_id"`
+	Text    string  `json:"text"`
+	Buttons rawJSON `json:"reply_markup"`
 }
+
+type rawJSON json.RawMessage
+
+func (r *rawJSON) UnmarshalJSON(b []byte) error { *r = append((*r)[:0], b...); return nil }
+func (r rawJSON) String() string                { return string(r) }
 
 func newFakeTG(t *testing.T) *fakeTG {
 	f := &fakeTG{}
@@ -187,7 +193,7 @@ func TestBotAnswersOnlyItsOwner(t *testing.T) {
 	}
 	s := Store{Root: home}
 	f := newFakeTG(t)
-	b := newBot(s, botConfig{Token: testToken, Chat: 42})
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "en"})
 
 	b.handle(msg(1, 7, "/pause guest"))
 	if c, _ := s.Get("guest"); c.Paused || len(f.messages()) != 0 {
@@ -200,20 +206,22 @@ func TestBotAnswersOnlyItsOwner(t *testing.T) {
 	}
 	b.handle(msg(4, 42, "/status"))
 	m := f.messages()
-	if len(m) != 3 || !strings.Contains(m[0].Text, "/status") || !strings.Contains(m[1].Text, "guest: paused") ||
-		!strings.Contains(m[2].Text, "guest  paused") {
+	if len(m) != 3 || !strings.Contains(m[0].Text, "/doctor") || !strings.Contains(m[1].Text, "Access: paused") ||
+		!strings.Contains(m[2].Text, "<b>guest</b> · paused") {
 		t.Errorf("replies = %+v", m)
 	}
 }
+
+func init() { messages["test.raw"] = [2]string{"%s", "%s"} }
 
 func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 	m := monitor{confirm: 2}
 	world := func(lv level, server string) finding {
 		state := map[level]string{levelOK: "up", levelFail: "DOWN"}[lv]
-		return finding{Key: "world", Level: lv, Text: "world " + state + " via " + server, Sig: state + " " + server}
+		return finding{Key: "world", Level: lv, Msg: "test.raw", Args: []any{"world " + state + " via " + server}, Sig: state + " " + server}
 	}
 	node := func(lv level) finding {
-		return finding{Key: "node:phone", Level: lv, Text: "node phone " + lv.String(), Sig: lv.String()}
+		return finding{Key: "node:phone", Level: lv, Msg: "test.raw", Args: []any{"node phone " + lv.String()}, Sig: lv.String()}
 	}
 	steps := []struct {
 		fs   []finding
@@ -231,7 +239,7 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, ""},
 	}
 	for i, st := range steps {
-		if got := strings.Join(m.update(st.fs), "\n"); got != st.news {
+		if got := strings.Join(m.update(st.fs, langEN), "\n"); got != st.news {
 			t.Errorf("run %d: news %q, want %q", i, got, st.news)
 		}
 	}
@@ -239,7 +247,7 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 
 func TestBotKeepsAlertsItCouldNotSend(t *testing.T) {
 	f := newFakeTG(t)
-	b := newBot(Store{Root: t.TempDir()}, botConfig{Token: testToken, Chat: 42})
+	b := newBot(Store{Root: t.TempDir()}, botConfig{Token: testToken, Chat: 42, Lang: "en"})
 	f.failing = true
 	b.deliver([]string{"first"})
 	f.mu.Lock()
@@ -259,7 +267,7 @@ func TestBotInstallWritesAUserService(t *testing.T) {
 	if err := botInstall(s, io.Discard); err == nil {
 		t.Error("installed without a linked bot")
 	}
-	if err := s.saveBotConfig(botConfig{Token: testToken, Chat: 42}); err != nil {
+	if err := s.saveBotConfig(botConfig{Token: testToken, Chat: 42, Lang: "en"}); err != nil {
 		t.Fatal(err)
 	}
 	var calls []string
@@ -298,7 +306,7 @@ func TestBotInstallWritesAUserService(t *testing.T) {
 	}
 }
 
-func TestBotStatusFitsAPhone(t *testing.T) {
+func TestBotHomeScreen(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REFLUX_HOME", home)
 	fakeDocker(t, "")
@@ -306,19 +314,30 @@ func TestBotStatusFitsAPhone(t *testing.T) {
 		t.Fatal(err)
 	}
 	runDocker = func(stdout io.Writer, args ...string) error {
-		switch strings.Join(args[:2], " ") {
-		case "exec reflux-egress":
-			io.WriteString(stdout, "world  up    via world-3.conf (since 2026-09-29 19:56:08)\n"+
-				"russia up    direct, 8652 prefixes (list from 2026-09-29)\nkill switch stopped 0 packets\nchecked 3s ago\n")
-		case "ps --all":
+		switch strings.Join(args, " ") {
+		case "exec reflux-egress cat /run/reflux-egress/status.json":
+			io.WriteString(stdout, `{"world":"world-3.conf","world_ok":true,"ru_ok":true,"ru_mode":"direct","killswitch_dropped":0}`)
+		case "ps --all --filter name=^reflux- --format {{.Names}}\t{{.Status}}":
 			io.WriteString(stdout, "reflux-node-phone\tUp 2 hours\n")
 		}
 		return nil
 	}
-	got := botStatus(Store{Root: home})
-	want := "world  up via world-3.conf\nrussia up direct\nphone  no status\n"
-	if got != want {
-		t.Errorf("status =\n%s\nwant\n%s", got, want)
+	for l, want := range map[string][]string{
+		"en": {"🌍 World: ✅ world-3.conf", "🇷🇺 Russia: ✅ direct", "🟡 <b>phone</b> · no status", "🔄 Refresh"},
+		"ru": {"🌍 Мир: ✅ world-3.conf", "🇷🇺 Россия: ✅ напрямую", "🟡 <b>phone</b> · нет статуса", "🔄 Обновить"},
+	} {
+		sc := newBot(Store{Root: home}, botConfig{Chat: 42, Lang: l}).home()
+		all := sc.text
+		for _, row := range sc.kb {
+			for _, b := range row {
+				all += "\n" + b.Text
+			}
+		}
+		for _, w := range want {
+			if !strings.Contains(all, w) {
+				t.Errorf("%s: home lacks %q:\n%s", l, w, all)
+			}
+		}
 	}
 }
 
@@ -335,7 +354,7 @@ func TestBotManagesClients(t *testing.T) {
 	calls := fakeDocker(t, "")
 	s := Store{Root: home}
 	f := newFakeTG(t)
-	b := newBot(s, botConfig{Token: testToken, Chat: 42})
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "en"})
 	old := showKeep
 	showKeep = 100 * time.Millisecond
 	defer func() { showKeep = old }()
@@ -371,22 +390,24 @@ func TestBotManagesClients(t *testing.T) {
 
 	b.handle(msg(3, 42, "/revoke guest"))
 	m = f.messages()
-	if !strings.Contains(string(m[len(m)-1].Buttons), "revoke:guest") {
+	confirm := regexp.MustCompile(`rv!:guest:[0-9]+`).FindString(m[len(m)-1].Buttons.String())
+	if confirm == "" {
 		t.Fatalf("/revoke did not ask for a confirmation: %+v", m[len(m)-1])
 	}
 	if _, err := s.Get("guest"); err != nil {
 		t.Fatal("revoked before the confirmation")
 	}
-	b.handle(press(4, 7, "revoke:guest", time.Now()))                  // a stranger's press
-	b.handle(press(5, 42, "revoke:guest", time.Now().Add(-time.Hour))) // too late
+	stale := fmt.Sprintf("rv!:guest:%d", time.Now().Add(-time.Hour).Unix())
+	b.handle(press(4, 7, confirm, time.Now())) // a stranger's press
+	b.handle(press(5, 42, stale, time.Now()))  // an old button
 	if _, err := s.Get("guest"); err != nil {
 		t.Fatal("revoked by a stranger or by a stale button")
 	}
-	b.handle(press(6, 42, "revoke:guest", time.Now()))
+	b.handle(press(6, 42, confirm, time.Now()))
 	if _, err := s.Get("guest"); err == nil {
 		t.Error("not revoked after the confirmation")
 	}
-	if len(f.edited) != 2 || !strings.Contains(f.edited[0], "Expired") || !strings.Contains(f.edited[1], "Revoked guest") {
+	if len(f.edited) != 2 || !strings.Contains(f.edited[0], "Access:") || !strings.Contains(f.edited[1], "<b>guest</b> revoked") {
 		t.Errorf("edits = %q", f.edited)
 	}
 }
@@ -400,11 +421,11 @@ func TestBotLogsKeepTheEnd(t *testing.T) {
 		}
 		return nil
 	}
-	got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42}).logs("egress")
+	got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42, Lang: "en"}).logs("egress")
 	if !strings.Contains(got, "line 399") || strings.Contains(got, "line 000") || len(got) > 4096 {
 		t.Errorf("logs reply (%d bytes) does not keep the end:\n%.200s", len(got), got)
 	}
-	if got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42}).logs("../etc"); strings.Contains(got, "<pre>") {
+	if got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42, Lang: "en"}).logs("../etc"); strings.Contains(got, "<pre>") {
 		t.Errorf("a bad name reached docker: %s", got)
 	}
 }

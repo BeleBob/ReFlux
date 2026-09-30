@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -38,12 +39,17 @@ func (l level) String() string { return [...]string{"ok", "warn", "FAIL"}[l] }
 // finding is the result of one check. Key names the check from one run to
 // the next; Sig is what the bot compares between runs, so a change in it
 // is news (by default the level: a node going offline and back is not).
+// Msg and Args are its text, rendered in the reader's language.
 type finding struct {
 	Key   string
 	Level level
-	Text  string
+	Msg   string
+	Args  []any
 	Sig   string
 }
+
+// text renders the finding in l.
+func (f finding) text(l lang) string { return tr(l, f.Msg, f.Args...) }
 
 // doctor runs the checks of `reflux doctor` and the bot: everything a
 // working channel depends on, from the host to each node, with what to do
@@ -52,16 +58,16 @@ type doctor struct {
 	findings []finding
 }
 
-func (d *doctor) add(lv level, key, sig, format string, a ...any) {
+func (d *doctor) add(lv level, key, sig, msg string, a ...any) {
 	if sig == "" {
 		sig = lv.String()
 	}
-	d.findings = append(d.findings, finding{Key: key, Level: lv, Text: fmt.Sprintf(format, a...), Sig: sig})
+	d.findings = append(d.findings, finding{Key: key, Level: lv, Msg: msg, Args: a, Sig: sig})
 }
 
-func (d *doctor) ok(key, format string, a ...any)   { d.add(levelOK, key, "", format, a...) }
-func (d *doctor) warn(key, format string, a ...any) { d.add(levelWarn, key, "", format, a...) }
-func (d *doctor) fail(key, format string, a ...any) { d.add(levelFail, key, "", format, a...) }
+func (d *doctor) ok(key, msg string, a ...any)   { d.add(levelOK, key, "", msg, a...) }
+func (d *doctor) warn(key, msg string, a ...any) { d.add(levelWarn, key, "", msg, a...) }
+func (d *doctor) fail(key, msg string, a ...any) { d.add(levelFail, key, "", msg, a...) }
 
 // quiet runs docker with its error output discarded: a failed check says
 // what went wrong in its own words.
@@ -99,7 +105,7 @@ func cmdDoctor(s Store, stdout io.Writer) error {
 func formatFindings(fs []finding) string {
 	var b strings.Builder
 	for _, f := range fs {
-		fmt.Fprintf(&b, "%-6s%s\n", f.Level, f.Text)
+		fmt.Fprintf(&b, "%-6s%s\n", f.Level, f.text(langEN))
 	}
 	return b.String()
 }
@@ -118,35 +124,35 @@ func count(fs []finding) (warns, fails int) {
 
 func (d *doctor) host(s Store) {
 	if _, err := os.Stat(amneziawgModule); err != nil {
-		d.fail("module", "amneziawg kernel module not loaded: sudo modprobe amneziawg (after a kernel update: sudo dkms autoinstall)")
+		d.fail("module", "module.fail")
 	} else {
-		d.ok("module", "amneziawg kernel module loaded")
+		d.ok("module", "module.ok")
 	}
 	if err := checkHost(); err != nil {
-		d.fail("host-rule", "%v", err)
+		d.fail("host-rule", "hostrule.fail", err.Error())
 	} else {
-		d.ok("host-rule", "host routing: egress tunnels bypass the host's own VPN")
+		d.ok("host-rule", "hostrule.ok")
 	}
 
 	dir := filepath.Join(s.Root, "egress")
 	world, _ := filepath.Glob(filepath.Join(dir, "world-*.conf"))
 	ru, _ := filepath.Glob(filepath.Join(dir, "ru-*.conf"))
 	_, directErr := os.Stat(filepath.Join(dir, "ru-direct"))
-	russia := "tunnel " + strings.Join(baseNames(ru), ", ")
+	russia := ph("ru.tunnelconf", strings.Join(baseNames(ru), ", "))
 	if directErr == nil {
-		russia = "direct"
+		russia = ph("ru.direct")
 	}
 	switch {
 	case len(world) == 0:
-		d.fail("egress-configs", "no world-*.conf in %s: the egress has no way out", dir)
+		d.fail("egress-configs", "configs.noworld", dir)
 	case directErr != nil && len(ru) == 0:
-		d.fail("egress-configs", "no ru-*.conf in %s, and no ru-direct file", dir)
+		d.fail("egress-configs", "configs.noru", dir)
 	default:
-		d.ok("egress-configs", "egress configs: world %s; russia %s", strings.Join(baseNames(world), ", "), russia)
+		d.ok("egress-configs", "configs.ok", strings.Join(baseNames(world), ", "), russia)
 	}
 	for _, f := range append(world, ru...) {
 		if st, err := os.Stat(f); err == nil && st.Mode().Perm()&0o077 != 0 {
-			d.warn("perm:"+f, "%s is readable by others (%v): chmod 600 %s", filepath.Base(f), st.Mode().Perm(), f)
+			d.warn("perm:"+f, "perm.warn", filepath.Base(f), st.Mode().Perm(), f)
 		}
 	}
 }
@@ -163,14 +169,14 @@ func baseNames(paths []string) []string {
 func (d *doctor) docker() bool {
 	var server, compose strings.Builder
 	if err := quiet(&server, "version", "--format", "{{.Server.Version}}"); err != nil {
-		d.fail("docker", "docker does not answer: is it running, and is this user in the docker group?")
+		d.fail("docker", "docker.down")
 		return false
 	}
 	if err := quiet(&compose, "compose", "version", "--short"); err != nil {
-		d.fail("docker", "docker compose plugin missing: sudo apt install docker-compose-plugin")
+		d.fail("docker", "compose.missing")
 		return false
 	}
-	d.ok("docker", "docker %s, compose %s", strings.TrimSpace(server.String()), strings.TrimSpace(compose.String()))
+	d.ok("docker", "docker.ok", strings.TrimSpace(server.String()), strings.TrimSpace(compose.String()))
 	o := options()
 	for _, img := range []string{o.NodeImage, o.EgressImage} {
 		var b strings.Builder
@@ -179,12 +185,12 @@ func (d *doctor) docker() bool {
 		f := strings.Fields(b.String())
 		switch {
 		case err != nil:
-			d.warn("image:"+img, "image %s not pulled: reflux update", img)
+			d.warn("image:"+img, "image.missing", img)
 		case len(f) == 2 && len(f[0]) >= 7:
 			// The commit is the signature: the bot reports each update.
-			d.add(levelOK, "image:"+img, "ok "+f[0], "image %s: commit %s, built %s", img, f[0][:7], dateOf(f[1]))
+			d.add(levelOK, "image:"+img, "ok "+f[0], "image.ok", img, f[0][:7], dateOf(f[1]))
 		default:
-			d.ok("image:"+img, "image %s (local build)", img)
+			d.ok("image:"+img, "image.local", img)
 		}
 	}
 	return true
@@ -197,6 +203,38 @@ func dateOf(rfc3339 string) string {
 	return rfc3339
 }
 
+// egressStatus is the egress controller's status.json (see reflux-egress).
+type egressStatus struct {
+	Updated    time.Time `json:"updated"`
+	World      string    `json:"world"`
+	WorldOK    bool      `json:"world_ok"`
+	WorldSince time.Time `json:"world_since"`
+	RUOK       bool      `json:"ru_ok"`
+	RUMode     string    `json:"ru_mode"` // "tunnel" or "direct"
+	RUPrefixes int       `json:"ru_prefixes"`
+	RUListAt   time.Time `json:"ru_list_updated"`
+	Dropped    int64     `json:"killswitch_dropped"`
+	Error      string    `json:"error"`
+}
+
+// readEgressStatus asks the running egress for its status.
+func readEgressStatus() (egressStatus, error) {
+	var st egressStatus
+	var b strings.Builder
+	if err := quiet(&b, "exec", "reflux-egress", "cat", "/run/reflux-egress/status.json"); err != nil {
+		return st, err
+	}
+	err := json.Unmarshal([]byte(b.String()), &st)
+	return st, err
+}
+
+func ruMode(st egressStatus) phrase {
+	if st.RUMode == "direct" {
+		return ph("ru.direct")
+	}
+	return ph("ru.tunnel")
+}
+
 func (d *doctor) egress() {
 	var b strings.Builder
 	quiet(&b, "inspect", "--format", "{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}", "reflux-egress")
@@ -205,41 +243,31 @@ func (d *doctor) egress() {
 		if state == "" {
 			state = "missing"
 		}
-		d.fail("egress", "egress container %s: reflux apply", state)
+		d.fail("egress", "egress.down", state)
 		return
 	}
-	var st strings.Builder
-	if err := quiet(&st, "exec", "reflux-egress", "reflux-egress", "status"); err != nil {
-		d.fail("egress", "egress container %s, but has no status yet (starting?): reflux logs egress", state)
+	st, err := readEgressStatus()
+	if err != nil {
+		d.fail("egress", "egress.nostatus", state)
 		return
 	}
-	lines := map[string]string{}
-	for _, l := range strings.Split(st.String(), "\n") {
-		if k, _, ok := strings.Cut(l, " "); ok {
-			lines[k] = strings.Join(strings.Fields(l), " ")
-		}
+	d.ok("egress", "egress.ok", state)
+	// The server in use is part of the signature: the bot reports a
+	// failover.
+	if st.WorldOK {
+		d.add(levelOK, "world", "up "+st.World, "world.up", st.World, st.WorldSince.Local().Format(time.DateTime))
+	} else {
+		d.add(levelFail, "world", "down "+st.World, "world.down", st.World)
 	}
-	d.ok("egress", "egress container %s", state)
-	for _, k := range []string{"world", "russia"} {
-		// "world up via world-3.conf (since ...)": the server in use is
-		// part of the signature, so the bot reports a failover.
-		f := strings.Fields(lines[k])
-		sig := ""
-		if len(f) > 3 && f[2] == "via" {
-			sig = f[1] + " " + f[3]
-		}
-		if strings.HasPrefix(lines[k], k+" up ") {
-			d.add(levelOK, k, sig, "%s", lines[k])
-		} else {
-			d.add(levelFail, k, sig, "%s: reflux logs egress", lines[k])
-		}
+	if st.RUOK {
+		d.add(levelOK, "russia", "up "+st.RUMode, "russia.up", ruMode(st), st.RUPrefixes, st.RUListAt.Local().Format(time.DateOnly))
+	} else {
+		d.add(levelFail, "russia", "down "+st.RUMode, "russia.down", ruMode(st))
 	}
-	if e := lines["error:"]; e != "" {
-		d.warn("egress-error", "egress reports %s", e)
+	if st.Error != "" {
+		d.warn("egress-error", "egress.error", st.Error)
 	}
-	if k := lines["kill"]; k != "" {
-		d.ok("kill-switch", "%s", k)
-	}
+	d.ok("kill-switch", "killswitch", st.Dropped)
 }
 
 // docTroubleRe matches the node log lines of a carrier that cannot keep
@@ -249,11 +277,11 @@ var docTroubleRe = regexp.MustCompile(`connection to the document dropped|cannot
 func (d *doctor) nodes(s Store) {
 	clients, err := s.List()
 	if err != nil {
-		d.fail("clients", "clients: %v", err)
+		d.fail("clients", "clients.err", err)
 		return
 	}
 	if len(clients) == 0 {
-		d.warn("clients", "no clients yet: reflux add <name> --url <document-url>")
+		d.warn("clients", "clients.none")
 		return
 	}
 	now := time.Now()
@@ -264,39 +292,39 @@ func (d *doctor) nodes(s Store) {
 		t, running := started["reflux-node-"+c.Name]
 		if !c.Active(now) {
 			if running {
-				d.warn("node:"+c.Name, "node %s runs although access is %s: reflux heal", c.Name, accessText(c, now))
+				d.warn("node:"+c.Name, "node.inactive.running", c.Name, accessPhrase(c, now))
 			} else {
-				d.add(levelOK, "node:"+c.Name, accessText(c, now), "node %s: %s, not running", c.Name, accessText(c, now))
+				d.add(levelOK, "node:"+c.Name, accessText(c, now), "node.inactive", c.Name, accessPhrase(c, now))
 			}
 			continue
 		}
 		switch {
 		case !running:
-			d.fail("node:"+c.Name, "node %s not running: reflux apply", c.Name)
+			d.fail("node:"+c.Name, "node.down", c.Name)
 			continue
 		case egressUp && t.Before(egress):
-			d.fail("node:"+c.Name, "node %s started before egress and has no network: reflux heal", c.Name)
+			d.fail("node:"+c.Name, "node.stranded", c.Name)
 			continue
 		}
 		if n := d.docTrouble(c.Name); n >= 3 {
-			d.warn("doc:"+c.Name, "node %s lost its document %d times in 5 minutes: reflux logs %s", c.Name, n, c.Name)
+			d.warn("doc:"+c.Name, "node.doc", c.Name, n, c.Name)
 		}
 		st, ok := live[c.Name]
 		if !ok {
-			d.warn("node:"+c.Name, "node %s gives no status (starting, or set up by an older reflux: reflux update)", c.Name)
+			d.warn("node:"+c.Name, "node.nostatus", c.Name)
 			continue
 		}
-		d.ok("node:"+c.Name, "node %s: up %s, client %s, %s down / %s up", c.Name,
-			humanDuration(time.Duration(st.UptimeMs)*time.Millisecond), onlineText(st),
+		d.ok("node:"+c.Name, "node.ok", c.Name,
+			durationPhrase(time.Duration(st.UptimeMs)*time.Millisecond), onlinePhrase(st),
 			humanBytes(st.BytesOut), humanBytes(st.BytesIn))
 	}
 }
 
-func onlineText(st ipc.StatusPayload) string {
+func onlinePhrase(st ipc.StatusPayload) phrase {
 	if st.Connected {
-		return "online"
+		return ph("online")
 	}
-	return "offline"
+	return ph("offline")
 }
 
 // docTrouble counts a node's recent complaints about its document.
@@ -342,14 +370,14 @@ func (d *doctor) checkCron() {
 	var b strings.Builder
 	runCmd(&b, "crontab", "-l")
 	if strings.Contains(b.String(), "reflux heal") {
-		d.ok("cron", "cron runs reflux heal")
+		d.ok("cron", "cron.ok")
 		return
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "reflux"
 	}
-	d.warn("cron", "cron does not run reflux heal: add with crontab -e:\n      * * * * * %s heal >> %s 2>&1", exe, "$HOME/reflux/heal.log")
+	d.warn("cron", "cron.missing", exe, "$HOME/reflux/heal.log")
 }
 
 var dfLineRe = regexp.MustCompile(`\s([0-9]+)%\s+(\S+)$`)
@@ -365,7 +393,7 @@ func (d *doctor) disk(s Store) {
 	}
 	var b strings.Builder
 	if err := runCmd(&b, "df", append([]string{"-P"}, paths...)...); err != nil && b.Len() == 0 {
-		d.warn("disk", "disk: df failed: %v", err)
+		d.warn("disk", "disk.dffail", err)
 		return
 	}
 	seen := map[string]bool{}
@@ -378,11 +406,11 @@ func (d *doctor) disk(s Store) {
 		used, _ := strconv.Atoi(m[1])
 		switch {
 		case used >= 97:
-			d.fail("disk:"+m[2], "disk %s %d%% full: free space (docker image prune)", m[2], used)
+			d.fail("disk:"+m[2], "disk.full", m[2], used)
 		case used >= 90:
-			d.warn("disk:"+m[2], "disk %s %d%% full", m[2], used)
+			d.warn("disk:"+m[2], "disk.warn", m[2], used)
 		default:
-			d.ok("disk:"+m[2], "disk %s %d%% used", m[2], used)
+			d.ok("disk:"+m[2], "disk.ok", m[2], used)
 		}
 	}
 }

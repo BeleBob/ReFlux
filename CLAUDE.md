@@ -57,8 +57,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   Telegram bot (systemd user service, token in `~/reflux/telegram.json`): it runs
   the doctor checks every minute and reports findings whose `Sig` changed for
   two runs; it talks to the Bot API from the host, not through egress. It also
-  manages clients (`/add`, `/show` with auto-delete, `/revoke` and `/restart` behind
-  a confirm button). Commands that change clients or containers hold the flock
+  manages clients through screens with inline buttons (`botui.go`; one message per
+  screen, edited on each press) and the same commands. Texts are in `i18n.go`
+  (`messages`: English and Russian with the same arguments, checked by a test); the
+  CLI prints English, the bot the owner's language (`lang` in `telegram.json`).
+  Doctor findings carry a message id and arguments; the egress state comes from
+  its `/run/reflux-egress/status.json`. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
