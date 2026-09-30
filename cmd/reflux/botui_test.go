@@ -122,30 +122,136 @@ func TestBotAddsAClientFromTheNextMessage(t *testing.T) {
 	}
 }
 
-func TestPlus30DaysExtendsFromTheEnd(t *testing.T) {
+func TestAccessScreenSetsTheExpiry(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REFLUX_HOME", home)
-	fakeDocker(t, "")
+	calls := fakeDocker(t, "")
 	s := Store{Root: home}
-	newFakeTG(t)
+	f := newFakeTG(t)
 	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "en"})
 	if _, err := s.Add("guest", "mailru", testURL); err != nil {
 		t.Fatal(err)
 	}
-	c, _ := s.Get("guest")
-	end := time.Now().Add(10 * 24 * time.Hour).Truncate(time.Second)
-	c.Expires = end
-	s.Save(c)
-	b.handle(press(1, 42, "ex30:guest", time.Now()))
-	if c, _ := s.Get("guest"); !c.Expires.Equal(end.AddDate(0, 0, 30)) {
-		t.Errorf("expires %v, want %v", c.Expires, end.AddDate(0, 0, 30))
+	expires := func() time.Time { c, _ := s.Get("guest"); return c.Expires }
+
+	b.handle(press(1, 42, "acc:guest", time.Now()))
+	if len(f.edited) != 1 || !strings.Contains(f.edited[0], "access expiry") {
+		t.Fatalf("access screen = %q", f.edited)
 	}
-	b.handle(press(2, 42, "exn:guest", time.Now()))
-	if c, _ := s.Get("guest"); !c.Expires.IsZero() {
-		t.Errorf("♾ left expiry %v", c.Expires)
+	// +days on unlimited access count from now.
+	b.handle(press(2, 42, "ax:guest:+7", time.Now()))
+	if d := time.Until(expires()); d < 7*24*time.Hour-time.Minute || d > 7*24*time.Hour {
+		t.Errorf("+7 on unlimited access: %v left", d)
 	}
-	b.handle(press(3, 42, "ex30:guest", time.Now()))
-	if c, _ := s.Get("guest"); !c.Expires.IsZero() {
-		t.Errorf("+30 days limited unlimited access: %v", c.Expires)
+	// While it lasts, from its end.
+	end := expires()
+	b.handle(press(3, 42, "ax:guest:+30", time.Now()))
+	if !expires().Equal(end.AddDate(0, 0, 30)) {
+		t.Errorf("+30 = %v, want %v", expires(), end.AddDate(0, 0, 30))
+	}
+	b.handle(press(4, 42, "ax:guest:never", time.Now()))
+	if !expires().IsZero() {
+		t.Errorf("never left %v", expires())
+	}
+	// Ending now takes the node away at once.
+	*calls = nil
+	b.handle(press(5, 42, "ax:guest:now", time.Now()))
+	if c, _ := s.Get("guest"); c.Active(time.Now()) {
+		t.Error("still active after ending now")
+	}
+	if !strings.Contains(strings.Join(*calls, "\n"), "up --detach --remove-orphans") {
+		t.Errorf("ending now did not apply: %q", *calls)
+	}
+	// A typed date, asked for by the button.
+	b.handle(press(6, 42, "axin:guest", time.Now()))
+	b.handle(msg(7, 42, "2030-01-15"))
+	want := time.Date(2030, 1, 16, 0, 0, 0, 0, time.Local)
+	if !expires().Equal(want) {
+		t.Errorf("typed date: %v, want %v", expires(), want)
+	}
+	b.handle(press(8, 42, "ax:guest:+99999", time.Now()))
+	if !expires().Equal(want) {
+		t.Error("an absurd extension was applied")
+	}
+}
+
+func TestLinkAClientToTheOwner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	s := Store{Root: home}
+	f := newFakeTG(t)
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "ru"})
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	up := press(1, 42, "tgme:phone", time.Now())
+	up.Callback.From = &tgUser{ID: 42, FirstName: "Дмитрий", Username: "dima"}
+	b.handle(up)
+	c, _ := s.Get("phone")
+	if c.Telegram == nil || c.Telegram.ID != 42 || c.Telegram.String() != "Дмитрий (@dima)" {
+		t.Fatalf("linked %+v", c.Telegram)
+	}
+	if len(f.edited) != 1 || !strings.Contains(f.edited[0], "Telegram: Дмитрий (@dima)") {
+		t.Errorf("card = %q", f.edited)
+	}
+	if home := b.home().text; !strings.Contains(home, "<b>phone</b> (Дмитрий)") {
+		t.Errorf("home does not name the owner:\n%s", home)
+	}
+	b.handle(press(2, 42, "tgoff:phone", time.Now()))
+	if c, _ := s.Get("phone"); c.Telegram != nil {
+		t.Error("not unlinked")
+	}
+}
+
+func TestRenameFromTheBot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	s := Store{Root: home}
+	f := newFakeTG(t)
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "en"})
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	b.handle(press(1, 42, "ren:phone", time.Now()))
+	b.handle(msg(2, 42, "dima"))
+	if _, err := s.Get("dima"); err != nil {
+		t.Fatalf("not renamed: %v", err)
+	}
+	if m := f.messages(); !strings.Contains(m[len(m)-1].Text, "<b>phone</b> is now <b>dima</b>") {
+		t.Errorf("reply %+v", m[len(m)-1])
+	}
+}
+
+func TestMutedAlertsAreNotSent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	s := Store{Root: home}
+	if err := s.saveBotConfig(botConfig{Token: testToken, Chat: 42}); err != nil {
+		t.Fatal(err)
+	}
+	newFakeTG(t)
+	c, _ := s.loadBotConfig()
+	b := newBot(s, c)
+	b.handle(press(1, 42, "mute:updates", time.Now()))
+	b.handle(press(2, 42, "mute:server", time.Now()))
+	b.handle(press(3, 42, "mute:server", time.Now())) // and back on
+	if c, _ := s.loadBotConfig(); strings.Join(c.Mute, ",") != "updates" {
+		t.Fatalf("saved mute = %v", c.Mute)
+	}
+	b.handle(press(4, 42, "mute:bogus", time.Now()))
+	if c, _ := s.loadBotConfig(); strings.Join(c.Mute, ",") != "updates" {
+		t.Errorf("an unknown category was saved: %v", c.Mute)
+	}
+	if news := b.check(true); len(news) != 0 {
+		t.Errorf("start summary sent with updates muted: %q", news)
+	}
+	for key, want := range map[string]string{"world": "tunnels", "russia": "tunnels", "node:phone": "nodes",
+		"doc:phone": "nodes", "image:x": "updates", "disk:/": "server", "cron": "server"} {
+		if got := category(key); got != want {
+			t.Errorf("category(%q) = %q, want %q", key, got, want)
+		}
 	}
 }

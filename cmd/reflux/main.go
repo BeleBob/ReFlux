@@ -30,6 +30,8 @@ USAGE
   reflux expire <name> <when>
                            when: never, a date (through that day), 30d, 2w, 12h;
                            heal stops expired nodes
+  reflux rename <name> <new-name>
+                           the link and the key stay; the node restarts
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, apply, remove old ReFlux images
@@ -38,6 +40,9 @@ USAGE
                            (quiet; for cron: * * * * * reflux heal)
   reflux status            egress tunnels, nodes, who is online
   reflux doctor            check the host, egress and every node; says what to fix
+  reflux speedtest         download speed through the egress: Russia and the world
+  reflux gateway [world-N.conf|auto|russia <fallback|tunnel|direct>]
+                           choose the world server, or how Russia leaves
   reflux bot <setup|install|test|run>
                            Telegram bot: alerts when a doctor check changes,
                            /status, /doctor, /pause, /resume, /expire
@@ -104,6 +109,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdShow(s, rest, stdout)
 	case "revoke":
 		return cmdRevoke(s, rest, stdin, stdout)
+	case "rename":
+		if len(rest) != 2 {
+			return errors.New("usage: reflux rename <name> <new-name>")
+		}
+		return cmdRename(s, rest[0], rest[1], stdout)
 	case "pause":
 		return cmdPause(s, rest, stdout)
 	case "resume":
@@ -179,6 +189,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return heal(s, stdout)
 	case "doctor":
 		return cmdDoctor(s, stdout)
+	case "speedtest":
+		return cmdSpeedtest(stdout)
+	case "gateway":
+		return cmdGateway(s, rest, stdout)
 	case "bot":
 		return cmdBot(s, rest, stdin, stdout)
 	}
@@ -191,7 +205,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
-	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true,
+	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true,
 }
 
@@ -440,6 +454,29 @@ func cmdRevoke(s Store, args []string, stdin io.Reader, stdout io.Writer) error 
 		return err
 	}
 	fmt.Fprintf(stdout, "Revoked %s; record kept in %s.\n", name, dst)
+	return apply(s, stdout)
+}
+
+// cmdRename renames a client. Its node stops first, so the old and the
+// new one never serve the channel at once; apply starts the new one. The
+// link and the key stay the same.
+func cmdRename(s Store, old, name string, stdout io.Writer) error {
+	if _, err := s.Get(old); err != nil {
+		return err
+	}
+	if err := validName(name); err != nil {
+		return err
+	}
+	if _, err := s.Get(name); err == nil {
+		return fmt.Errorf("client %q already exists", name)
+	}
+	if err := runDocker(io.Discard, "rm", "--force", "reflux-node-"+old); err != nil {
+		return fmt.Errorf("stopping reflux-node-%s failed, nothing renamed: %w", old, err)
+	}
+	if _, err := s.Rename(old, name); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Renamed %s to %s; the link and the key stay the same.\n", old, name)
 	return apply(s, stdout)
 }
 

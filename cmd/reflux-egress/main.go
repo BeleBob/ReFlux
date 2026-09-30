@@ -81,7 +81,7 @@ func run() {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		log.Fatal(err)
 	}
-	c := &controller{run: execRunner, runDir: runDir}
+	c := &controller{run: execRunner, runDir: runDir, confDir: configDir}
 	stop := make(chan struct{})
 
 	for {
@@ -95,7 +95,12 @@ func run() {
 			if fallback {
 				russia += ", out of the uplink while it does not answer (" + fallbackFile + ")"
 			}
-			log.Printf("configs: russia %s, world %d in order (%s first)", russia, len(world), world[0].Name)
+			// Start with the world server the owner chose, if any.
+			c.picked = c.selection()
+			if i := c.worldIndex(c.picked); i >= 0 {
+				c.cur = i
+			}
+			log.Printf("configs: russia %s, world %d in order (%s first)", russia, len(world), world[c.cur].Name)
 			break
 		}
 		fail(c, "configs", err)

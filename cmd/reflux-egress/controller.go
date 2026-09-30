@@ -67,14 +67,16 @@ func execRunner(stdin, name string, args ...string) (string, error) {
 }
 
 type controller struct {
-	run    runner
-	runDir string // setconf files and status.json
+	run     runner
+	runDir  string // setconf files and status.json
+	confDir string // the configs, and the owner's choice of world server
 
 	ru         awgConf
 	ruDirect   bool // Russia leaves through the uplink, never a tunnel
 	ruFallback bool // Russia leaves through the uplink while its tunnel is down
 	world      []awgConf
-	cur        int // index into world of the active tunnel
+	cur        int    // index into world of the active tunnel
+	picked     string // the world server choice last acted on
 	gw         netip.Addr
 
 	// routeMu serializes the changes of the Russian routes: the prefix
@@ -93,6 +95,7 @@ type status struct {
 	World      string    `json:"world"` // config file of the active world tunnel
 	WorldOK    bool      `json:"world_ok"`
 	WorldSince time.Time `json:"world_since"`
+	Selected   string    `json:"world_selected,omitempty"` // the owner's choice, if any
 	Failures   int       `json:"world_failures"`
 	RUOK       bool      `json:"ru_ok"`
 	RUMode     string    `json:"ru_mode"`               // "tunnel" or "direct": the way in use
@@ -111,6 +114,29 @@ const (
 	directFile   = "ru-direct"
 	fallbackFile = "ru-fallback-direct"
 )
+
+// selectFile names the world server the owner chose (reflux gateway, or
+// the bot). The egress starts with it and switches to it when the file
+// changes; when that server fails, failover goes on in file order.
+const selectFile = "world-select"
+
+// selection is the world server the owner chose, "" for none.
+func (c *controller) selection() string {
+	b, err := os.ReadFile(filepath.Join(c.confDir, selectFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func (c *controller) worldIndex(name string) int {
+	for i, w := range c.world {
+		if w.Name == name {
+			return i
+		}
+	}
+	return -1
+}
 
 // loadConfigs reads world-*.conf (in name order: the failover order) and,
 // unless directFile is there, ru-*.conf (the first one is used) from dir.
@@ -345,17 +371,40 @@ func (c *controller) closeEndpoint(a netip.Addr) {
 	c.ip("route", "del", a.String()+"/32", "via", c.gw.String(), "dev", uplink)
 }
 
-// failover moves the world tunnel to the next config in order. The old
-// server leaves the kill switch, so at most two connections are ever open.
+// failover moves the world tunnel to the next config in order.
 func (c *controller) failover() error {
+	next := (c.cur + 1) % len(c.world)
+	log.Printf("world: %s failed, switching to %s", c.world[c.cur].Name, c.world[next].Name)
+	return c.useWorld(next)
+}
+
+// applySelection switches to the world server the owner chose, once per
+// choice: after a failover away from it, it is not forced back. It
+// reports whether the tunnel moved.
+func (c *controller) applySelection() (bool, error) {
+	sel := c.selection()
+	if sel == c.picked {
+		return false, nil
+	}
+	c.picked = sel
+	i := c.worldIndex(sel)
+	if i < 0 || i == c.cur {
+		return false, nil
+	}
+	log.Printf("world: %s chosen, switching from %s", sel, c.world[c.cur].Name)
+	return true, c.useWorld(i)
+}
+
+// useWorld moves the world tunnel to config next. The old server leaves
+// the kill switch, so at most two connections are ever open.
+func (c *controller) useWorld(next int) error {
 	old := c.world[c.cur]
-	c.cur = (c.cur + 1) % len(c.world)
-	next := c.world[c.cur]
-	log.Printf("world: %s failed, switching to %s", old.Name, next.Name)
-	if old.Endpoint.Addr() != next.Endpoint.Addr() {
+	c.cur = next
+	n := c.world[c.cur]
+	if old.Endpoint.Addr() != n.Endpoint.Addr() {
 		c.closeEndpoint(old.Endpoint.Addr())
 	}
-	if err := c.up(worldIface, next); err != nil {
+	if err := c.up(worldIface, n); err != nil {
 		return err
 	}
 	// up flushes the interface's address, and the kernel drops every route
@@ -518,6 +567,16 @@ func (c *controller) watch(stop <-chan struct{}) {
 	c.st.RUOK, c.st.RUMode = true, ruModeName(c.onDirect)
 	c.mu.Unlock()
 	for {
+		var errText string
+		if moved, err := c.applySelection(); err != nil {
+			errText = "world: " + err.Error()
+			log.Print(errText)
+		} else if moved {
+			failures = 0
+			c.mu.Lock()
+			c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
+			c.mu.Unlock()
+		}
 		worldOK := c.probe(worldIface, worldProbes, worldTCP)
 		if worldOK {
 			failures = 0
@@ -527,7 +586,6 @@ func (c *controller) watch(stop <-chan struct{}) {
 		// One lost ping is not an outage: Russia is reported down, like the
 		// world tunnel is failed over, after failLimit rounds.
 		ruOK, ruErr := c.russia(&ru)
-		var errText string
 		if ruErr != nil {
 			errText = ruErr.Error()
 			log.Print(errText)
@@ -553,6 +611,7 @@ func (c *controller) watch(stop <-chan struct{}) {
 		}
 		c.st.WorldOK, c.st.RUOK, c.st.Failures, c.st.Error = worldOK, ruOK, failures, errText
 		c.st.RUMode, c.st.RUFallback = mode, c.onDirect && !c.ruDirect
+		c.st.Selected = c.picked
 		c.st.Updated = time.Now().UTC()
 		st := c.st
 		c.mu.Unlock()

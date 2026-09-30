@@ -38,6 +38,28 @@ type Client struct {
 	// is not run, while the key, the document and the state are kept.
 	Paused  bool      `json:"paused,omitempty"`
 	Expires time.Time `json:"expires,omitzero"`
+	// Telegram is the account the client belongs to, when linked.
+	Telegram *TGAccount `json:"telegram,omitempty"`
+}
+
+// TGAccount is a Telegram account a client is linked to.
+type TGAccount struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+// String is how the account reads: its name and @username.
+func (a TGAccount) String() string {
+	switch {
+	case a.Name != "" && a.Username != "":
+		return a.Name + " (@" + a.Username + ")"
+	case a.Username != "":
+		return "@" + a.Username
+	case a.Name != "":
+		return a.Name
+	}
+	return fmt.Sprint(a.ID)
 }
 
 // Transports a channel can use. vyandex needs a Yandex login (a cookies
@@ -259,6 +281,29 @@ func (s Store) List() ([]Client, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// Rename gives a channel a new name: its directories move, and its key,
+// document and state stay. The caller stops the old node first.
+func (s Store) Rename(old, name string) (Client, error) {
+	c, err := s.Get(old)
+	if err != nil {
+		return Client{}, err
+	}
+	if err := validName(name); err != nil {
+		return Client{}, err
+	}
+	if _, err := os.Stat(s.clientDir(name)); err == nil {
+		return Client{}, fmt.Errorf("client %q already exists", name)
+	}
+	if err := os.Rename(s.clientDir(old), s.clientDir(name)); err != nil {
+		return Client{}, err
+	}
+	if err := os.Rename(s.stateDir(old), s.stateDir(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Client{}, err
+	}
+	c.Name = name
+	return c, s.Save(c)
 }
 
 // Revoke deletes a channel's key, config and state and keeps its

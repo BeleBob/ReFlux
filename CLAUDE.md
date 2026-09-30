@@ -76,7 +76,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   RU prefixes (RIPE delegated, baked in image, refreshed daily) routed to
   `awg-ru` (or, with `egress/ru-direct`, out of `eth0` with the kill switch
   opening only nft set `ru4`; with `egress/ru-fallback-direct`, out of `eth0` only
-  while `awg-ru` fails `failLimit` rounds, back after `recoverRounds`), world failover in file order without automatic
+  while `awg-ru` fails `failLimit` rounds, back after `recoverRounds`),
+  the owner's world server choice in `egress/world-select` (`reflux gateway`,
+  applied once per change, failover still moves on), world failover in file order without automatic
   return. Never exits on errors: nodes share its netns; after an egress
   restart `reflux heal` (cron) recreates the stranded nodes.
 - `deploy/reflux/egress/Dockerfile` (build from repo root),

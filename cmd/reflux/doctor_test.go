@@ -27,6 +27,16 @@ type hostState struct {
 // around it as st describes. It returns the doctor's output and error.
 func runDoctor(t *testing.T, st hostState) (string, error) {
 	t.Helper()
+	fakeHost(t, st)
+	var out strings.Builder
+	err := run([]string{"doctor"}, nil, &out)
+	return out.String(), err
+}
+
+// fakeHost sets up a data directory with one client, phone, and fakes the
+// host around it as st describes.
+func fakeHost(t *testing.T, st hostState) Store {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("REFLUX_HOME", home)
 	fakeDocker(t, "")
@@ -92,9 +102,7 @@ func runDoctor(t *testing.T, st hostState) (string, error) {
 		}
 		return nil
 	}
-	var out strings.Builder
-	err := run([]string{"doctor"}, nil, &out)
-	return out.String(), err
+	return s
 }
 
 func TestDoctorOnAHealthyHost(t *testing.T) {

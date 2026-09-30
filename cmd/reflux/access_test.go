@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +184,46 @@ func TestCommandsTakeTurns(t *testing.T) {
 	unlock()
 	if err := run([]string{"pause", "phone"}, nil, io.Discard); err != nil {
 		t.Errorf("pause after the lock was released: %v", err)
+	}
+}
+
+func TestRenameKeepsKeyDocumentAndState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	calls := fakeDocker(t, "")
+	if err := run([]string{"add", "phone", "--url", testURL, "--no-apply", "--expires", "30d"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Root: home}
+	key, _ := s.Key("phone")
+	before, _ := s.Get("phone")
+	os.WriteFile(filepath.Join(s.stateDir("phone"), "cookies.json"), []byte("{}"), 0o600)
+	if err := run([]string{"rename", "phone", "dima"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.Get("dima")
+	if err != nil || c.URL != testURL || !c.Expires.Equal(before.Expires) || !c.Created.Equal(before.Created) {
+		t.Fatalf("renamed client %+v, %v", c, err)
+	}
+	if k, _ := s.Key("dima"); k != key {
+		t.Error("the key changed")
+	}
+	if _, err := os.Stat(filepath.Join(s.stateDir("dima"), "cookies.json")); err != nil {
+		t.Error("the state did not move")
+	}
+	if _, err := s.Get("phone"); err == nil {
+		t.Error("the old name is still there")
+	}
+	joined := strings.Join(*calls, "\n")
+	stop, up := strings.Index(joined, "rm --force reflux-node-phone"), strings.Index(joined, "up --detach --remove-orphans")
+	if stop < 0 || up < stop {
+		t.Errorf("the old node must stop before the new one starts:\n%s", joined)
+	}
+	if err := run([]string{"rename", "dima", "BAD NAME"}, nil, io.Discard); err == nil {
+		t.Error("a bad name accepted")
+	}
+	run([]string{"add", "other", "--url", testURL + "x", "--no-apply"}, nil, io.Discard)
+	if err := run([]string{"rename", "dima", "other"}, nil, io.Discard); err == nil {
+		t.Error("renamed over an existing client")
 	}
 }
