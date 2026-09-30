@@ -12,10 +12,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"openflux/share"
@@ -708,11 +711,26 @@ func cmdWeb(s Store, args []string, stdout io.Writer) error {
 			return err
 		}
 		log.Printf("web: serving on http://%s", cfg.Listen)
-		stop := make(chan struct{})
-		defer close(stop)
-		go w.stats.run(stop)
 		srv := &http.Server{Addr: cfg.Listen, Handler: w.routes(), ReadHeaderTimeout: 10 * time.Second}
-		return srv.ListenAndServe()
+		// On SIGTERM (systemd), the sampler saves the traffic and the
+		// history before the process goes.
+		stop, sampled := make(chan struct{}), make(chan struct{})
+		go func() { w.stats.run(stop); close(sampled) }()
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		go func() {
+			<-sig
+			close(stop)
+			select {
+			case <-sampled:
+			case <-time.After(10 * time.Second):
+			}
+			srv.Close()
+		}()
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	case "login":
 		link, err := s.loginLink()
 		if err != nil {
