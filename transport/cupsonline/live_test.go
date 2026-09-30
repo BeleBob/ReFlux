@@ -149,7 +149,7 @@ func TestLiveCups(t *testing.T) {
 
 	t.Run("re-join keeps the session", func(t *testing.T) {
 		a := client.wss[0].auth()
-		again, err := joinRoom(context.Background(), a.roomUUID, a.httpClient)
+		again, err := joinRoom(context.Background(), baseRoomURL, a.roomUUID, a.httpClient)
 		if err != nil {
 			t.Fatal(err)
 		}

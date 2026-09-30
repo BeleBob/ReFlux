@@ -574,6 +574,24 @@ func TestDroppedConnectionReconnectsWithoutReloadingThePage(t *testing.T) {
 	deliver(t, client, exit, []byte("still works"), 2*time.Second)
 }
 
+// A running transport keeps the room URL it was made with. Its reconnect
+// goroutines read the package variable, which tests aim at each new fake
+// server, and they can outlive Stop: the race detector caught one of them
+// reading it while a test's cleanup put it back.
+func TestRunningTransportKeepsItsRoomURL(t *testing.T) {
+	f := newFakeCups(t)
+	cfg := fastConfig()
+	exit := mustStart(t, "", false, cfg)
+	ids := exit.RoomUUIDs()
+	f.locked(func() { f.failPages[ids[1]] = 3 })
+	client := mustStart(t, packRooms(ids), true, cfg)
+
+	baseRoomURL = "http://127.0.0.1:1/live-coding/" // restored by newFakeCups
+	waitFor(t, 5*time.Second, "late room joined at the transport's own URL", func() bool {
+		return client.wss[1].connected.Load()
+	})
+}
+
 // A room the client couldn't enter at start still gets a channel and joins
 // once it can. Dropping it left the exit node's traffic in it unheard.
 func TestClientRetriesRoomItCouldNotEnterAtStart(t *testing.T) {

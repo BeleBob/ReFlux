@@ -262,12 +262,13 @@ var (
 	errStopped = errors.New("cups: транспорт остановлен")
 )
 
-func joinURL(roomUUID string) string { return baseRoomURL + "?room=" + roomUUID }
+func joinURL(baseURL, roomUUID string) string { return baseURL + "?room=" + roomUUID }
 
-// joinRoom enters an existing room. A room that's gone can come back as a
-// fresh one (a different uuid) instead of an error, so that counts as gone.
-func joinRoom(ctx context.Context, roomUUID string, session *http.Client) (*cupsAuth, error) {
-	a, err := authorize(ctx, joinURL(roomUUID), session)
+// joinRoom enters an existing room under baseURL. A room that's gone can
+// come back as a fresh one (a different uuid) instead of an error, so that
+// counts as gone.
+func joinRoom(ctx context.Context, baseURL, roomUUID string, session *http.Client) (*cupsAuth, error) {
+	a, err := authorize(ctx, joinURL(baseURL, roomUUID), session)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +494,10 @@ type cupsWS struct {
 	idx      int
 	roomUUID string
 	joinedAt time.Time
+	// baseURL is the transport's, read once when it was made: the
+	// reconnect goroutines may outlive Stop, and tests aim the package
+	// variable at a new fake server in between.
+	baseURL string
 
 	// authPtr is swapped on every re-join (fresh tokens), so it's atomic. It
 	// stays nil until the room has been entered at least once.
@@ -632,7 +637,7 @@ func (w *cupsWS) backoff(delay time.Duration) time.Duration {
 // join enters the room for fresh tokens, in the same session as before. This
 // is also where a closed room shows itself.
 func (w *cupsWS) join() error {
-	a, err := joinRoom(w.ctx, w.roomUUID, w.session)
+	a, err := joinRoom(w.ctx, w.baseURL, w.roomUUID, w.session)
 	if err != nil {
 		// Next time from a clean session, in case this one is what's broken.
 		w.session = nil
@@ -1144,6 +1149,7 @@ func (t *CupsonlineTransport) Start() error {
 		ws := &cupsWS{
 			idx:         i,
 			roomUUID:    s.id,
+			baseURL:     t.baseURL,
 			joinedAt:    joinedAt,
 			goneDelay:   t.config.RoomGoneRetryMin,
 			onRoomState: t.reportRooms,
@@ -1274,7 +1280,7 @@ func (t *CupsonlineTransport) joinListed() []roomSlot {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slots[i].auth, slots[i].err = joinRoom(t.ctx, id, nil)
+			slots[i].auth, slots[i].err = joinRoom(t.ctx, t.baseURL, id, nil)
 		}()
 	}
 	wg.Wait()
@@ -1491,7 +1497,7 @@ func mustParseURL(rawURL string) *url.URL {
 // as name -> value. Every room keeps its own session (see cupsWS.session),
 // so re-joining doesn't add a new participant; they all live on one site.
 func (t *CupsonlineTransport) FetchCookies() (map[string]string, error) {
-	u, err := url.Parse(baseRoomURL)
+	u, err := url.Parse(t.baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1513,7 +1519,7 @@ func (t *CupsonlineTransport) ApplyCookies(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	u, _ := url.Parse(baseRoomURL)
+	u, _ := url.Parse(t.baseURL)
 	cookies := make([]*http.Cookie, 0, len(values))
 	for k, v := range values {
 		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
