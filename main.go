@@ -14,6 +14,7 @@ import (
 
 	"github.com/p1neappleXpress/OpenFlux/netbind"
 	"github.com/p1neappleXpress/OpenFlux/socks5"
+	"github.com/p1neappleXpress/OpenFlux/streamproxy"
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
@@ -21,6 +22,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/phpbox"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 	"github.com/p1neappleXpress/OpenFlux/tunnel"
 	"github.com/p1neappleXpress/OpenFlux/utils"
@@ -530,6 +532,25 @@ DEPRECATED (removed in v2)
 	// slower than l3 (SNAT/DNAT: Linux as root, Windows with WinDivert).
 	if *role == roleExit && *mode == "l4" {
 		log.Printf("warning: exit on l4 (gVisor). l3 is faster: Linux as root, Windows as Administrator.")
+	}
+
+	// --mode=stream: the client speaks the phpbox stream mux (OPEN/DATA/CLOSE
+	// frames) over the transport instead of IP packets through gVisor, and a
+	// local SOCKS5 hands each app connection to a mux stream. The exit is a
+	// phpbox exit (deploy/phpbox over cups). This is a circuit-level TCP
+	// tunnel, not L7 - the exit never parses the application protocol.
+	// The debug level is set here, not only further down: this branch returns before that code runs.
+	if *role == roleClient && *mode == "stream" {
+		utils.SetLevel(*debug)
+		if *sensitive || *sensitiveAlias {
+			utils.SetSensitive(true)
+		}
+		if *inbound == inboundTUN {
+			runStreamTUN(*transportType, globalDocUrl)
+			return
+		}
+		runStreamClient(*transportType, globalDocUrl, *socksAddr, *httpProxyAddr, *ipcSocketPath)
+		return
 	}
 
 	exitMode, err := tunnel.ParseExitMode(*mode)
@@ -1049,6 +1070,91 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 	}
 
 	select {}
+}
+
+// runStreamClient runs the --mode=stream client: a raw transport carries the
+// phpbox stream mux, and a local SOCKS5 (and optional HTTP) proxy dials each
+// app connection out as a mux stream to the phpbox exit. No gVisor, no IP
+// packets. The proxying itself is package streamproxy, shared with the
+// mobile bridges.
+// streamCarrier builds the carrier the stream mux rides.
+func streamCarrier(transportType, url string) phpbox.Carrier {
+	cfg := transport.DefaultConfig()
+	switch transportType {
+	case "cupsonline":
+		return cupsonline.NewCupsonlineTransport(url, cfg, true)
+	case "yandex", "":
+		return yandex.NewYandexDocsTransport(url, cfg)
+	case "vyandex":
+		t, err := newVolgaTransport(url, cfg)
+		if err != nil {
+			log.Fatalf("--mode=stream vyandex: %v", err)
+		}
+		return t
+	case "mailru":
+		return mailru.NewMailruDocsTransport(url, cfg)
+	}
+	log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
+	return nil
+}
+
+// runStreamTUN is the stream mode as a full tunnel (--inbound=tun): the
+// system's traffic goes into a local stack that opens one mux stream per TCP
+// connection (tunnel.StreamNet, which is a transport, so the utun/Wintun
+// client runs on it as it does on any other).
+func runStreamTUN(transportType, url string) {
+	sn := tunnel.NewStreamNet(streamCarrier(transportType, url))
+	if err := sn.Start(); err != nil {
+		log.Fatalf("--mode=stream: %v", err)
+	}
+	log.Printf("Running as CLIENT (stream mux over %s, full tunnel)", transportType)
+	runClientTUN(sn)
+}
+
+func runStreamClient(transportType, url, socksAddr, httpProxyAddr, ipcSocket string) {
+	carrier := streamCarrier(transportType, url)
+	p, err := streamproxy.Start(streamproxy.Options{Carrier: carrier, Socks: socksAddr, HTTP: httpProxyAddr, Label: transportType})
+	if err != nil {
+		log.Fatalf("--mode=stream: %v", err)
+	}
+	defer p.Stop()
+
+	// The app's IPC bridge works here too: traffic totals for its speed counters.
+	if ipcSocket != "" {
+		var exchanger transport.CookieExchanger
+		if x, ok := carrier.(transport.CookieExchanger); ok {
+			exchanger = x
+		}
+		srv := ipc.NewServer(ipcSocket, &coreIPCHandler{exchanger: exchanger})
+		if err := srv.Listen(); err != nil {
+			log.Fatalf("IPC listen %s: %v", ipcSocket, err)
+		}
+		defer srv.Close()
+		statusServer = srv
+		go streamStatusLoop(srv, p)
+	}
+
+	if httpProxyAddr != "" {
+		log.Printf("HTTP proxy on %s", httpProxyAddr)
+	}
+	log.Printf("Running as CLIENT (stream mux over %s, SOCKS5 on %s)", transportType, socksAddr)
+	select {}
+}
+
+// streamStatusLoop reports the stream client to the app every second.
+func streamStatusLoop(srv *ipc.Server, p *streamproxy.Proxy) {
+	started := time.Now()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		_ = srv.SendStatus(&ipc.StatusPayload{
+			Running:   true,
+			Connected: p.Connected(),
+			BytesIn:   uint64(p.BytesReceived()),
+			BytesOut:  uint64(p.BytesSent()),
+			UptimeMs:  time.Since(started).Milliseconds(),
+		})
+	}
 }
 
 func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr string, exitMode tunnel.ExitMode) {

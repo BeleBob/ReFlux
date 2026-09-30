@@ -7,6 +7,103 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ### Added
 
+- phpbox page (`deploy/phpbox`): opening an exit's URL in a browser shows a
+  status page (OpenFlux look, light and dark) instead of silently running:
+  live state, a debug log, Start/Stop, and a check that a node is already
+  running on that target (a heartbeat plus a lock), so a second open or a
+  pinger attaches to the first instead of starting another. Anything that is
+  not a browser (a pinger, curl) runs the node exactly as before, and the
+  old `?url=` / `?room=` addresses are unchanged. The page reads
+  `openflux://` links and draws their QR in the browser with the core's own
+  `share` package compiled to WebAssembly (`cmd/sharewasm`,
+  `deploy/phpbox/build-wasm.sh`), so there is one link parser for every
+  client; the secret in a link never leaves the browser.
+- `deploy/phpbox/build-bundle.sh` builds the upload set from the sources
+  (token in `config.php`, which also works where `putenv` is disabled).
+- Link compatibility tests (`share/compat_test.go`): links written by
+  earlier builds are frozen as literals and must keep reading, including how
+  a link is mangled by chats and terminals, unknown JSON fields, and the
+  stability of the error codes.
+
+- phpbox self-renewing tunnel (`&chain=1`, what the page asks for): before a
+  generation ends it starts the next one with a request to its own host; the
+  new one joins, takes every new stream, and the old one drains the streams
+  it has. A stream goes to exactly one generation (an atomic `mkdir` marker
+  decides while both are up). `a=stop` ends the whole chain.
+- `--mode=stream` logs like the packet modes: `-d` one line per mux frame
+  (`[STREAM] -> 526 bytes - stream 7 DATA`), `-dd` operational logs (streams
+  opening and closing, a busy carrier), `-ddd` hexdumps of DATA payloads.
+  Until now the level was set after the stream branch had returned, so none
+  of it showed.
+
+- Stream mode is now a library (`streamproxy`: carrier -> mux -> SOCKS5 and an
+  optional HTTP proxy, with counters) used by `--mode=stream` and, next, the
+  mobile bridges; `--mode=stream` also takes `--http-proxy` and `--ipc-socket`.
+- `openflux://` links and QR codes can name the stream mode (`share.Config.Mode`,
+  `"stream"`): one carrier (cups.online or Mail.ru: the two the PHP exit has ports for), no session, no secret.
+  Links without a mode are the classic tunnel as before; codes `unknown_mode`,
+  `stream_transport`, `stream_one_transport`, `stream_plain_only`.
+- phpbox flow control: windows per stream (256 KB) and over all streams (512 KB)
+  with ACK frames, agreed in OPEN (`host:port\0fc` / OPEN_OK `fc`), so old clients
+  and exits are unaffected. Without it a saturated carrier queue buried small
+  frames: over Mail.ru, four parallel downloads starved new TLS handshakes and
+  uploads for minutes. With it (same test): 60 of 60 handshakes complete while four
+  8 MB downloads run, and a 4 MB upload takes 33 s instead of timing out.
+
+- Own node without a server: `provision/phphost` puts the PHP exit on any web
+  host over FTP and checks that it runs. `probe` finds the web folder (also
+  a level or two down: `domains/<site>/public_html`, `www/<site>`) and
+  whether it is writable, `deploy` uploads the bundle embedded in the core
+  (`deploy/phpbox`, with the link parser as WebAssembly), keeps the token of an
+  earlier install and checks file sizes, `check` asks the site (passing the
+  iFastNet-style AES browser check in plain Go, so no browser is needed),
+  `start` runs the node and waits for it, plus `stop`, `node`, `newRoom`, `link`,
+  `remove`. Answers are codes (`ftp_login`, `ftp_no_webroot`, `site_antibot`,
+  `php_missing`, ...), never text. One dispatcher, `phphost.Call`, serves the
+  desktop wizard (`--node-wizard`, methods `php.*`, with progress lines), the
+  Android bridge (`PhpCall`, `PhpProgress`, `PhpCancel`) and the iOS C API
+  (`OpenFluxPhpCall`). The node answers `a=ping` for it.
+- Android and iOS start the stream mode: `StartStreamProxy` /
+  `OpenFluxStartStreamClient` (SOCKS5 with the usual auth and bypass list).
+- The node's page shows the link and QR code apps scan for that node (made by
+  the core as a stream-mode `openflux://` link).
+
+- Stream mode as a full tunnel (`tunnel.StreamNet`): the device's IP packets
+  (utun/Wintun, Android VpnService, an iOS packet tunnel) go into a local
+  stack that opens one mux stream per TCP connection. DNS is answered on the
+  device with fake addresses (198.18.0.0/16) and the name is opened at the exit,
+  so nothing is resolved locally; TCP on ports 80/443 only, QUIC, other UDP
+  and IPv6 are dropped and apps fall back to TCP. It is a `transport.Transport`,
+  so every packet client runs on it unchanged: `--mode=stream --inbound=tun`,
+  `mobile.StartStreamPacket`, `OpenFluxStartStreamPacketTunnel`.
+
+### Fixed
+
+- Mail.ru transport dropped data under load: the server batches several
+  cursor entries into one message, and only the first was read; a message
+  that merely mentioned a peer's keep-alive was dropped whole. Every entry
+  is delivered now, in order (`cursorPayloads`).
+- Stream client: `Mux.send` ignored the carrier's "write queue full" and
+  dropped the frame, which corrupts the stream (a lost byte inside a TLS
+  record fails the handshake). Sends wait with backoff, for up to 15 s, and
+  report an error instead of losing data; `conn.Write` passes it on.
+- phpbox WebSocket client: a frame arriving in pieces (a 22 KB message on a
+  slow link) was cut short and desynchronised the stream; frames already in
+  PHP's TLS buffer were not seen by `stream_select`; fragmented messages
+  were not reassembled; a closed link was indistinguishable from a timeout,
+  so a node stayed deaf after the server dropped it. Reading is buffered,
+  fragments are reassembled, and the mux reconnects (with backoff).
+- phpbox mux: when a run ends, the client is told (CLOSE) about the streams
+  that end with it; streams idle for 300 s are closed (a lost CLOSE no
+  longer leaks a socket); a destination with several addresses is retried on
+  the next one when the first does not answer.
+
+### Changed
+
+- phpbox mux: destinations are dialed asynchronously (a slow one no longer
+  stalls the others), writes to a full destination are queued instead of
+  dropped, and the frame buffer is consumed by offset.
+
 - The node wizard (`--node-wizard`, `mobile.Node*`) lets a new channel use
   any mix of a Yandex document, a Mail.ru public document and cups.online
   rooms besides direct (`provision.ChannelTransport`); the rooms are created
