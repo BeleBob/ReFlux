@@ -37,6 +37,7 @@ USAGE
   reflux heal              recreate nodes stranded by an egress restart
                            (quiet; for cron: * * * * * reflux heal)
   reflux status            egress tunnels, nodes, who is online
+  reflux doctor            check the host, egress and every node; says what to fix
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -52,9 +53,12 @@ the channel: pass them to its client only.
 var runDocker = func(stdout io.Writer, args ...string) error {
 	cmd := exec.Command("docker", args...)
 	cmd.Stdout = stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = dockerStderr
 	return cmd.Run()
 }
+
+// dockerStderr receives docker's error output.
+var dockerStderr io.Writer = os.Stderr
 
 func main() {
 	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
@@ -159,6 +163,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdLogs(rest, stdout)
 	case "heal":
 		return heal(s, stdout)
+	case "doctor":
+		return cmdDoctor(s, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }
