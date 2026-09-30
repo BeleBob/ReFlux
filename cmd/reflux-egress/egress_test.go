@@ -682,3 +682,40 @@ func TestWorldServerChoice(t *testing.T) {
 		t.Error("an unknown server moved the tunnel")
 	}
 }
+
+// After a restart the egress starts with the world server that held last,
+// unless the owner chose one.
+func TestStartsWithTheLastWorldThatHeld(t *testing.T) {
+	c := testController(t, &fakeNet{})
+	c.confDir, c.stateDir = t.TempDir(), filepath.Join(t.TempDir(), "state")
+	if i := c.firstWorld(); i != 0 {
+		t.Errorf("nothing remembered: start %d, want 0", i)
+	}
+	now := time.Now()
+	c.cur = 1
+	c.remember(true, now.Add(-time.Minute), now)
+	if _, err := os.Stat(filepath.Join(c.stateDir, lastFile)); err == nil {
+		t.Fatal("remembered a server that held for a minute")
+	}
+	c.remember(false, now.Add(-time.Hour), now)
+	if _, err := os.Stat(filepath.Join(c.stateDir, lastFile)); err == nil {
+		t.Fatal("remembered a server that does not answer")
+	}
+	c.remember(true, now.Add(-3*time.Minute), now)
+	restarted := testController(t, &fakeNet{})
+	restarted.confDir, restarted.stateDir = c.confDir, c.stateDir
+	if i := restarted.firstWorld(); i != 1 {
+		t.Errorf("after a restart: start %d, want 1 (world-2)", i)
+	}
+	// The owner's choice wins.
+	os.WriteFile(filepath.Join(c.confDir, selectFile), []byte("world-1.conf\n"), 0o600)
+	if i := restarted.firstWorld(); i != 0 {
+		t.Errorf("with a choice: start %d, want 0", i)
+	}
+	// A remembered server that is gone from the configs is ignored.
+	os.Remove(filepath.Join(c.confDir, selectFile))
+	os.WriteFile(filepath.Join(c.stateDir, lastFile), []byte("world-9.conf\n"), 0o600)
+	if i := restarted.firstWorld(); i != 0 {
+		t.Errorf("unknown remembered server: start %d, want 0", i)
+	}
+}
