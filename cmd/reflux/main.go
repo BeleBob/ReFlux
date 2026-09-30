@@ -38,6 +38,9 @@ USAGE
                            (quiet; for cron: * * * * * reflux heal)
   reflux status            egress tunnels, nodes, who is online
   reflux doctor            check the host, egress and every node; says what to fix
+  reflux bot <setup|install|test|run>
+                           Telegram bot: alerts when a doctor check changes,
+                           /status, /doctor, /pause, /resume, /expire
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -173,6 +176,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return heal(s, stdout)
 	case "doctor":
 		return cmdDoctor(s, stdout)
+	case "bot":
+		return cmdBot(s, rest, stdin, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }

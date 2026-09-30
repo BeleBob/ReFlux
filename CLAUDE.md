@@ -50,10 +50,13 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 ## ReFlux components (all new files; no upstream file is changed)
 
 - `cmd/reflux` — host CLI (`add/list/show/pause/resume/expire/revoke/apply/update/
-  restart/status/logs/heal/doctor`). Nodes serve the core's IPC bridge
+  restart/status/logs/heal/doctor/bot`). Nodes serve the core's IPC bridge
   (`IPCSocket = /state/ipc.sock`); `list`/`status`/`doctor` read who is online and
   traffic from it. `render` re-syncs `node.conf` from `client.json`; `apply`
-  recreates nodes started before their `node.conf` changed.
+  recreates nodes started before their `node.conf` changed. `reflux bot` is a
+  Telegram bot (systemd user service, token in `~/reflux/telegram.json`): it runs
+  the doctor checks every minute and reports findings whose `Sig` changed for
+  two runs; it talks to the Bot API from the host, not through egress.
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**
