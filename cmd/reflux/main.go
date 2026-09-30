@@ -31,7 +31,7 @@ USAGE
   reflux restart           recreate egress and all nodes
   reflux heal              recreate nodes stranded by an egress restart
                            (quiet; for cron: * * * * * reflux heal)
-  reflux status            containers and tunnels
+  reflux status            egress tunnels, nodes, who is online
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -114,12 +114,18 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return apply(s, stdout)
 	case "status":
-		if err := runDocker(stdout, composeArgs(s, "ps", "--all")...); err != nil {
-			return err
+		states := containerStates()
+		egress := states["reflux-egress"]
+		if egress == "" {
+			egress = "not running"
 		}
-		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "egress container: %s\n", egress)
 		if err := runDocker(stdout, "exec", "reflux-egress", "reflux-egress", "status"); err != nil {
 			fmt.Fprintln(stdout, "egress: no status (not running?)")
+		}
+		fmt.Fprintln(stdout)
+		if err := printClients(s, stdout, states); err != nil {
+			return err
 		}
 		if err := checkHost(); err != nil {
 			fmt.Fprintln(stdout, "WARNING:", err)
@@ -220,6 +226,13 @@ func cmdAdd(s Store, args []string, stdout io.Writer) error {
 }
 
 func cmdList(s Store, stdout io.Writer) error {
+	return printClients(s, stdout, containerStates())
+}
+
+// printClients prints one line per channel: its node's container state
+// and, from the node itself, whether the client is on the channel now and
+// the traffic since the node started.
+func printClients(s Store, stdout io.Writer, states map[string]string) error {
 	clients, err := s.List()
 	if err != nil {
 		return err
@@ -228,17 +241,30 @@ func cmdList(s Store, stdout io.Writer) error {
 		fmt.Fprintln(stdout, "No clients. Add one: reflux add <name> --transport mailru --url <document-url>")
 		return nil
 	}
-	states := containerStates()
+	live := nodeStatuses(s, clients)
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTRANSPORT\tCREATED\tNODE")
+	fmt.Fprintln(w, "NAME\tTRANSPORT\tNODE\tCLIENT\tDOWN\tUP")
 	for _, c := range clients {
-		st := states["reflux-node-"+c.Name]
-		if st == "" {
-			st = "not running"
+		node := states["reflux-node-"+c.Name]
+		if node == "" {
+			node = "not running"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", c.Name, c.Transport, c.Created.Format("2006-01-02"), st)
+		client, down, up := "-", "-", "-"
+		if st, ok := live[c.Name]; ok {
+			client = "offline"
+			if st.Connected {
+				client = "online"
+			}
+			// The node's view: what it sends goes down to the client.
+			down, up = humanBytes(st.BytesOut), humanBytes(st.BytesIn)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", c.Name, c.Transport, node, client, down, up)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, "DOWN/UP: channel traffic to/from the client since the node started.")
+	return nil
 }
 
 // containerStates maps container names to their docker status line. It
@@ -369,11 +395,17 @@ func composeArgs(s Store, args ...string) []string {
 	return append([]string{"compose", "--file", composePath(s), "--project-name", "reflux"}, args...)
 }
 
-// render writes compose.yml for the current clients.
+// render writes compose.yml for the current clients and brings their
+// node.conf files up to date.
 func render(s Store) error {
 	clients, err := s.List()
 	if err != nil {
 		return err
+	}
+	for _, c := range clients {
+		if err := s.SyncConf(c); err != nil {
+			return fmt.Errorf("%s: node.conf: %w", c.Name, err)
+		}
 	}
 	b, err := composeYAML(s.Root, clients, options())
 	if err != nil {
@@ -399,7 +431,62 @@ func apply(s Store, stdout io.Writer) error {
 	if err := checkHost(); err != nil {
 		return err
 	}
-	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans")...)
+	if err := runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans")...); err != nil {
+		return err
+	}
+	return recreateStale(s, stdout)
+}
+
+// recreateStale recreates the nodes started before their node.conf last
+// changed: compose sees the file only as a mounted directory and would
+// leave them running on the old config.
+func recreateStale(s Store, stdout io.Writer) error {
+	clients, err := s.List()
+	if err != nil || len(clients) == 0 {
+		return err
+	}
+	started := startTimes(clients)
+	var stale []string
+	for _, c := range clients {
+		t, ok := started["reflux-node-"+c.Name]
+		if !ok {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(s.clientDir(c.Name), "node.conf"))
+		if err == nil && st.ModTime().After(t) {
+			stale = append(stale, "node-"+c.Name)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	fmt.Fprintf(stdout, "Config changed; recreating %s\n", strings.Join(stale, ", "))
+	return runDocker(stdout, composeArgs(s, append([]string{"up", "--detach", "--no-deps", "--force-recreate"}, stale...)...)...)
+}
+
+// startTimes maps the running reflux containers (egress and the clients'
+// nodes) to when they started.
+func startTimes(clients []Client) map[string]time.Time {
+	names := []string{"reflux-egress"}
+	for _, c := range clients {
+		names = append(names, "reflux-node-"+c.Name)
+	}
+	var out strings.Builder
+	args := append([]string{"inspect", "--format", "{{.Name}} {{.State.Running}} {{.State.StartedAt}}"}, names...)
+	// inspect fails when a container is missing; what it printed still counts.
+	runDocker(&out, args...)
+	started := map[string]time.Time{}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 || f[1] != "true" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, f[2])
+		if err == nil {
+			started[strings.TrimPrefix(f[0], "/")] = t
+		}
+	}
+	return started
 }
 
 func checkHost() error {
@@ -423,25 +510,7 @@ func heal(s Store, stdout io.Writer) error {
 	if err != nil || len(clients) == 0 {
 		return err
 	}
-	names := []string{"reflux-egress"}
-	for _, c := range clients {
-		names = append(names, "reflux-node-"+c.Name)
-	}
-	var out strings.Builder
-	args := append([]string{"inspect", "--format", "{{.Name}} {{.State.Running}} {{.State.StartedAt}}"}, names...)
-	// inspect fails when a container is missing; what it printed still counts.
-	runDocker(&out, args...)
-	started := map[string]time.Time{}
-	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
-		f := strings.Fields(line)
-		if len(f) != 3 || f[1] != "true" {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339Nano, f[2])
-		if err == nil {
-			started[strings.TrimPrefix(f[0], "/")] = t
-		}
-	}
+	started := startTimes(clients)
 	egress, ok := started["reflux-egress"]
 	if !ok {
 		return nil // egress is down: nothing to rejoin yet

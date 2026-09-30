@@ -164,7 +164,7 @@ func TestRevokeDeletesKeyConfigAndState(t *testing.T) {
 func TestNodeConfIsAClassicExitWithAKey(t *testing.T) {
 	conf := nodeConf(Client{Name: "phone", Transport: "mailru", URL: testURL})
 	for _, want := range []string{"[Interface]", "Role = exit", "Mode = l4", "Transport = mailru",
-		"URL = " + testURL, "EncryptionKeyFile = /config/key", "CookieStore = /state/cookies.json"} {
+		"URL = " + testURL, "EncryptionKeyFile = /config/key", "CookieStore = /state/cookies.json", "IPCSocket = /state/ipc.sock"} {
 		if !strings.Contains(conf, want+"\n") {
 			t.Errorf("node.conf lacks %q:\n%s", want, conf)
 		}

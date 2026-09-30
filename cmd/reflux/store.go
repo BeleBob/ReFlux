@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -153,6 +154,26 @@ func (s Store) write(c Client, key string) error {
 		}
 	}
 	return nil
+}
+
+// SyncConf rewrites c's node.conf when it differs from what this reflux
+// renders, as after an update that adds a setting. A running node read its
+// config at start: apply recreates the nodes whose config is newer.
+func (s Store) SyncConf(c Client) error {
+	path := filepath.Join(s.clientDir(c.Name), "node.conf")
+	want := []byte(nodeConf(c))
+	have, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(have, want) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, want, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Get reads one channel.
