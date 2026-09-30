@@ -197,6 +197,18 @@ func (s Store) Save(c Client) error {
 	return os.Rename(tmp, path)
 }
 
+// errBusy: another reflux command holds the data directory.
+var errBusy = errors.New("another reflux command is changing the clients; try again in a moment")
+
+// Lock serializes the commands that change the data directory or the
+// containers: the CLI, heal from cron and the bot may run at once.
+func (s Store) Lock(wait time.Duration) (func(), error) {
+	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+		return nil, err
+	}
+	return lockFile(filepath.Join(s.Root, ".lock"), wait)
+}
+
 // Get reads one channel.
 func (s Store) Get(name string) (Client, error) {
 	if err := validName(name); err != nil {

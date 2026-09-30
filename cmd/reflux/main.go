@@ -38,6 +38,9 @@ USAGE
                            (quiet; for cron: * * * * * reflux heal)
   reflux status            egress tunnels, nodes, who is online
   reflux doctor            check the host, egress and every node; says what to fix
+  reflux bot <setup|install|test|run>
+                           Telegram bot: alerts when a doctor check changes,
+                           /status, /doctor, /pause, /resume, /expire
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -78,6 +81,20 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	s := Store{Root: root}
 	cmd, rest := args[0], args[1:]
+	if changes[cmd] {
+		wait := lockWait
+		if cmd == "heal" {
+			wait = 0 // from cron: skip this minute rather than pile up
+		}
+		unlock, err := s.Lock(wait)
+		if errors.Is(err, errBusy) && cmd == "heal" {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	switch cmd {
 	case "add":
 		return cmdAdd(s, rest, stdout)
@@ -155,30 +172,47 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return nil
 	case "restart":
-		// Nodes live in the egress container's network namespace; when
-		// egress restarts, they must be recreated to join the new one.
-		if err := s.Init(); err != nil {
-			return err
-		}
-		if err := render(s); err != nil {
-			return err
-		}
-		if err := checkHost(); err != nil {
-			return err
-		}
-		return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
+		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
 	case "heal":
 		return heal(s, stdout)
 	case "doctor":
 		return cmdDoctor(s, stdout)
+	case "bot":
+		return cmdBot(s, rest, stdin, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }
 
 // imageSourceLabel marks the images built from this repository.
 const imageSourceLabel = "org.opencontainers.image.source=https://github.com/BeleBob/ReFlux"
+
+// changes are the commands that change the data directory or the
+// containers; they run one at a time (Store.Lock).
+var changes = map[string]bool{
+	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true,
+	"apply": true, "update": true, "restart": true, "heal": true,
+}
+
+// lockWait is how long a command waits for another one to finish.
+var lockWait = 2 * time.Minute
+
+// cmdRestart recreates egress and every node. Nodes live in the egress
+// container's network namespace; when egress restarts, they must be
+// recreated to join the new one.
+func cmdRestart(s Store, stdout io.Writer) error {
+	if err := s.Init(); err != nil {
+		return err
+	}
+	if err := render(s); err != nil {
+		return err
+	}
+	if err := checkHost(); err != nil {
+		return err
+	}
+	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
+}
 
 func dataDir() (string, error) {
 	if d := os.Getenv("REFLUX_HOME"); d != "" {
