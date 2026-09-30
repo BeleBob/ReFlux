@@ -55,53 +55,57 @@ func (b *bot) doctorScreen() screen {
 }
 
 // short is a working check in a few words.
-func (b *bot) short(f finding) string {
+func (b *bot) short(f finding) string { return shortText(b.s, b.lang, f) }
+
+// shortText is a working check in a few words, in l.
+func shortText(s Store, l lang, f finding) string {
+	t := func(id string, args ...any) string { return tr(l, id, args...) }
 	a := f.Args
 	str := func(i int) string {
 		if i >= len(a) {
 			return ""
 		}
 		if p, ok := a[i].(phrase); ok {
-			return b.tr(p.id, p.args...)
+			return t(p.id, p.args...)
 		}
 		return fmt.Sprint(a[i])
 	}
 	switch f.Msg {
 	case "module.ok":
-		return b.tr("short.module")
+		return t("short.module")
 	case "hostrule.ok":
-		return b.tr("short.hostrule")
+		return t("short.hostrule")
 	case "configs.ok":
-		return b.tr("short.configs", len(strings.Split(str(0), ",")), b.tr("gw.ru."+b.s.russiaMode()))
+		return t("short.configs", len(strings.Split(str(0), ",")), t("gw.ru."+s.russiaMode()))
 	case "docker.ok":
-		return b.tr("short.docker", str(0), str(1))
+		return t("short.docker", str(0), str(1))
 	case "image.ok":
-		return b.tr("short.image", imageName(str(0)), str(1), str(2))
+		return t("short.image", imageName(str(0)), str(1), str(2))
 	case "image.local":
-		return b.tr("short.image.local", imageName(str(0)))
+		return t("short.image.local", imageName(str(0)))
 	case "egress.ok":
 		if strings.Contains(str(0), "healthy") && !strings.Contains(str(0), "unhealthy") {
-			return b.tr("short.egress.ok")
+			return t("short.egress.ok")
 		}
-		return b.tr("short.egress", str(0))
+		return t("short.egress", str(0))
 	case "world.up":
-		return b.tr("short.world", strings.TrimSuffix(str(0), ".conf"), shortTime(str(1)))
+		return t("short.world", strings.TrimSuffix(str(0), ".conf"), shortTime(str(1)))
 	case "russia.up":
-		return b.tr("short.russia", str(0), a[1])
+		return t("short.russia", str(0), a[1])
 	case "killswitch":
-		return b.tr("short.killswitch", a[0])
+		return t("short.killswitch", a[0])
 	case "carrier.direct":
-		return b.tr("short.carrier", a[0])
+		return t("short.carrier", a[0])
 	case "node.ok":
-		return b.tr("short.node", str(0), str(1), str(2), str(3), str(4))
+		return t("short.node", str(0), str(1), str(2), str(3), str(4))
 	case "node.inactive":
 		return str(0) + ": " + str(1)
 	case "cron.ok":
-		return b.tr("short.cron")
+		return t("short.cron")
 	case "disk.ok":
-		return b.tr("short.disk", str(0), a[1])
+		return t("short.disk", str(0), a[1])
 	}
-	return f.text(b.lang)
+	return f.text(l)
 }
 
 // shortTime shortens a local "2006-01-02 15:04:05": the time of day for
@@ -299,4 +303,38 @@ func (b *bot) setRussia(mode string) screen {
 	sc := b.gatewayScreen()
 	sc.text = b.tr("ui.restart.done") + "\n\n" + sc.text
 	return sc
+}
+
+// serverScreen shows the host's vital signs, measured over a second.
+func (b *bot) serverScreen() screen {
+	h := measureHost(measureWindow)
+	p := h.Point
+	var t strings.Builder
+	fmt.Fprintf(&t, "%s · %s\n", b.tr("ui.server.title"), time.Now().Format("15:04"))
+	t.WriteString(b.tr("ui.server.cpu", p.CPU, fmt.Sprintf("%.2f", h.Load[0]), h.CPUs) + "\n")
+	t.WriteString(b.tr("ui.server.mem", p.Mem, humanBytes(h.Mem.Used()), humanBytes(h.Mem.Total)) + "\n")
+	if len(h.Temps) > 0 {
+		t.WriteString(b.tr("ui.server.temp", h.Temps[0].C) + "\n")
+	}
+	t.WriteString(b.tr("ui.server.uptime", durationIn(b.lang, h.Uptime)) + "\n")
+	t.WriteString(b.tr("ui.server.egress", mbit(b.lang, p.EgRx), mbit(b.lang, p.EgTx)) + "\n")
+	t.WriteString(b.tr("ui.server.lan", mbit(b.lang, p.LanRx), mbit(b.lang, p.LanTx)) + "\n")
+	if len(h.Disks) > 0 {
+		t.WriteString("\n" + b.tr("ui.server.disks") + "\n")
+		for _, d := range h.Disks {
+			mark := "▫️"
+			if d.Percent() >= 90 {
+				mark = "⚠️"
+			}
+			fmt.Fprintf(&t, "%s %s — %.0f%% · %s\n", mark, html.EscapeString(d.Mount), d.Percent(),
+				b.tr("web.free", humanBytes(d.Total-d.Used)))
+		}
+	}
+	if len(h.Top) > 0 {
+		t.WriteString("\n" + b.tr("ui.server.top") + "\n")
+		for _, pu := range h.Top {
+			fmt.Fprintf(&t, "%s — %.0f%%\n", html.EscapeString(pu.Name), pu.Percent)
+		}
+	}
+	return screen{t.String(), keyboard{{b.btn("b.refresh", "srv"), b.btn("b.home", "home")}}}
 }

@@ -213,6 +213,7 @@ type egressStatus struct {
 	World         string    `json:"world"`
 	WorldOK       bool      `json:"world_ok"`
 	WorldSince    time.Time `json:"world_since"`
+	Selected      string    `json:"world_selected"`
 	RUOK          bool      `json:"ru_ok"`
 	RUMode        string    `json:"ru_mode"` // "tunnel" or "direct": the way in use
 	RUFallback    bool      `json:"ru_fallback"`

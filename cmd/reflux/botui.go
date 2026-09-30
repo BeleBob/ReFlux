@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "speedtest", "gateway", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "web", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -147,6 +147,14 @@ func (b *bot) message(text string) screen {
 		return b.speed()
 	case "/gateway":
 		return b.gatewayScreen()
+	case "/server":
+		return b.serverScreen()
+	case "/web":
+		link, err := b.s.loginLink()
+		if err != nil {
+			return screen{text: b.tr("ui.web.none")}
+		}
+		return screen{text: b.tr("ui.web.link", int(loginFor.Minutes()), html.EscapeString(link))}
 	case "/revoke":
 		return one(b.revokeAsk)
 	case "/restart":
@@ -254,6 +262,14 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.toggleMute(arg), ""
 	case "gw":
 		return b.gatewayScreen(), ""
+	case "srv":
+		return b.serverScreen(), ""
+	case "rsn":
+		err := b.change(func() error { return restartNode(b.s, arg, io.Discard) })
+		if err != nil {
+			return b.failed(err, b.btn("b.back", "c:"+arg)), ""
+		}
+		return b.clientScreen(arg), b.tr("ui.node.restarting")
 	case "gws":
 		return b.chooseWorld(arg)
 	case "gwr":
@@ -314,10 +330,14 @@ type statusView struct {
 	down, upB uint64
 }
 
-func (b *bot) clientViews(clients []Client) []clientView {
+func (b *bot) clientViews(clients []Client) []clientView { return viewClients(b.s, clients) }
+
+// viewClients gathers what the screens (bot and web) show about clients:
+// their node's container and, from the node, the client's status.
+func viewClients(s Store, clients []Client) []clientView {
 	now := time.Now()
 	states := containerStates()
-	live := nodeStatuses(b.s, activeClients(clients, now))
+	live := nodeStatuses(s, activeClients(clients, now))
 	var out []clientView
 	for _, c := range clients {
 		v := clientView{c: c, active: c.Active(now), running: states["reflux-node-"+c.Name] != ""}
@@ -347,19 +367,23 @@ func (v clientView) mark() string {
 }
 
 // state is a client's state in words.
-func (b *bot) state(v clientView) string {
+func (b *bot) state(v clientView) string { return stateText(b.lang, v) }
+
+// stateText is a client's state in words in l: its access when it is off,
+// else its node and whether the client is online, with the traffic.
+func stateText(l lang, v clientView) string {
 	switch {
 	case !v.active:
 		p := accessPhrase(v.c, time.Now())
-		return b.tr(p.id, p.args...)
+		return tr(l, p.id, p.args...)
 	case !v.running:
-		return b.tr("ui.node.down")
+		return tr(l, "ui.node.down")
 	case v.status == nil:
-		return b.tr("ui.nostatus")
+		return tr(l, "ui.nostatus")
 	}
-	s := b.tr("offline")
+	s := tr(l, "offline")
 	if v.status.online {
-		s = b.tr("online")
+		s = tr(l, "online")
 	}
 	return s + " · ↓" + humanBytes(v.status.down) + " ↑" + humanBytes(v.status.upB)
 }
@@ -398,8 +422,8 @@ func (b *bot) home() screen {
 	return screen{t.String(), keyboard{
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
-		{b.btn("b.gateway", "gw"), b.btn("b.speed", "sp")},
-		{b.btn("b.settings", "set")},
+		{b.btn("b.server", "srv"), b.btn("b.gateway", "gw")},
+		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
 	}}
 }
 
@@ -444,7 +468,7 @@ func (b *bot) clientScreen(name string) screen {
 		{b.btn("b.qr", "qr:"+c.Name), toggle},
 		{b.btn("b.access", "acc:"+c.Name), b.btn("b.telegram", "tg:"+c.Name)},
 		{b.btn("b.rename", "ren:"+c.Name), b.btn("b.logs", "lg:"+c.Name)},
-		{b.btn("b.revoke", "rv:"+c.Name)},
+		{b.btn("b.restartnode", "rsn:"+c.Name), b.btn("b.revoke", "rv:"+c.Name)},
 		{b.btn("b.clients", "cls"), b.btn("b.home", "home")},
 	}}
 }
