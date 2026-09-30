@@ -71,6 +71,12 @@ func TestHostMetrics(t *testing.T) {
 	if rx, tx, err := ifaceBytes("enp1s0"); rx != 1000 || tx != 2000 || err != nil {
 		t.Errorf("iface %d %d %v", rx, tx, err)
 	}
+	// The bridge transmits what goes into the egress container.
+	writeFile(t, sys+"/class/net/"+egressBridge+"/statistics/rx_bytes", "300\n")
+	writeFile(t, sys+"/class/net/"+egressBridge+"/statistics/tx_bytes", "7000\n")
+	if rx, tx, err := egressBytes(); rx != 7000 || tx != 300 || err != nil {
+		t.Errorf("egress received %d, sent %d, %v", rx, tx, err)
+	}
 }
 
 func TestTopProcsGroupsByName(t *testing.T) {

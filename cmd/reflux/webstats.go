@@ -128,7 +128,7 @@ func (m *sampler) tick(now time.Time) {
 	up, _ := readUptime()
 	temps := readTemps()
 	lanRx, lanTx, _ := ifaceBytes(lanIface)
-	egRx, egTx, _ := ifaceBytes(egressBridge)
+	egRx, egTx, _ := egressBytes()
 
 	if now.Sub(m.ctrAt) > time.Minute || m.ctrIDs == nil {
 		m.docker.Lock()

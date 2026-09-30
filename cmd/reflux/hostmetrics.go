@@ -212,6 +212,14 @@ func ifaceBytes(iface string) (rx, tx uint64, err error) {
 	return rx, tx, err
 }
 
+// egressBytes is what the egress received (from the internet, the
+// tunnels and the carriers) and sent, seen from the host's bridge: what
+// the bridge transmits goes into the container.
+func egressBytes() (rx, tx uint64, err error) {
+	bridgeRx, bridgeTx, err := ifaceBytes(egressBridge)
+	return bridgeTx, bridgeRx, err
+}
+
 // disk is a mounted filesystem.
 type disk struct {
 	Mount       string
