@@ -12,10 +12,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"openflux/share"
@@ -335,10 +338,6 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 	return "home", pageData{Title: tr(l, "web.nav.home"), Active: "home", Refresh: 15, Body: d}, err
 }
 
-func (w *webServer) server(r *http.Request) (string, pageData, error) {
-	return "server", pageData{Title: tr(w.lang(), "web.nav.server"), Active: "server", Refresh: 15, Body: w.tiles()}, nil
-}
-
 func (w *webServer) events(r *http.Request) (string, pageData, error) {
 	return "events", pageData{Title: tr(w.lang(), "web.nav.events"), Active: "events", Refresh: 60, Body: w.s.readEvents(200)}, nil
 }
@@ -618,7 +617,7 @@ func (w *webServer) doctor(r *http.Request) (string, pageData, error) {
 	if warns+fails > 0 {
 		summary = tr(l, "ui.doctor.sum", fails, warns)
 	}
-	return "doctor", pageData{Title: tr(l, "b.doctor"), Active: "doctor", Refresh: 60,
+	return "doctor", pageData{Title: tr(l, "web.nav.doctor"), Active: "doctor", Refresh: 60,
 		Body: map[string]any{"Summary": summary, "Sections": secs}}, nil
 }
 
@@ -643,7 +642,7 @@ func (w *webServer) gateway(r *http.Request) (string, pageData, error) {
 		d.Russia = tr(l, ruMode(st).id)
 		d.Carriers = len(st.Carriers)
 	}
-	return "gateway", pageData{Title: tr(l, "b.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil
+	return "gateway", pageData{Title: tr(l, "web.nav.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil
 }
 
 func (w *webServer) gatewayAction(r *http.Request) (string, error) {
@@ -678,11 +677,11 @@ func (w *webServer) gatewayAction(r *http.Request) (string, error) {
 }
 
 func (w *webServer) speedForm(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed"}, nil
+	return "speed", pageData{Title: tr(w.lang(), "web.nav.speed"), Active: "speed"}, nil
 }
 
 func (w *webServer) speed(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed", Body: speedLines(w.lang(), speedTest())}, nil
+	return "speed", pageData{Title: tr(w.lang(), "web.nav.speed"), Active: "speed", Body: speedLines(w.lang(), speedTest())}, nil
 }
 
 // ---- command ----
@@ -708,11 +707,26 @@ func cmdWeb(s Store, args []string, stdout io.Writer) error {
 			return err
 		}
 		log.Printf("web: serving on http://%s", cfg.Listen)
-		stop := make(chan struct{})
-		defer close(stop)
-		go w.stats.run(stop)
 		srv := &http.Server{Addr: cfg.Listen, Handler: w.routes(), ReadHeaderTimeout: 10 * time.Second}
-		return srv.ListenAndServe()
+		// On SIGTERM (systemd), the sampler saves the traffic and the
+		// history before the process goes.
+		stop, sampled := make(chan struct{}), make(chan struct{})
+		go func() { w.stats.run(stop); close(sampled) }()
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+		go func() {
+			<-sig
+			close(stop)
+			select {
+			case <-sampled:
+			case <-time.After(10 * time.Second):
+			}
+			srv.Close()
+		}()
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
 	case "login":
 		link, err := s.loginLink()
 		if err != nil {

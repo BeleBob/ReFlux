@@ -236,9 +236,13 @@ func TestWebPagesRender(t *testing.T) {
 			}
 			return inner(stdout, args...)
 		}
-		w.stats.tick(time.Now().Add(-10 * time.Second))
+		// Three hours of minutes for the longer ranges, then fine samples.
+		for i := 180; i > 1; i-- {
+			w.stats.minutes = append(w.stats.minutes, hostPoint{At: time.Now().Add(-time.Duration(i) * time.Minute), CPU: 90, Mem: 30, Load1: 1})
+		}
+		w.stats.tick(time.Now().Add(-40 * time.Second))
 		writeFile(t, proc+"/stat", "cpu  200 0 100 800 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
-		w.stats.tick(time.Now().Add(-5 * time.Second))
+		w.stats.tick(time.Now().Add(-20 * time.Second))
 		writeFile(t, proc+"/stat", "cpu  500 0 100 900 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
 		w.stats.tick(time.Now())
 		wt.s.logEvents([]event{{At: time.Now(), Level: "FAIL", RU: "мир не работает", EN: "world is down"}})
@@ -256,9 +260,19 @@ func TestWebPagesRender(t *testing.T) {
 				t.Errorf("%s %s has a formatting error:\n%s", l, p, body)
 			}
 		}
-		if body := wt.do("GET", "/server", nil).Body.String(); !strings.Contains(body, "75%") || !strings.Contains(body, "41 °C") ||
-			!strings.Contains(body, "<polyline") {
-			t.Errorf("%s: server page lacks the figures:\n%s", l, body)
+		for _, r := range append(chartRanges, "bogus") {
+			body := wt.do("GET", "/server?r="+r, nil).Body.String()
+			for _, want := range []string{"75%", "41 °C", `class="series k1"`, `class="gauge"`, `class="zone"`} {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s /server?r=%s lacks %q", l, r, want)
+				}
+			}
+			if m := rawIDRe.FindString(body); m != "" {
+				t.Errorf("%s /server?r=%s shows the raw message id %q", l, r, m)
+			}
+			if strings.Contains(body, "%!") || strings.Contains(body, "ZgotmplZ") {
+				t.Errorf("%s /server?r=%s has a formatting error", l, r)
+			}
 		}
 		if body := wt.do("GET", "/", nil).Body.String(); !strings.Contains(body, map[string]string{"ru": "мир не работает", "en": "world is down"}[l]) {
 			t.Errorf("%s: home lacks the latest event", l)

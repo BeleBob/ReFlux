@@ -28,6 +28,8 @@ type hostPoint struct {
 	At           time.Time
 	CPU, Mem     float64 // percent
 	Load1        float64
+	Load5        float64
+	Load15       float64
 	TempC        float64
 	LanRx, LanTx float64
 	EgRx, EgTx   float64
@@ -83,22 +85,25 @@ type sampler struct {
 
 	mu      sync.Mutex
 	host    []hostPoint
+	minutes []hostPoint // minute averages, a day (webhistory.go)
+	agg     minuteAgg
 	now     hostNow
 	rates   map[string][]ratePoint
 	traffic map[string]*trafficFile
 	dirty   map[string]bool
 
 	// previous readings
-	cpu      cpuTimes
-	procs    map[int]proc
-	lan, eg  [2]uint64
-	at       time.Time
-	ctrIDs   map[string]string
-	ctrAt    time.Time
-	ctrPrev  map[string]uint64
-	nodesAt  time.Time
-	nodePrev map[string]time.Time
-	savedAt  time.Time
+	cpu       cpuTimes
+	procs     map[int]proc
+	lan, eg   [2]uint64
+	at        time.Time
+	ctrIDs    map[string]string
+	ctrAt     time.Time
+	ctrPrev   map[string]uint64
+	nodesAt   time.Time
+	nodePrev  map[string]time.Time
+	savedAt   time.Time
+	historyAt time.Time
 }
 
 func newSampler(s Store, docker *sync.Mutex) *sampler {
@@ -108,11 +113,14 @@ func newSampler(s Store, docker *sync.Mutex) *sampler {
 }
 
 func (m *sampler) run(stop <-chan struct{}) {
+	m.loadHistory()
 	for {
 		m.tick(time.Now())
+		m.saveHistory(false)
 		select {
 		case <-stop:
 			m.save(true)
+			m.saveHistory(true)
 			return
 		case <-time.After(sampleEvery):
 		}
@@ -128,7 +136,7 @@ func (m *sampler) tick(now time.Time) {
 	up, _ := readUptime()
 	temps := readTemps()
 	lanRx, lanTx, _ := ifaceBytes(lanIface)
-	egRx, egTx, _ := ifaceBytes(egressBridge)
+	egRx, egTx, _ := egressBytes()
 
 	if now.Sub(m.ctrAt) > time.Minute || m.ctrIDs == nil {
 		m.docker.Lock()
@@ -156,7 +164,7 @@ func (m *sampler) tick(now time.Time) {
 		ctrs = append(ctrs, live)
 	}
 
-	p := hostPoint{At: now, Mem: mem.Percent(), Load1: load[0], LanRx: -1}
+	p := hostPoint{At: now, Mem: mem.Percent(), Load1: load[0], Load5: load[1], Load15: load[2], LanRx: -1}
 	if len(temps) > 0 {
 		p.TempC = temps[0].C
 	}
@@ -175,6 +183,9 @@ func (m *sampler) tick(now time.Time) {
 	m.mu.Lock()
 	if p.LanRx >= 0 {
 		m.host = appendCapped(m.host, p, historyLen)
+		if avg, ok := m.agg.add(p); ok {
+			m.minutes = appendCapped(m.minutes, avg, minutesLen)
+		}
 	}
 	m.now = hostNow{Point: p, Load: load, Mem: mem, Uptime: up, CPUs: cpuCount(), Temps: temps,
 		Disks: m.now.Disks, Top: top, Containers: ctrs}

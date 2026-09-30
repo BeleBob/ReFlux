@@ -5,77 +5,163 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · ReFlux</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6fed'/%3E%3Cpath d='M9 22V10h7a4 4 0 0 1 0 8h-3l6 4' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234e74f8'/%3E%3Cpath d='M9 22V10h7a4 4 0 0 1 0 8h-3l6 4' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-:root { --bg:#f4f6f9; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#e4e7ec; --soft:#eef2f7; --accent:#2f6fed; --ok:#12805c; --warn:#b54708; --bad:#c01048; }
-@media (prefers-color-scheme: dark) { :root { --bg:#10131a; --card:#1a1f29; --fg:#e6e9ef; --mute:#98a2b3; --line:#2a313d; --soft:#222936; --accent:#6b9bff; --ok:#3ccb8f; --warn:#f5a524; --bad:#ff6b8b; } }
+:root { color-scheme:dark; --bg:#0b0c0e; --side:#0e0f12; --panel:#121317; --panel2:#1a1c22; --line:#1f222b; --line2:#2b2f3b; --fg:#e7e8ec; --mute:#8b8f9b;
+  --accent:#4e74f8; --ok:#3fcf8e; --warn:#f2cc52; --bad:#f0506e; --c1:#6fd1bd; --c2:#9ccc65; --c3:#f2cc52; --c4:#f28fb0; }
 * { box-sizing:border-box; }
-body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); font-variant-numeric:tabular-nums; }
-header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); padding:8px 16px; display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center; }
-header .brand { font-weight:700; margin-right:10px; display:flex; align-items:center; gap:6px; }
-header .brand i { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent); }
-header nav { display:flex; flex-wrap:wrap; gap:2px; }
-header nav a { color:var(--fg); text-decoration:none; padding:5px 10px; border-radius:7px; }
-header nav a:hover { background:var(--soft); }
-header nav a.on { background:var(--accent); color:#fff; }
-header form { margin-left:auto; }
-main { max-width:1080px; margin:0 auto; padding:16px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
-h1 { font-size:21px; margin:2px 0 10px; } h2 { font-size:15px; margin:0 0 10px; color:var(--mute); font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
-.scroll { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
-tr:last-child td { border-bottom:0; }
-th { color:var(--mute); font-weight:500; font-size:13px; white-space:nowrap; }
-td.num, th.num { text-align:right; white-space:nowrap; }
+body { margin:0; font:14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); font-variant-numeric:tabular-nums; }
 a { color:var(--accent); }
+.ic { width:18px; height:18px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+/* the menu: a column on the left, a bar on top on phones */
+.side { position:fixed; top:0; bottom:0; left:0; width:212px; background:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; gap:2px; padding:14px 10px; z-index:6; }
+.brand { display:flex; align-items:center; gap:10px; color:var(--fg); text-decoration:none; font-weight:700; font-size:16px; padding:2px 10px 18px; }
+.brand svg { width:26px; height:26px; flex:none; }
+.side nav { display:flex; flex-direction:column; gap:2px; }
+.side nav a, .side .out button { display:flex; align-items:center; gap:11px; padding:8px 10px; border-radius:6px; color:var(--mute); text-decoration:none; }
+.side nav a:hover, .side .out button:hover { background:var(--panel2); color:var(--fg); }
+.side nav a.on { background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--fg); }
+.side nav a.on .ic { color:var(--accent); }
+.side .out { margin-top:auto; }
+.side .out button { width:100%; background:none; border:0; font:inherit; cursor:pointer; }
+.page { margin-left:212px; min-width:0; }
+.top { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; padding:11px 20px; background:color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter:blur(6px); border-bottom:1px solid var(--line); }
+.top h1 { font-size:17px; margin:0; font-weight:600; }
+.top .when { color:var(--mute); font-size:12.5px; }
+.top .tools { margin-left:auto; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.seg { display:inline-flex; border:1px solid var(--line2); border-radius:6px; overflow:hidden; background:var(--panel); }
+.seg a { padding:5px 11px; color:var(--mute); text-decoration:none; font-size:13px; border-right:1px solid var(--line2); white-space:nowrap; }
+.seg a:last-child { border-right:0; }
+.seg a:hover { color:var(--fg); }
+.seg a.on { background:var(--panel2); color:var(--fg); box-shadow:inset 0 -2px var(--accent); }
+.btn { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:6px; background:var(--accent); color:#fff; text-decoration:none; font-size:13px; font-weight:500; }
+.btn .ic { width:15px; height:15px; }
+main { padding:16px 20px; max-width:1560px; }
+footer { padding:4px 20px 24px; color:var(--mute); font-size:12.5px; }
+/* panels */
+.card, .tile { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px 14px; margin-bottom:12px; min-width:0; }
+.card h1 { font-size:18px; margin:2px 0 10px; font-weight:600; }
+h2 { font-size:13px; margin:0 0 10px; color:var(--fg); font-weight:500; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:last-child td { border-bottom:0; } tbody tr:hover td { background:color-mix(in srgb, var(--panel2) 60%, transparent); }
+th { color:var(--mute); font-weight:500; font-size:12px; white-space:nowrap; background:var(--panel2); }
+td.num, th.num { text-align:right; white-space:nowrap; }
 .mute { color:var(--mute); font-size:13px; }
-.notice { border-left:4px solid var(--ok); } .error { border-left:4px solid var(--bad); }
+.notice { border-left:3px solid var(--ok); } .error { border-left:3px solid var(--bad); }
 .ok { color:var(--ok); } .warn { color:var(--warn); } .FAIL { color:var(--bad); } .info { color:var(--accent); }
 .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
-button { font:inherit; padding:7px 13px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--fg); cursor:pointer; }
+button { font:inherit; font-size:13.5px; padding:6px 12px; border-radius:6px; border:1px solid var(--line2); background:var(--panel2); color:var(--fg); cursor:pointer; }
 button:hover { border-color:var(--accent); }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { border-color:var(--bad); color:var(--bad); background:transparent; }
-button.current { border-color:var(--ok); color:var(--ok); font-weight:600; }
-input[type=text], input[type=date], textarea { font:inherit; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
-input[type=text] { min-width:220px; } textarea { width:100%; font-size:13px; }
-pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--soft); padding:10px; border-radius:8px; max-height:70vh; overflow:auto; }
-code { word-break:break-all; background:var(--soft); padding:1px 5px; border-radius:5px; }
-img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:10px; }
-dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0; } dt { color:var(--mute); }
-.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin-bottom:14px; }
-.tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px 8px; }
-.tile .label { color:var(--mute); font-size:13px; }
-.tile .value { font-size:24px; font-weight:650; line-height:1.3; }
-.tile .sub { color:var(--mute); font-size:12.5px; min-height:1.3em; }
+button.current { border-color:var(--c1); color:var(--c1); font-weight:600; }
+input[type=text], input[type=date], textarea { font:inherit; padding:6px 9px; border-radius:6px; border:1px solid var(--line2); background:var(--bg); color:var(--fg); }
+input:focus, textarea:focus { outline:none; border-color:var(--accent); }
+input[type=text] { min-width:220px; max-width:100%; } textarea { width:100%; font-size:13px; }
+input[type=radio], input[type=checkbox] { accent-color:var(--accent); }
+pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--bg); border:1px solid var(--line); padding:10px; border-radius:6px; max-height:70vh; overflow:auto; }
+code { word-break:break-all; background:var(--panel2); padding:1px 5px; border-radius:4px; }
+img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:8px; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0; } dt { color:var(--mute); } dd { margin:0; }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap:12px; margin-bottom:12px; }
+.tiles .tile { margin-bottom:0; }
+.tile .label { color:var(--mute); font-size:12.5px; }
+.tile .value { font-size:26px; font-weight:600; line-height:1.3; }
+.sub { color:var(--mute); font-size:12.5px; min-height:1.3em; }
 svg.spark { width:100%; height:44px; display:block; margin-top:6px; }
-svg.spark .line { fill:none; stroke:var(--accent); stroke-width:1.6; vector-effect:non-scaling-stroke; }
-svg.spark .area { fill:var(--accent); opacity:.12; }
-.bar { height:8px; border-radius:6px; background:var(--soft); overflow:hidden; margin:4px 0 2px; }
-.bar i { display:block; height:100%; background:var(--ok); border-radius:6px; }
+svg.spark .line { fill:none; stroke:var(--c1); stroke-width:1.6; vector-effect:non-scaling-stroke; }
+svg.spark .area { fill:var(--c1); opacity:.12; }
+.bar { height:8px; border-radius:3px; background:var(--panel2); overflow:hidden; margin:4px 0 2px; }
+.bar i { display:block; height:100%; background:linear-gradient(90deg, var(--c1), var(--c2)); border-radius:3px; }
 .bar i.warn { background:var(--warn); } .bar i.FAIL { background:var(--bad); }
-.pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; background:var(--soft); color:var(--mute); }
-.pill.ok { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
-.pill.warn { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
-.pill.FAIL { background:color-mix(in srgb, var(--bad) 15%, transparent); color:var(--bad); }
-.grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px; }
+.pill { display:inline-block; padding:0 8px; border-radius:4px; font-size:12px; background:var(--panel2); color:var(--mute); }
+.pill.ok { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
+.pill.warn { background:color-mix(in srgb, var(--warn) 16%, transparent); color:var(--warn); }
+.pill.FAIL { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap:12px; }
 .grid2 .card { margin-bottom:0; }
-footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mute); font-size:12.5px; }
-@media (max-width:600px) { header nav a { padding:4px 7px; font-size:14px; } .tile .value { font-size:20px; } }
+/* the server dashboard */
+.blocks { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap:12px; }
+.udt { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
+.udt div { border-radius:4px; padding:10px 6px 8px; text-align:center; background:var(--panel2); }
+.udt b { display:block; font-size:30px; line-height:1.15; font-weight:600; color:var(--mute); }
+.udt span { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mute); }
+.udt .up { background:color-mix(in srgb, var(--ok) 10%, var(--panel)); } .udt .up b { color:var(--ok); }
+.udt .down.bad { background:color-mix(in srgb, var(--bad) 14%, var(--panel)); } .udt .down.bad b { color:var(--bad); }
+.udt .total b { color:var(--accent); }
+.stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap:12px; }
+.blocks, .stats, .row2, .charts { margin-bottom:12px; }
+.blocks .card, .stats .card, .row2 .card, .charts .card, .tables .card { margin-bottom:0; }
+.stat .value { font-size:30px; font-weight:600; line-height:1.2; white-space:nowrap; }
+.stat .value.ok { color:var(--c1); } .stat .value.warn { color:var(--warn); } .stat .value.FAIL { color:var(--bad); }
+.row2 { display:grid; grid-template-columns:minmax(0, 2fr) minmax(0, 1fr); gap:12px; }
+.charts, .tables { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap:12px; }
+.tables { grid-template-columns:repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+svg.chart { width:100%; height:auto; display:block; }
+.chart .grid { stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
+.chart .grid.v { stroke-dasharray:2 4; }
+.chart .axis { fill:var(--mute); font-size:14px; }
+.chart .empty { fill:var(--mute); font-size:22px; }
+.chart .zone { fill:var(--bad); opacity:.08; }
+.chart .limit { stroke:var(--bad); stroke-dasharray:5 4; opacity:.8; vector-effect:non-scaling-stroke; }
+.chart .series { fill:none; stroke:var(--k); stroke-width:1.8; stroke-linejoin:round; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+.chart .dot { fill:var(--k); }
+.chart stop { stop-color:var(--k); }
+.k1 { --k:var(--c1); } .k2 { --k:var(--c2); } .k3 { --k:var(--c3); } .k4 { --k:var(--c4); }
+.legend { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:12.5px; margin-top:6px; }
+.legend .key { display:inline-flex; align-items:center; gap:7px; }
+.legend i { width:14px; height:3px; border-radius:2px; background:var(--k); }
+.legend small { color:var(--mute); font-size:12px; }
+.dials { display:grid; grid-template-columns:repeat(auto-fit, minmax(112px, 1fr)); gap:6px 10px; align-items:start; }
+.dial { text-align:center; color:var(--mute); font-size:12.5px; }
+svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
+.gauge .track, .gauge .level { fill:none; stroke-width:9; stroke-linecap:round; }
+.gauge .track { stroke:var(--panel2); }
+.gauge .level.ok { stroke:var(--c1); } .gauge .level.warn { stroke:var(--warn); } .gauge .level.FAIL { stroke:var(--bad); }
+.gauge .gv { fill:var(--fg); font-size:18px; font-weight:600; }
+.hbar { display:grid; grid-template-columns:minmax(48px, 110px) 1fr 46px; gap:10px; align-items:center; margin-top:10px; }
+.hbar .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.hbar .bar { height:16px; margin:0; }
+.hbar .num { text-align:right; font-weight:600; }
+.hsub { padding-left:0; margin-top:2px; }
+.mini { width:70px; height:6px; border-radius:3px; background:var(--panel2); overflow:hidden; display:inline-block; vertical-align:middle; margin-right:8px; }
+.mini i { display:block; height:100%; background:var(--c1); }
+@media (max-width:1100px) { .row2 { grid-template-columns:minmax(0, 1fr); } }
+@media (max-width:860px) {
+  .side { position:sticky; bottom:auto; width:auto; flex-direction:row; align-items:center; padding:6px 10px; border-right:0; border-bottom:1px solid var(--line); overflow-x:auto; }
+  .brand { padding:0 8px 0 2px; } .brand span, .side nav a span, .side .out span { display:none; }
+  .side nav { flex-direction:row; }
+  .side .out { margin:0 0 0 auto; }
+  .page { margin-left:0; }
+  .top { position:static; padding:10px 16px; }
+  main { padding:12px 16px; } footer { padding:4px 16px 20px; }
+  .top .tools { margin-left:0; }
+  .chart .axis { font-size:22px; } .chart.wide .axis { font-size:28px; }
+  .stats { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  .stat .value, .udt b { font-size:24px; }
+  .dials { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  svg.gauge { max-width:110px; }
+}
 </style>
 </head>
 <body>
-<header>
-<span class="brand"><i></i>ReFlux</span>
+<aside class="side">
+<a class="brand" href="/"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#4e74f8"/><path d="M9 22V10h7a4 4 0 0 1 0 8h-3l6 4" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ReFlux</span></a>
 <nav>
-<a href="/" {{if eq .Active "home"}}class="on"{{end}}>{{t "web.nav.home"}}</a>
-<a href="/server" {{if eq .Active "server"}}class="on"{{end}}>{{t "web.nav.server"}}</a>
-<a href="/doctor" {{if eq .Active "doctor"}}class="on"{{end}}>{{t "b.doctor"}}</a>
-<a href="/gateway" {{if eq .Active "gateway"}}class="on"{{end}}>{{t "b.gateway"}}</a>
-<a href="/events" {{if eq .Active "events"}}class="on"{{end}}>{{t "web.nav.events"}}</a>
-<a href="/speed" {{if eq .Active "speed"}}class="on"{{end}}>{{t "b.speed"}}</a>
-<a href="/add" {{if eq .Active "add"}}class="on"{{end}}>{{t "b.add"}}</a>
+<a href="/" title="{{t "web.nav.home"}}"{{if eq .Active "home"}} class="on"{{end}}>{{template "icon" "home"}}<span>{{t "web.nav.home"}}</span></a>
+<a href="/server" title="{{t "web.nav.server"}}"{{if eq .Active "server"}} class="on"{{end}}>{{template "icon" "server"}}<span>{{t "web.nav.server"}}</span></a>
+<a href="/doctor" title="{{t "web.nav.doctor"}}"{{if eq .Active "doctor"}} class="on"{{end}}>{{template "icon" "doctor"}}<span>{{t "web.nav.doctor"}}</span></a>
+<a href="/gateway" title="{{t "web.nav.gateway"}}"{{if eq .Active "gateway"}} class="on"{{end}}>{{template "icon" "gateway"}}<span>{{t "web.nav.gateway"}}</span></a>
+<a href="/events" title="{{t "web.nav.events"}}"{{if eq .Active "events"}} class="on"{{end}}>{{template "icon" "events"}}<span>{{t "web.nav.events"}}</span></a>
+<a href="/speed" title="{{t "web.nav.speed"}}"{{if eq .Active "speed"}} class="on"{{end}}>{{template "icon" "speed"}}<span>{{t "web.nav.speed"}}</span></a>
+<a href="/add" title="{{t "web.nav.add"}}"{{if eq .Active "add"}} class="on"{{end}}>{{template "icon" "add"}}<span>{{t "web.nav.add"}}</span></a>
 </nav>
-<form method="post" action="/logout"><button>{{t "web.logout"}}</button></form>
+<form method="post" action="/logout" class="out"><button title="{{t "web.logout"}}">{{template "icon" "logout"}}<span>{{t "web.logout"}}</span></button></form>
+</aside>
+<div class="page">
+<header class="top">
+<h1>{{.Title}}</h1><span class="when">{{t "web.updated" .Now}}</span>
+{{if eq .Active "server"}}<div class="tools">{{template "ranges" .Body}}</div>{{end}}
 </header>
 <main>
 {{if .Notice}}<div class="card notice">{{.Notice}}</div>{{end}}
@@ -84,14 +170,17 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 
 {{define "foot"}}
 </main>
-<footer>{{t "web.updated" .Now}} · reflux {{.Version}}</footer>
+<footer>ReFlux {{.Version}}</footer>
+</div>
 </body>
 </html>
 {{end}}
 
+{{define "icon"}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{if eq . "home"}}<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/>{{else if eq . "server"}}<rect x="3" y="3" width="7.5" height="9" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5" rx="1.5"/><rect x="13.5" y="11" width="7.5" height="10" rx="1.5"/><rect x="3" y="15" width="7.5" height="6" rx="1.5"/>{{else if eq . "doctor"}}<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>{{else if eq . "gateway"}}<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.2 3.6 3.2 14.4 0 18M12 3c-3.2 3.6-3.2 14.4 0 18"/>{{else if eq . "events"}}<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>{{else if eq . "speed"}}<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4.5-5.5"/>{{else if eq . "add"}}<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>{{else if eq . "logout"}}<path d="M14 4h5v16h-5"/><path d="m10 8-4 4 4 4M6 12h10"/>{{else if eq . "refresh"}}<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>{{end}}</svg>{{end}}
+
 {{define "signin"}}<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReFlux</title>
-<style>body{font:15px/1.6 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 16px;color:#1d2330;background:#f4f6f9}.c{background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:18px 20px}.e{color:#c01048}.n{color:#12805c}@media (prefers-color-scheme:dark){body{background:#10131a;color:#e6e9ef}.c{background:#1a1f29;border-color:#2a313d}}</style></head>
+<style>:root{color-scheme:dark}body{font:15px/1.6 Inter,system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 16px;color:#e7e8ec;background:#0b0c0e}.c{background:#121317;border:1px solid #1f222b;border-radius:6px;padding:18px 20px}h1{font-size:20px;margin:0 0 8px}.e{color:#f0506e}.n{color:#3fcf8e}</style></head>
 <body><div class="c">
 <h1>ReFlux</h1>
 {{if .Error}}<p class="e">{{.Error}}</p>{{end}}
@@ -160,53 +249,66 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 
 {{define "evicon"}}{{if eq . "ok"}}✅{{else if eq . "warn"}}⚠️{{else if eq . "FAIL"}}❌{{else}}ℹ️{{end}}{{end}}
 
+{{define "ranges"}}<div class="seg">{{range .Ranges}}<a href="/server?r={{.Key}}"{{if .On}} class="on"{{end}}>{{.Label}}</a>{{end}}</div>
+<a class="btn" href="/server?r={{.Range}}">{{template "icon" "refresh"}}{{t "web.refresh"}}</a>{{end}}
+
+{{define "legend"}}<div class="legend">{{range .}}<span class="key {{.Color}}"><i></i>{{.Name}} <small>{{t "web.legend" .Last .Max}}</small></span>{{end}}</div>{{end}}
+
 {{define "server"}}{{template "head" .}}
 {{with .Body}}
-{{template "tiles" .}}
-{{if .Ready}}
-<div class="tiles">
-<div class="tile"><div class="label">{{t "web.tile.lan"}}</div><div class="value">{{mbit (add .Now.Point.LanRx .Now.Point.LanTx)}}</div>
-<div class="sub">↓ {{mbit .Now.Point.LanRx}} · ↑ {{mbit .Now.Point.LanTx}}</div>{{spark .Lan 0}}</div>
-<div class="tile"><div class="label">{{t "web.tile.uptime"}}</div><div class="value">{{dur .Now.Uptime}}</div>
-<div class="sub">{{t "web.tile.loadall" (f2 (index .Now.Load 0)) (f2 (index .Now.Load 1)) (f2 (index .Now.Load 2))}}</div></div>
-{{if .Now.Mem.SwapTotal}}<div class="tile"><div class="label">Swap</div><div class="value">{{bytes (sub .Now.Mem.SwapTotal .Now.Mem.SwapFree)}}</div>
-<div class="sub">{{t "web.of" (bytes (sub .Now.Mem.SwapTotal .Now.Mem.SwapFree)) (bytes .Now.Mem.SwapTotal)}}</div></div>{{end}}
+{{if not .Ready}}<div class="card mute">{{t "web.tile.wait"}}</div>{{end}}
+<div class="blocks">
+{{range .Blocks}}<section class="card"><h2>{{.Title}}</h2><div class="udt">
+<div class="up"><b>{{.Up}}</b><span>{{t "web.block.up"}}</span></div>
+<div class="down{{if .Down}} bad{{end}}"><b>{{.Down}}</b><span>{{t "web.block.down"}}</span></div>
+<div class="total"><b>{{.Total}}</b><span>{{t "web.block.total"}}</span></div>
+</div></section>
+{{end}}
 </div>
-<p class="mute">{{t "web.hist"}}</p>
-<div class="grid2">
-<div class="card">
-<h2>{{t "web.disks"}}</h2>
-{{range .Now.Disks}}<div><div class="row" style="justify-content:space-between;margin:0"><span>{{.Mount}}</span><span class="mute">{{bytes .Used}} / {{bytes .Total}} · {{f0 .Percent}}%</span></div>
-<div class="bar"><i class="{{bar .Percent}}" style="width:{{pct .Percent}}%"></i></div></div>{{end}}
+<div class="stats">
+{{range .Stats}}<section class="card stat"><h2>{{.Label}}</h2><div class="value {{.Level}}">{{.Value}}</div><div class="sub">{{.Sub}}</div></section>
+{{end}}
 </div>
-<div class="card">
-<h2>{{t "web.sensors"}}</h2>
-{{if .Now.Temps}}<div class="scroll"><table>{{range .Now.Temps}}<tr><td>{{.Label}}</td><td class="num">{{f0 .C}} °C</td></tr>{{end}}</table></div>
-{{else}}<p class="mute">{{t "web.nosensors"}}</p>{{end}}
+<div class="row2">
+<section class="card">{{with .Main}}<h2>{{.Title}}</h2>{{.SVG}}{{template "legend" .Legend}}{{end}}</section>
+<section class="card"><h2>{{t "web.dials"}}</h2><div class="dials">{{range .Dials}}<div class="dial">{{.SVG}}{{.Label}}</div>{{end}}</div></section>
 </div>
-<div class="card">
+<div class="charts">
+{{range .Charts}}<section class="card"><h2>{{.Title}}</h2>{{.SVG}}{{template "legend" .Legend}}</section>
+{{end}}
+<section class="card"><h2>{{t "web.disks"}}</h2>
+{{range .Now.Disks}}<div class="hbar"><span class="name" title="{{.Mount}}">{{.Mount}}</span><div class="bar"><i class="{{bar .Percent}}" style="width:{{pct .Percent}}%"></i></div><span class="num">{{f0 .Percent}}%</span></div>
+<div class="sub hsub">{{bytes .Used}} / {{bytes .Total}} · {{t "web.free" (bytes (sub .Total .Used))}}</div>
+{{end}}
+</section>
+</div>
+<div class="tables">
+<section class="card">
 <h2>{{t "web.containers"}}</h2>
 <div class="scroll"><table>
-<tr><th>{{t "web.col.container"}}</th><th class="num">{{t "web.col.cpu"}}</th><th class="num">{{t "web.col.mem"}}</th></tr>
-{{range .Now.Containers}}<tr><td>{{.Name}}</td><td class="num">{{f1 .CPU}}%</td><td class="num">{{bytes .MemBytes}}</td></tr>{{end}}
+<thead><tr><th>{{t "web.col.container"}}</th><th>{{t "web.col.cpu"}}</th><th class="num">{{t "web.col.mem"}}</th></tr></thead>
+<tbody>{{range .Containers}}<tr><td>{{.Name}}</td><td><span class="mini"><i style="width:{{pct .CPU}}%"></i></span>{{f1 .CPU}}%</td><td class="num">{{bytes .MemBytes}}</td></tr>{{else}}<tr><td class="mute" colspan="3">—</td></tr>{{end}}</tbody>
 </table></div>
-</div>
-<div class="card">
+</section>
+<section class="card">
 <h2>{{t "web.top"}}</h2>
 <div class="scroll"><table>
-<tr><th>{{t "web.col.process"}}</th><th class="num">{{t "web.col.cpu"}}</th></tr>
-{{range .Now.Top}}<tr><td>{{.Name}}</td><td class="num">{{f1 .Percent}}%</td></tr>{{else}}<tr><td class="mute" colspan="2">{{t "web.top.idle"}}</td></tr>{{end}}
+<thead><tr><th>{{t "web.col.process"}}</th><th>{{t "web.col.cpu"}}</th></tr></thead>
+<tbody>{{range .Now.Top}}<tr><td>{{.Name}}</td><td><span class="mini"><i style="width:{{pct .Percent}}%"></i></span>{{f1 .Percent}}%</td></tr>{{else}}<tr><td class="mute" colspan="2">{{t "web.top.idle"}}</td></tr>{{end}}</tbody>
 </table></div>
 <p class="mute">{{t "web.top.hint"}}</p>
+</section>
+<section class="card">
+<h2>{{t "web.sensors"}}</h2>
+{{if .Now.Temps}}<div class="scroll"><table><tbody>{{range .Now.Temps}}<tr><td>{{.Label}}</td><td class="num {{bar .C}}">{{f0 .C}} °C</td></tr>{{end}}</tbody></table></div>
+{{else}}<p class="mute">{{t "web.nosensors"}}</p>{{end}}
+</section>
 </div>
-</div>
-{{end}}
 {{end}}
 {{template "foot" .}}{{end}}
 
 {{define "events"}}{{template "head" .}}
 <div class="card">
-<h1>{{t "web.nav.events"}}</h1>
 {{range .Body}}<div class="row"><span class="{{.Level}}">{{template "evicon" .Level}}</span><span class="mute">{{hhmm .At}}</span> {{etext .}}</div>
 {{else}}<p class="mute">{{t "web.events.none"}}</p>{{end}}
 </div>
@@ -310,7 +412,7 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 {{define "logs"}}{{template "head" .}}
 {{with .Body}}
 <div class="card">
-<h1>{{t "b.logs"}}: {{.Name}}</h1>
+<h2>{{t "b.logs"}}</h2>
 <p class="row"><a href="/logs/{{.Name}}">{{t "b.refresh"}}</a>{{if ne .Name "egress"}} · <a href="/c/{{.Name}}">{{t "web.back"}}</a>{{end}} · <a href="/logs/egress">egress</a></p>
 <pre>{{.Text}}</pre>
 </div>
@@ -319,7 +421,6 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 
 {{define "add"}}{{template "head" .}}
 <div class="card">
-<h1>{{t "web.add.title"}}</h1>
 <form method="post" action="/add">
 <p><label>{{t "web.add.name"}}<br><input type="text" name="name" required pattern="[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?"></label><br><span class="mute">{{t "web.add.name.hint"}}</span></p>
 <p><label>{{t "web.add.url"}}<br><input type="text" name="url" required style="width:100%"></label><br><span class="mute">{{t "web.add.url.hint"}}</span></p>
@@ -331,7 +432,7 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 
 {{define "doctor"}}{{template "head" .}}
 {{with .Body}}
-<div class="card"><h1>{{t "b.doctor"}}</h1><p>{{.Summary}}</p></div>
+<div class="card"><p style="margin:0">{{.Summary}}</p></div>
 <div class="grid2">
 {{range .Sections}}
 <div class="card">
@@ -347,7 +448,7 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 {{with .Body}}
 <div class="grid2">
 <div class="card">
-<h1>{{t "b.gateway"}}</h1>
+<h2>{{t "web.col.state"}}</h2>
 {{with .Egress}}<dl>
 <dt>🌍 {{t "web.world"}}</dt><dd>{{if .WorldOK}}<span class="pill ok">✓</span>{{else}}<span class="pill FAIL">✕</span>{{end}} {{.World}}</dd>
 <dt>🇷🇺 {{t "web.gw.russia"}}</dt><dd>{{if .RUOK}}{{if .RUFallback}}<span class="pill warn">!</span>{{else}}<span class="pill ok">✓</span>{{end}}{{else}}<span class="pill FAIL">✕</span>{{end}} {{$.Body.Russia}}</dd>
@@ -394,7 +495,6 @@ footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mut
 
 {{define "speed"}}{{template "head" .}}
 <div class="card">
-<h1>{{t "b.speed"}}</h1>
 {{with .Body}}{{range .}}<p>{{.}}</p>{{end}}{{end}}
 <form method="post" action="/speed"><button class="primary">{{t "web.speed.run"}}</button></form>
 <p class="mute">{{t "web.speed.hint"}}</p>
