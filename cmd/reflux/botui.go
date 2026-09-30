@@ -32,8 +32,8 @@ var showKeep = 10 * time.Minute
 // confirmFor is how long a confirmation button stays valid.
 const confirmFor = 10 * time.Minute
 
-// addFor is how long the bot waits for a new client's details.
-const addFor = 10 * time.Minute
+// awaitFor is how long the bot waits for the answer to its question.
+const awaitFor = 10 * time.Minute
 
 func (b *bot) tr(id string, args ...any) string { return tr(b.lang, id, args...) }
 
@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "revoke", "restart", "logs", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "speedtest", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -87,13 +87,22 @@ func (b *bot) message(text string) screen {
 		return screen{}
 	}
 	if !strings.HasPrefix(f[0], "/") {
-		if !b.awaitAdd.IsZero() && time.Since(b.awaitAdd) < addFor {
-			b.awaitAdd = time.Time{}
+		q := b.await
+		b.await = awaiting{}
+		if q.kind == "" || time.Since(q.at) > awaitFor {
+			return b.home()
+		}
+		switch q.kind {
+		case "add":
 			return b.add(f)
+		case "rename":
+			return b.rename(q.name, f[0])
+		case "expire":
+			return b.expireTo(q.name, f[0])
 		}
 		return b.home()
 	}
-	b.awaitAdd = time.Time{}
+	b.await = awaiting{}
 	cmd, _, _ := strings.Cut(f[0], "@") // /status@SomeBot
 	args := f[1:]
 	one := func(then func(string) screen) screen {
@@ -128,7 +137,14 @@ func (b *bot) message(text string) screen {
 		if len(args) != 2 {
 			return screen{text: b.tr("ui.usage.expire")}
 		}
-		return b.expire(args[0], args[1])
+		return b.expireTo(args[0], args[1])
+	case "/rename":
+		if len(args) != 2 {
+			return screen{text: b.tr("ui.usage.rename")}
+		}
+		return b.rename(args[0], args[1])
+	case "/speedtest":
+		return b.speed()
 	case "/revoke":
 		return one(b.revokeAsk)
 	case "/restart":
@@ -142,7 +158,21 @@ func (b *bot) message(text string) screen {
 // press handles a button: it edits the screen it belongs to.
 func (b *bot) press(cb *tgCallback) {
 	action, arg, _ := strings.Cut(cb.Data, ":")
+	if action == "sp" {
+		// The test takes a while: say so before the spinner times out.
+		b.t.answer(cb.ID, b.tr("ui.speed.wait"))
+		b.mu.Lock()
+		sc := b.speed()
+		b.mu.Unlock()
+		if _, err := b.t.sendKeyboard(b.chat, sc.text, sc.kb); err != nil {
+			log.Printf("bot: speed test: %v", err)
+		}
+		return
+	}
 	b.mu.Lock()
+	if action == "tgme" && cb.From != nil {
+		b.linkTo = cb.From
+	}
 	sc, toast := b.button(action, arg)
 	b.mu.Unlock()
 	b.t.answer(cb.ID, toast)
@@ -159,7 +189,7 @@ func (b *bot) press(cb *tgCallback) {
 func (b *bot) button(action, arg string) (screen, string) {
 	switch action {
 	case "home":
-		b.awaitAdd = time.Time{}
+		b.await = awaiting{}
 		return b.home(), ""
 	case "doc":
 		return b.doctorScreen(), ""
@@ -179,10 +209,24 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setPaused(arg, true), ""
 	case "re":
 		return b.setPaused(arg, false), ""
-	case "ex30":
-		return b.extend(arg), ""
-	case "exn":
-		return b.expire(arg, "never"), ""
+	case "acc":
+		b.await = awaiting{}
+		return b.accessScreen(arg), ""
+	case "ax":
+		name, how, _ := strings.Cut(arg, ":")
+		return b.setExpiry(name, how), ""
+	case "axin":
+		b.await = awaiting{kind: "expire", name: arg, at: time.Now()}
+		return screen{b.tr("ui.expire.prompt", html.EscapeString(arg)), keyboard{{b.btn("b.cancel", "acc:"+arg)}}}, ""
+	case "tg":
+		return b.telegramScreen(arg), ""
+	case "tgme":
+		return b.link(arg, true), ""
+	case "tgoff":
+		return b.link(arg, false), ""
+	case "ren":
+		b.await = awaiting{kind: "rename", name: arg, at: time.Now()}
+		return screen{b.tr("ui.rename.prompt", html.EscapeString(arg)), keyboard{{b.btn("b.cancel", "c:"+arg)}}}, ""
 	case "rv":
 		return b.revokeAsk(arg), ""
 	case "rv!":
@@ -204,6 +248,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.settingsScreen(), ""
 	case "lang":
 		return b.setLang(lang(arg)), ""
+	case "mute":
+		return b.toggleMute(arg), ""
 	}
 	return b.home(), ""
 }
@@ -318,13 +364,13 @@ func (b *bot) home() screen {
 		t.WriteString(b.tr("ui.clients.none") + "\n")
 	}
 	for _, v := range b.clientViews(clients) {
-		fmt.Fprintf(&t, "%s <b>%s</b> · %s\n", v.mark(), html.EscapeString(v.c.Name), b.state(v))
+		fmt.Fprintf(&t, "%s <b>%s</b>%s · %s\n", v.mark(), html.EscapeString(v.c.Name), owner(v.c), b.state(v))
 	}
 	t.WriteString("\n" + b.tr("ui.updated", time.Now().Format("15:04:05")))
 	return screen{t.String(), keyboard{
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
-		{b.btn("b.settings", "set")},
+		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
 	}}
 }
 
@@ -394,6 +440,11 @@ func (b *bot) clientScreen(name string) screen {
 		t.WriteString(b.tr("ui.client.client", online) + "\n")
 		t.WriteString(b.tr("ui.client.traffic", humanBytes(v.status.down), humanBytes(v.status.upB)) + "\n")
 	}
+	tg := b.tr("ui.tg.none")
+	if c.Telegram != nil {
+		tg = html.EscapeString(c.Telegram.String())
+	}
+	t.WriteString(b.tr("ui.client.telegram", tg) + "\n")
 	t.WriteString(b.tr("ui.client.created", c.Created.Local().Format(time.DateOnly)))
 	toggle := b.btn("b.pause", "pa:"+c.Name)
 	if c.Paused {
@@ -401,17 +452,58 @@ func (b *bot) clientScreen(name string) screen {
 	}
 	return screen{t.String(), keyboard{
 		{b.btn("b.qr", "qr:"+c.Name), toggle},
-		{b.btn("b.plus30", "ex30:"+c.Name), b.btn("b.never", "exn:"+c.Name)},
-		{b.btn("b.logs", "lg:"+c.Name), b.btn("b.revoke", "rv:"+c.Name)},
+		{b.btn("b.access", "acc:"+c.Name), b.btn("b.telegram", "tg:"+c.Name)},
+		{b.btn("b.rename", "ren:"+c.Name), b.btn("b.logs", "lg:"+c.Name)},
+		{b.btn("b.revoke", "rv:"+c.Name)},
 		{b.btn("b.clients", "cls"), b.btn("b.home", "home")},
 	}}
 }
 
 func (b *bot) settingsScreen() screen {
-	return screen{b.tr("ui.settings", b.tr("lang.name")), keyboard{
-		{{Text: "🇷🇺 Русский", Data: "lang:ru"}, {Text: "🇬🇧 English", Data: "lang:en"}},
-		{b.btn("b.home", "home")},
-	}}
+	var t strings.Builder
+	t.WriteString(b.tr("ui.settings", b.tr("lang.name")) + "\n\n" + b.tr("ui.alerts") + "\n")
+	kb := keyboard{{{Text: "🇷🇺 Русский", Data: "lang:ru"}, {Text: "🇬🇧 English", Data: "lang:en"}}}
+	for _, c := range alertCategories {
+		mark := "🔔"
+		if b.mute[c] {
+			mark = "🔕"
+		}
+		fmt.Fprintf(&t, "%s %s\n", mark, b.tr("alerts."+c+".about"))
+		kb = append(kb, []tgButton{{Text: mark + " " + b.tr("alerts."+c), Data: "mute:" + c}})
+	}
+	kb = append(kb, []tgButton{b.btn("b.home", "home")})
+	return screen{t.String(), kb}
+}
+
+// toggleMute switches an alert category off or back on and saves it.
+func (b *bot) toggleMute(cat string) screen {
+	known := false
+	for _, c := range alertCategories {
+		known = known || c == cat
+	}
+	if known {
+		b.mute[cat] = !b.mute[cat]
+		b.saveSettings()
+	}
+	return b.settingsScreen()
+}
+
+// saveSettings writes the language and the muted categories to
+// telegram.json.
+func (b *bot) saveSettings() {
+	c, err := b.s.loadBotConfig()
+	if err == nil {
+		c.Lang, c.Mute = string(b.lang), nil
+		for _, cat := range alertCategories {
+			if b.mute[cat] {
+				c.Mute = append(c.Mute, cat)
+			}
+		}
+		err = b.s.saveBotConfig(c)
+	}
+	if err != nil {
+		log.Printf("bot: saving the settings: %v", err)
+	}
 }
 
 func (b *bot) help() screen {
@@ -446,7 +538,8 @@ func (b *bot) setPaused(name string, paused bool) screen {
 	return b.clientScreen(name)
 }
 
-func (b *bot) expire(name, when string) screen {
+// expireTo sets the expiry from what the owner typed: never, a date, 30d.
+func (b *bot) expireTo(name, when string) screen {
 	t, err := parseExpiry(when, time.Now())
 	if err == nil {
 		err = b.change(func() error {
@@ -454,35 +547,150 @@ func (b *bot) expire(name, when string) screen {
 		})
 	}
 	if err != nil {
-		return b.failed(err, b.btn("b.back", "c:"+name))
+		return b.failed(err, b.btn("b.back", "acc:"+name))
 	}
-	return b.clientScreen(name)
+	return b.accessScreen(name)
 }
 
-// extend adds 30 days to the access: from its end while it lasts, from
-// now once it ended. Unlimited access stays unlimited.
-func (b *bot) extend(name string) screen {
+// accessDays are the extensions the access screen offers.
+var accessDays = []int{1, 7, 30, 90, 365}
+
+func (b *bot) accessScreen(name string) screen {
+	c, err := b.s.Get(name)
+	if err != nil {
+		return b.failed(err, b.btn("b.clients", "cls"))
+	}
+	now := time.Now()
+	p := accessPhrase(c, now)
+	var t strings.Builder
+	fmt.Fprintf(&t, "%s\n%s", b.tr("ui.access.title", html.EscapeString(c.Name)), b.tr("ui.client.access", b.tr(p.id, p.args...)))
+	if !c.Expires.IsZero() && now.Before(c.Expires) {
+		t.WriteString(" · " + b.tr("ui.access.left", durationIn(b.lang, c.Expires.Sub(now))))
+	}
+	t.WriteString("\n\n" + b.tr("ui.access.hint"))
+	var plus []tgButton
+	for _, d := range accessDays {
+		plus = append(plus, tgButton{Text: b.tr("b.plusdays", d), Data: fmt.Sprintf("ax:%s:+%d", c.Name, d)})
+	}
+	return screen{t.String(), keyboard{
+		plus[:3], plus[3:],
+		{b.btn("b.never", "ax:"+c.Name+":never"), b.btn("b.endnow", "ax:"+c.Name+":now")},
+		{b.btn("b.typedate", "axin:"+c.Name)},
+		{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")},
+	}}
+}
+
+// setExpiry applies an access screen button: +N days from the end of the
+// access while it lasts (from now once it ended, or for unlimited
+// access), no limit, or an end right now.
+func (b *bot) setExpiry(name, how string) screen {
 	err := b.change(func() error {
 		return setAccess(b.s, name, io.Discard, func(c *Client) error {
-			if c.Expires.IsZero() {
-				return nil
+			now := time.Now().Truncate(time.Second)
+			switch {
+			case how == "never":
+				c.Expires = time.Time{}
+			case how == "now":
+				c.Expires = now
+			case strings.HasPrefix(how, "+"):
+				days, err := strconv.Atoi(how[1:])
+				if err != nil || days <= 0 || days > 3650 {
+					return fmt.Errorf("bad extension %q", how)
+				}
+				from := now
+				if c.Expires.After(now) {
+					from = c.Expires
+				}
+				c.Expires = from.AddDate(0, 0, days)
+			default:
+				return fmt.Errorf("bad expiry %q", how)
 			}
-			from := time.Now()
-			if c.Expires.After(from) {
-				from = c.Expires
-			}
-			c.Expires = from.AddDate(0, 0, 30)
 			return nil
 		})
 	})
 	if err != nil {
-		return b.failed(err, b.btn("b.back", "c:"+name))
+		return b.failed(err, b.btn("b.back", "acc:"+name))
+	}
+	return b.accessScreen(name)
+}
+
+func (b *bot) telegramScreen(name string) screen {
+	c, err := b.s.Get(name)
+	if err != nil {
+		return b.failed(err, b.btn("b.clients", "cls"))
+	}
+	now := b.tr("ui.tg.none")
+	if c.Telegram != nil {
+		now = html.EscapeString(c.Telegram.String())
+	}
+	kb := keyboard{{b.btn("b.tg.me", "tgme:"+c.Name)}}
+	if c.Telegram != nil {
+		kb = append(kb, []tgButton{b.btn("b.tg.off", "tgoff:"+c.Name)})
+	}
+	kb = append(kb, []tgButton{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")})
+	return screen{b.tr("ui.tg.title", html.EscapeString(c.Name)) + "\n" + b.tr("ui.client.telegram", now) + "\n\n" + b.tr("ui.tg.hint"), kb}
+}
+
+// link binds a client to the owner's own account (the one pressing the
+// button), or unbinds it. Others will come with the client bot.
+func (b *bot) link(name string, me bool) screen {
+	from := b.linkTo
+	b.linkTo = nil
+	err := b.change(func() error {
+		c, err := b.s.Get(name)
+		if err != nil {
+			return err
+		}
+		c.Telegram = nil
+		if me {
+			if from == nil {
+				return errors.New("no account to link")
+			}
+			c.Telegram = &TGAccount{ID: from.ID, Username: from.Username, Name: from.FirstName}
+		}
+		return b.s.Save(c)
+	})
+	if err != nil {
+		return b.failed(err, b.btn("b.back", "tg:"+name))
 	}
 	return b.clientScreen(name)
 }
 
+func (b *bot) rename(name, to string) screen {
+	err := b.change(func() error { return cmdRename(b.s, name, to, io.Discard) })
+	if err != nil {
+		return b.failed(err, b.btn("b.back", "c:"+name))
+	}
+	sc := b.clientScreen(to)
+	sc.text = b.tr("ui.rename.done", html.EscapeString(name), html.EscapeString(to)) + "\n\n" + sc.text
+	return sc
+}
+
+// speed runs the speed test through the egress.
+func (b *bot) speed() screen {
+	var t strings.Builder
+	t.WriteString(b.tr("ui.speed.title") + "\n")
+	for _, l := range speedLines(b.lang, speedTest()) {
+		t.WriteString(html.EscapeString(l) + "\n")
+	}
+	t.WriteString("\n" + b.tr("ui.speed.hint") + "\n" + b.tr("ui.updated", time.Now().Format("15:04:05")))
+	return screen{t.String(), keyboard{{b.btn("b.speed", "sp"), b.btn("b.home", "home")}}}
+}
+
+// owner is the Telegram account after a client's name, if linked.
+func owner(c Client) string {
+	if c.Telegram == nil {
+		return ""
+	}
+	name := c.Telegram.Name
+	if name == "" {
+		name = c.Telegram.String()
+	}
+	return " (" + html.EscapeString(name) + ")"
+}
+
 func (b *bot) addPrompt() screen {
-	b.awaitAdd = time.Now()
+	b.await = awaiting{kind: "add", at: time.Now()}
 	return screen{b.tr("ui.add.prompt"), keyboard{{b.btn("b.cancel", "home")}}}
 }
 
@@ -565,14 +773,7 @@ func (b *bot) setLang(l lang) screen {
 		l = langRU
 	}
 	b.lang = l
-	c, err := b.s.loadBotConfig()
-	if err == nil {
-		c.Lang = string(l)
-		err = b.s.saveBotConfig(c)
-	}
-	if err != nil {
-		log.Printf("bot: saving the language: %v", err)
-	}
+	b.saveSettings()
 	b.setMenu()
 	return b.settingsScreen()
 }

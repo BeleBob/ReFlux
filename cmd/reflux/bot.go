@@ -34,6 +34,8 @@ type botConfig struct {
 	Token string `json:"token"`
 	Chat  int64  `json:"chat"`
 	Lang  string `json:"lang,omitempty"` // "ru" (default) or "en"
+	// Mute lists the alert categories the owner switched off.
+	Mute []string `json:"mute,omitempty"`
 }
 
 func (s Store) botConfigPath() string { return filepath.Join(s.Root, "telegram.json") }
@@ -240,11 +242,21 @@ type bot struct {
 	chat int64
 	// mu serializes the checks, the commands and the buttons: they run
 	// docker and swap dockerStderr, and share the fields below.
-	mu       sync.Mutex
-	lang     lang
-	awaitAdd time.Time // when the owner was asked for a new client's details
-	mon      monitor
-	outbox   []string // alerts not delivered yet
+	mu     sync.Mutex
+	lang   lang
+	mute   map[string]bool // alert categories switched off
+	await  awaiting        // what the owner's next plain message answers
+	linkTo *tgUser         // who pressed "link to me"
+	mon    monitor
+	outbox []string // alerts not delivered yet
+}
+
+// awaiting is a question the bot asked: the owner's next plain message
+// is its answer, within awaitFor.
+type awaiting struct {
+	kind string // "add", "rename" or "expire"
+	name string // the client it is about
+	at   time.Time
 }
 
 func newBot(s Store, c botConfig) *bot {
@@ -252,7 +264,27 @@ func newBot(s Store, c botConfig) *bot {
 	if l != langEN {
 		l = langRU
 	}
-	return &bot{s: s, t: newTelegram(c.Token), chat: c.Chat, lang: l, mon: monitor{confirm: confirmRuns}}
+	mute := map[string]bool{}
+	for _, m := range c.Mute {
+		mute[m] = true
+	}
+	return &bot{s: s, t: newTelegram(c.Token), chat: c.Chat, lang: l, mute: mute, mon: monitor{confirm: confirmRuns}}
+}
+
+// alertCategories are the groups of alerts the owner can switch off.
+var alertCategories = []string{"tunnels", "nodes", "updates", "server"}
+
+// category is the group of a check's alerts.
+func category(key string) string {
+	switch {
+	case key == "world", key == "russia", key == "egress", key == "egress-error", key == "kill-switch":
+		return "tunnels"
+	case strings.HasPrefix(key, "node:"), strings.HasPrefix(key, "doc:"), key == "clients":
+		return "nodes"
+	case strings.HasPrefix(key, "image:"):
+		return "updates"
+	}
+	return "server"
 }
 
 func (b *bot) run() error {
@@ -288,15 +320,28 @@ func (b *bot) run() error {
 func (b *bot) watch() {
 	for first := true; ; first = false {
 		b.mu.Lock()
-		fs := runChecks(b.s)
-		news := b.mon.update(fs, b.lang)
-		if first {
-			news = []string{startMessage(fs, b.lang)}
-		}
+		news := b.check(first)
 		b.mu.Unlock()
 		b.deliver(news)
 		time.Sleep(checkEvery)
 	}
+}
+
+// check runs the checks once and returns the news the owner wants: the
+// start summary on the first run, the changes after. The caller holds
+// b.mu.
+func (b *bot) check(first bool) []string {
+	fs := runChecks(b.s)
+	var news []string
+	for _, a := range b.mon.update(fs, b.lang) {
+		if !b.mute[category(a.key)] {
+			news = append(news, a.text)
+		}
+	}
+	if first && !b.mute["updates"] {
+		news = []string{startMessage(fs, b.lang)}
+	}
+	return news
 }
 
 // deliver sends the news of one run as one message, with whatever an
@@ -347,7 +392,12 @@ type pendingChange struct {
 	runs int
 }
 
-func (m *monitor) update(fs []finding, l lang) []string {
+// alert is one piece of news and the check it comes from.
+type alert struct {
+	key, text string
+}
+
+func (m *monitor) update(fs []finding, l lang) []alert {
 	cur := map[string]finding{}
 	var keys []string
 	for _, f := range fs {
@@ -365,7 +415,7 @@ func (m *monitor) update(fs []finding, l lang) []string {
 		}
 	}
 	sort.Strings(gone)
-	var news []string
+	var news []alert
 	for _, k := range append(keys, gone...) {
 		c, now := cur[k]
 		r, was := m.reported[k]
@@ -399,11 +449,11 @@ func (m *monitor) update(fs []finding, l lang) []string {
 		m.reported[k] = c
 		switch {
 		case c.Level != levelOK:
-			news = append(news, alertLine(c, l))
+			news = append(news, alert{k, alertLine(c, l)})
 		case was && r.Level != levelOK:
-			news = append(news, alertLine(c, l)) // resolved
+			news = append(news, alert{k, alertLine(c, l)}) // resolved
 		case was:
-			news = append(news, "ℹ️ "+html.EscapeString(c.text(l))) // a failover, an update
+			news = append(news, alert{k, "ℹ️ " + html.EscapeString(c.text(l))}) // a failover, an update
 		}
 	}
 	return news

@@ -239,7 +239,11 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, ""},
 	}
 	for i, st := range steps {
-		if got := strings.Join(m.update(st.fs, langEN), "\n"); got != st.news {
+		var texts []string
+		for _, a := range m.update(st.fs, langEN) {
+			texts = append(texts, a.text)
+		}
+		if got := strings.Join(texts, "\n"); got != st.news {
 			t.Errorf("run %d: news %q, want %q", i, got, st.news)
 		}
 	}
