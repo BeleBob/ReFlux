@@ -65,6 +65,13 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 // docWriteTimeout bounds one WebSocket write to the document.
 const docWriteTimeout = 20 * time.Second
 
+// editAPIURL opens a public document for editing; a variable for tests.
+var editAPIURL = "https://cloud.mail.ru/api/v4/r7/edit"
+
+// nsConnectTimeout bounds the wait for the server's Socket.IO namespace
+// connect answer ("40{sid}") before the connection is retried.
+const nsConnectTimeout = 15 * time.Second
+
 // unlockDocument releases the document's auth lock (see handleMessage),
 // with the fields the editor sends (sdkjs DocsCoApi.unLockDocument).
 const unlockDocument = `42["message",{"type":"unLockDocument","isSave":false,"unlock":true,"deleteIndex":null,"releaseLocks":false}]`
@@ -247,22 +254,12 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			UserID:     userID,
 		}
 
-		t.Mu.Lock()
-		t.session = session
-		t.SetConnected(true)
-		t.Mu.Unlock()
-
-		if existingSession == nil {
-			utils.SafeGo("mailru.writer", t.writerLoop)
-		}
-
-		// Auth - fired immediately, same as the Yandex.Docs transport. No
-		// need to wait for the server's own "0{"/"40" handshake frames
-		// first: Mail.ru's coauthoring server buffers and processes these
-		// once its own session state catches up, and waiting for explicit
-		// acks here only stretches the outage window on every reconnect
-		// (Mail.ru can delay a fresh joiner's auth confirmation by up to
-		// ~30s while it reconciles with the other participant).
+		// Socket.IO namespace connect. The server checks the token
+		// asynchronously and closes the connection (close 1005, no reason)
+		// when any "42" event - the auth message or tunnel data - arrives
+		// before its "40{sid}" answer, so both wait for it below. The
+		// answer comes within milliseconds; Mail.ru's slow confirmation of a
+		// second editor is the auth result, which is not waited for.
 		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
 		session.safeWrite(websocket.TextMessage, []byte(auth1))
 
@@ -304,11 +301,31 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"supportAuthChangesAck": true,
 		}
 		messagePart, _ := json.Marshal([]interface{}{"message", authMsg})
-		session.safeWrite(websocket.TextMessage, []byte(fmt.Sprintf("42%s", string(messagePart))))
+		auth2 := []byte(fmt.Sprintf("42%s", string(messagePart)))
 
 		connectedAt := time.Now()
+		joined := false
+		_ = conn.SetReadDeadline(connectedAt.Add(nsConnectTimeout))
 		for t.IsRunning() {
 			_, message, err := conn.ReadMessage()
+			if err == nil && !joined {
+				switch {
+				case bytes.HasPrefix(message, []byte("40")):
+					joined = true
+					_ = conn.SetReadDeadline(time.Time{})
+					session.safeWrite(websocket.TextMessage, auth2)
+					t.Mu.Lock()
+					t.session = session
+					t.SetConnected(true)
+					t.Mu.Unlock()
+					if existingSession == nil {
+						utils.SafeGo("mailru.writer", t.writerLoop)
+					}
+					continue
+				case bytes.HasPrefix(message, []byte("44")):
+					err = fmt.Errorf("namespace connect refused: %s", message)
+				}
+			}
 			if err != nil {
 				utils.Debugf("[M-DOCS] Read error: %v", err)
 				if utils.Throttled("m-docs.drop", time.Minute) {
@@ -535,10 +552,9 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	apiURL := "https://cloud.mail.ru/api/v4/r7/edit"
-	utils.Debugf("[M-DOCS] fetchDocInfo POST %s", apiURL)
+	utils.Debugf("[M-DOCS] fetchDocInfo POST %s", editAPIURL)
 
-	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
+	req, _ := http.NewRequest("POST", editAPIURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("User-Agent", mailruUserAgent)
@@ -594,7 +610,8 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 		editorUserID, _ = userObj["id"].(string)
 	}
 
-	wsBase := strings.Replace(apiBase, "https://", "wss://", 1)
+	// https -> wss (http -> ws for a test server).
+	wsBase := strings.Replace(apiBase, "http", "ws", 1)
 	wsURL := fmt.Sprintf("%s/doc/%s/c/?EIO=4&transport=websocket", wsBase, docKey)
 
 	return MailruDocsInfo{
