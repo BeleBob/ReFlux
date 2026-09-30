@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -155,4 +156,32 @@ func readCompose(t *testing.T, s Store) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// The CLI, heal from cron and the bot change the same files and
+// containers: they take turns.
+func TestCommandsTakeTurns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	calls := fakeDocker(t, "")
+	if err := run([]string{"add", "phone", "--url", testURL, "--no-apply"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	old := lockWait
+	lockWait = 200 * time.Millisecond
+	defer func() { lockWait = old }()
+	unlock, err := Store{Root: home}.Lock(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"heal"}, nil, io.Discard); err != nil || len(*calls) != 0 {
+		t.Errorf("heal while busy: err=%v, docker calls %q; want a silent skip", err, *calls)
+	}
+	if err := run([]string{"pause", "phone"}, nil, io.Discard); !errors.Is(err, errBusy) {
+		t.Errorf("pause while busy: %v, want errBusy", err)
+	}
+	unlock()
+	if err := run([]string{"pause", "phone"}, nil, io.Discard); err != nil {
+		t.Errorf("pause after the lock was released: %v", err)
+	}
 }

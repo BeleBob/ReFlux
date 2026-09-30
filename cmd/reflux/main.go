@@ -81,6 +81,20 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	s := Store{Root: root}
 	cmd, rest := args[0], args[1:]
+	if changes[cmd] {
+		wait := lockWait
+		if cmd == "heal" {
+			wait = 0 // from cron: skip this minute rather than pile up
+		}
+		unlock, err := s.Lock(wait)
+		if errors.Is(err, errBusy) && cmd == "heal" {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	switch cmd {
 	case "add":
 		return cmdAdd(s, rest, stdout)
@@ -184,6 +198,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 
 // imageSourceLabel marks the images built from this repository.
 const imageSourceLabel = "org.opencontainers.image.source=https://github.com/BeleBob/ReFlux"
+
+// changes are the commands that change the data directory or the
+// containers; they run one at a time (Store.Lock).
+var changes = map[string]bool{
+	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true,
+	"apply": true, "update": true, "restart": true, "heal": true,
+}
+
+// lockWait is how long a command waits for another one to finish.
+var lockWait = 2 * time.Minute
 
 func dataDir() (string, error) {
 	if d := os.Getenv("REFLUX_HOME"); d != "" {
