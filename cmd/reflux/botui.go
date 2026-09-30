@@ -264,6 +264,14 @@ func (b *bot) button(action, arg string) (screen, string) {
 			return b.gatewayScreen(), b.tr("ui.expired.button")
 		}
 		return b.setRussia(mode), ""
+	case "gwc":
+		return b.carrierAsk(arg), ""
+	case "gwc!":
+		mode, at, _ := strings.Cut(arg, ":")
+		if !fresh(at) {
+			return b.gatewayScreen(), b.tr("ui.expired.button")
+		}
+		return b.setCarrier(mode), ""
 	case "rnk":
 		c, err := b.s.Get(arg)
 		if err != nil || c.Telegram == nil || nick(*c.Telegram) == "" {

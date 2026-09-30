@@ -124,7 +124,7 @@ func TestDiffPrefixes(t *testing.T) {
 }
 
 func TestKillSwitchLetsOnlyTunnelServersOut(t *testing.T) {
-	ks := killSwitch(false)
+	ks := killSwitch(false, false)
 	for _, want := range []string{
 		`oifname "eth0" ip daddr @endpoints meta l4proto udp accept`,
 		`oifname "eth0" counter drop`,
@@ -445,7 +445,7 @@ func isRU(t *testing.T, a string) bool {
 }
 
 func TestCarrierDNSIsExemptBeforeTheRedirect(t *testing.T) {
-	ks := killSwitch(false)
+	ks := killSwitch(false, false)
 	exempt := strings.Index(ks, "th dport 53 accept")
 	redirect := strings.Index(ks, "udp dport 53 redirect")
 	if exempt < 0 || exempt > redirect {
@@ -459,10 +459,10 @@ func TestCarrierDNSIsExemptBeforeTheRedirect(t *testing.T) {
 }
 
 func TestKillSwitchOpensRussiaOnlyInDirectMode(t *testing.T) {
-	if strings.Contains(killSwitch(false), "@ru4 accept") {
+	if strings.Contains(killSwitch(false, false), "@ru4 accept") {
 		t.Error("tunnel mode lets Russian addresses out of the uplink")
 	}
-	ks := killSwitch(true)
+	ks := killSwitch(true, false)
 	ru := strings.Index(ks, `oifname "eth0" ip daddr @ru4 accept`)
 	drop := strings.Index(ks, `oifname "eth0" counter drop`)
 	if ru < 0 || ru > drop {
@@ -717,5 +717,86 @@ func TestStartsWithTheLastWorldThatHeld(t *testing.T) {
 	os.WriteFile(filepath.Join(c.stateDir, lastFile), []byte("world-9.conf\n"), 0o600)
 	if i := restarted.firstWorld(); i != 0 {
 		t.Errorf("unknown remembered server: start %d, want 0", i)
+	}
+}
+
+func TestLoadCarrierHosts(t *testing.T) {
+	dir := t.TempDir()
+	if h := loadCarrierHosts(dir); h != nil {
+		t.Errorf("without the file: %v", h)
+	}
+	os.WriteFile(filepath.Join(dir, carrierFile), nil, 0o600)
+	if h := strings.Join(loadCarrierHosts(dir), ","); h != "cloud.mail.ru,docs.datacloudmail.ru" {
+		t.Errorf("empty file: %s", h)
+	}
+	os.WriteFile(filepath.Join(dir, carrierFile), []byte("# mail.ru\ncloud.mail.ru\n\n docs.example \n"), 0o600)
+	if h := strings.Join(loadCarrierHosts(dir), ","); h != "cloud.mail.ru,docs.example" {
+		t.Errorf("custom file: %s", h)
+	}
+}
+
+func TestKillSwitchOpensCarriersOnlyWhenAsked(t *testing.T) {
+	if strings.Contains(killSwitch(false, false), "@carrier4 accept") {
+		t.Error("carriers let out without carrier-direct")
+	}
+	ks := killSwitch(false, true)
+	rule, drop := strings.Index(ks, `oifname "eth0" ip daddr @carrier4 accept`), strings.Index(ks, `oifname "eth0" counter drop`)
+	if rule < 0 || rule > drop || strings.Contains(ks, "@ru4 accept") {
+		t.Errorf("carrier-direct kill switch:\n%s", ks)
+	}
+}
+
+// The carriers' addresses leave out of the uplink: the kill switch opens
+// for each before it is routed out, and one that stops resolving goes
+// back into the tunnels after a day.
+func TestCarriersGoOutOfTheUplink(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n"}
+	c := testController(t, f)
+	c.carrierHosts = []string{"cloud.mail.ru", "docs.datacloudmail.ru"}
+	answers := map[string][]netip.Addr{
+		"cloud.mail.ru":         {netip.MustParseAddr("217.69.139.1")},
+		"docs.datacloudmail.ru": {netip.MustParseAddr("95.163.59.187"), netip.MustParseAddr("2a00::1")},
+	}
+	var lookupErr error
+	c.lookup = func(h string) ([]netip.Addr, error) { return answers[h], lookupErr }
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.stdin[0], "@carrier4 accept") {
+		t.Fatal("the kill switch has no carrier rule")
+	}
+	now := time.Now()
+	f.calls = nil
+	if err := c.refreshCarriers(now); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{"217.69.139.1", "95.163.59.187"} {
+		set := indexOf(f.calls, "nft add element inet reflux carrier4 { "+a+" }")
+		route := indexOf(f.calls, "ip route replace "+a+"/32 via 172.31.250.1 dev eth0")
+		if set < 0 || route < set {
+			t.Errorf("%s: kill switch %d, route %d:\n%s", a, set, route, strings.Join(f.calls, "\n"))
+		}
+	}
+	if strings.Join(c.carrierAddrs(), ",") != "217.69.139.1,95.163.59.187" {
+		t.Errorf("carriers %v (IPv6 must be left out)", c.carrierAddrs())
+	}
+	// Known addresses are left alone; a failed lookup changes nothing.
+	f.calls = nil
+	lookupErr = fmt.Errorf("timeout")
+	if err := c.refreshCarriers(now.Add(time.Minute)); err == nil || len(f.calls) != 0 {
+		t.Errorf("err=%v calls=%v", err, f.calls)
+	}
+	// docs moved to another address: the old one goes back after a day.
+	lookupErr = nil
+	answers["docs.datacloudmail.ru"] = []netip.Addr{netip.MustParseAddr("95.163.59.188")}
+	c.refreshCarriers(now.Add(2 * time.Hour))
+	f.calls = nil
+	c.refreshCarriers(now.Add(25 * time.Hour))
+	if indexOf(f.calls, "ip route del 95.163.59.187/32 via 172.31.250.1 dev eth0") < 0 ||
+		indexOf(f.calls, "nft delete element inet reflux carrier4 { 95.163.59.187 }") < 0 {
+		t.Errorf("stale address kept:\n%s", strings.Join(f.calls, "\n"))
+	}
+	if strings.Join(c.carrierAddrs(), ",") != "217.69.139.1,95.163.59.188" {
+		t.Errorf("carriers %v", c.carrierAddrs())
 	}
 }

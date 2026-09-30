@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -81,7 +82,7 @@ func run() {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		log.Fatal(err)
 	}
-	c := &controller{run: execRunner, runDir: runDir, confDir: configDir, stateDir: stateDir}
+	c := &controller{run: execRunner, runDir: runDir, confDir: configDir, stateDir: stateDir, lookup: resolveLocal}
 	stop := make(chan struct{})
 
 	for {
@@ -94,6 +95,10 @@ func run() {
 			}
 			if fallback {
 				russia += ", out of the uplink while it does not answer (" + fallbackFile + ")"
+			}
+			c.carrierHosts = loadCarrierHosts(configDir)
+			if len(c.carrierHosts) > 0 {
+				log.Printf("configs: carriers out of the uplink (%s): %s", carrierFile, strings.Join(c.carrierHosts, ", "))
 			}
 			// Start with the world server the owner chose, else the last
 			// one that held.

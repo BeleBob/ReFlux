@@ -66,7 +66,8 @@ func fakeHost(t *testing.T, st hostState) Store {
 		}()
 	}
 	egress := fmt.Sprintf(`{"world":"world-1.conf","world_ok":%t,"world_since":"2026-09-29T19:56:08Z",`+
-		`"ru_ok":true,"ru_mode":"direct","ru_fallback":%t,"ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0}`,
+		`"ru_ok":true,"ru_mode":"direct","ru_fallback":%t,"ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0,`+
+			`"carrier_direct":true,"carrier_addrs":["95.163.59.187","217.69.139.1"]}`,
 		st.worldUp, st.ruFallback)
 	runDocker = func(stdout io.Writer, args ...string) error {
 		switch call := strings.Join(args, " "); {
@@ -121,6 +122,7 @@ func TestDoctorOnAHealthyHost(t *testing.T) {
 		"ok    world up via world-1.conf",
 		"ok    node phone: up 16h, client online, 1.4 GB down",
 		"ok    cron runs reflux heal",
+		"ok    mail.ru channel direct: 2 addresses out of the uplink",
 		"ok    disk / 86% used",
 		"0 problem(s), 0 warning(s)",
 	} {

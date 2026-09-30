@@ -148,3 +148,42 @@ func TestChecksScreenIsShort(t *testing.T) {
 		t.Errorf("full image names on the checks screen:\n%s", text)
 	}
 }
+
+func TestCarrierDirectRestartsTheEgress(t *testing.T) {
+	s := gatewayStore(t)
+	calls := fakeDocker(t, "")
+	if err := run([]string{"gateway", "carrier", "direct"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if !s.carrierDirect() || !strings.Contains(strings.Join(*calls, "\n"), "--force-recreate") {
+		t.Errorf("direct: on=%v calls=%q", s.carrierDirect(), *calls)
+	}
+	if st, _ := os.Stat(filepath.Join(s.egressDir(), carrierFile)); st.Mode().Perm() != 0o600 {
+		t.Errorf("carrier-direct mode %v", st.Mode().Perm())
+	}
+	if err := run([]string{"gateway", "carrier", "tunnel"}, nil, io.Discard); err != nil || s.carrierDirect() {
+		t.Errorf("tunnel: err=%v on=%v", err, s.carrierDirect())
+	}
+	if err := run([]string{"gateway", "carrier", "sideways"}, nil, io.Discard); err == nil {
+		t.Error("an unknown mode accepted")
+	}
+}
+
+func TestBotCarrierSwitchNeedsAConfirmation(t *testing.T) {
+	s := gatewayStore(t)
+	fakeDocker(t, "")
+	f := newFakeTG(t)
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "ru"})
+	b.handle(press(1, 42, "gwc:direct", time.Now()))
+	if s.carrierDirect() || !strings.Contains(f.edited[0], "Канал mail.ru: напрямую (домашний IP)?") {
+		t.Fatalf("asked %q, on=%v", f.edited, s.carrierDirect())
+	}
+	b.handle(press(2, 42, "gwc!:direct:1", time.Now()))
+	if s.carrierDirect() {
+		t.Fatal("a stale button switched the channel")
+	}
+	b.handle(press(3, 42, "gwc!:direct:"+stamp(), time.Now()))
+	if !s.carrierDirect() || !strings.Contains(f.edited[2], "Канал mail.ru: напрямую (домашний IP)") {
+		t.Errorf("after the confirmation: on=%v\n%s", s.carrierDirect(), f.edited[2])
+	}
+}
