@@ -932,9 +932,11 @@ DEPRECATED (removed in v2)
 
 	if statusServer != nil {
 		if managerInst != nil {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport) })
+			utils.SafeGo("ipc-status", func() {
+				ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport, managerInst.Session().ActiveTransports)
+			})
 		} else {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil) })
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil) })
 		}
 	}
 
@@ -1018,7 +1020,7 @@ type statusSource interface {
 
 // ipcStatusLoop reports to the app every second: whether a carrier reaches
 // the peer, traffic totals, uptime and (Sessions) the active carrier.
-func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string) {
+func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string) {
 	started := time.Now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -1033,6 +1035,9 @@ func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string) {
 		}
 		if active != nil {
 			p.Active = active()
+		}
+		if activeAll != nil {
+			p.ActiveAll = activeAll()
 		}
 		_ = srv.SendStatus(p)
 	}
