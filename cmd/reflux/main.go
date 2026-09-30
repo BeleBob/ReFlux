@@ -172,18 +172,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return nil
 	case "restart":
-		// Nodes live in the egress container's network namespace; when
-		// egress restarts, they must be recreated to join the new one.
-		if err := s.Init(); err != nil {
-			return err
-		}
-		if err := render(s); err != nil {
-			return err
-		}
-		if err := checkHost(); err != nil {
-			return err
-		}
-		return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
+		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
 	case "heal":
@@ -208,6 +197,22 @@ var changes = map[string]bool{
 
 // lockWait is how long a command waits for another one to finish.
 var lockWait = 2 * time.Minute
+
+// cmdRestart recreates egress and every node. Nodes live in the egress
+// container's network namespace; when egress restarts, they must be
+// recreated to join the new one.
+func cmdRestart(s Store, stdout io.Writer) error {
+	if err := s.Init(); err != nil {
+		return err
+	}
+	if err := render(s); err != nil {
+		return err
+	}
+	if err := checkHost(); err != nil {
+		return err
+	}
+	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
+}
 
 func dataDir() (string, error) {
 	if d := os.Getenv("REFLUX_HOME"); d != "" {

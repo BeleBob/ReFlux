@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"openflux/share"
 )
 
 // The Telegram bot tells the owner when a check of `reflux doctor` changes
@@ -253,6 +255,9 @@ func (b *bot) run() error {
 	if err != nil {
 		return err
 	}
+	if err := b.t.setCommands(botCommands); err != nil {
+		log.Printf("bot: command menu: %v", err)
+	}
 	log.Print("bot: started")
 	go b.watch()
 	for {
@@ -398,14 +403,44 @@ func (m *monitor) update(fs []finding) []string {
 	return news
 }
 
-const botHelp = `ReFlux bot. It writes when a check of reflux doctor changes.
-/status  tunnels and clients
-/doctor  every check
-/pause &lt;name&gt;, /resume &lt;name&gt;
-/expire &lt;name&gt; &lt;never|2026-12-31|30d|2w|12h&gt;`
+// botCommands fill the bot's command menu; botHelp says the same.
+var botCommands = [][2]string{
+	{"status", "tunnels and clients"},
+	{"doctor", "every check"},
+	{"add", "<name> <document-url> [expiry]: new client"},
+	{"show", "<name>: link, key and QR for the client's app"},
+	{"pause", "<name>: switch a client off"},
+	{"resume", "<name>: switch it back on"},
+	{"expire", "<name> <never|2026-12-31|30d|2w|12h>"},
+	{"revoke", "<name>: delete a client's key for good"},
+	{"restart", "recreate egress and every node"},
+	{"logs", "<name|egress>: the last log lines"},
+	{"help", "this list"},
+}
 
-// handle answers a message from the owner's chat; anyone else is ignored.
+func botHelp() string {
+	var b strings.Builder
+	b.WriteString("ReFlux bot. It writes when a check of reflux doctor changes.\n")
+	for _, c := range botCommands {
+		fmt.Fprintf(&b, "/%s %s\n", c[0], html.EscapeString(c[1]))
+	}
+	return b.String()
+}
+
+// showKeep is how long the access data sent by /show stays in the chat.
+var showKeep = 10 * time.Minute
+
+// confirmFor is how long a confirmation button stays valid.
+const confirmFor = 10 * time.Minute
+
+// handle answers the owner's chat; anyone else is ignored.
 func (b *bot) handle(u tgUpdate) {
+	if cb := u.Callback; cb != nil {
+		if cb.Message != nil && cb.Message.Chat.ID == b.chat {
+			b.press(cb)
+		}
+		return
+	}
 	m := u.Message
 	if m == nil || m.Chat.ID != b.chat {
 		return
@@ -416,40 +451,223 @@ func (b *bot) handle(u tgUpdate) {
 	}
 	cmd, _, _ := strings.Cut(f[0], "@") // /status@SomeBot in groups
 	args := f[1:]
-	var reply string
 	b.mu.Lock()
+	reply, buttons := b.command(cmd, args)
+	b.mu.Unlock()
+	if reply == "" {
+		return
+	}
+	if _, err := b.t.sendButtons(b.chat, reply, buttons); err != nil {
+		log.Printf("bot: reply not sent: %v", err)
+	}
+}
+
+// command runs one command and returns the reply, with buttons when the
+// command waits for a confirmation. The caller holds b.mu.
+func (b *bot) command(cmd string, args []string) (string, []tgButton) {
 	switch cmd {
 	case "/start", "/help":
-		reply = botHelp
-	case "/status":
-		reply = pre(botStatus(b.s))
+		return botHelp(), nil
+	case "/status", "/list":
+		return pre(botStatus(b.s)), nil
 	case "/doctor":
 		fs := runChecks(b.s)
 		warns, fails := count(fs)
-		reply = pre(formatFindings(fs) + fmt.Sprintf("\n%d problem(s), %d warning(s)", fails, warns))
+		return pre(formatFindings(fs) + fmt.Sprintf("\n%d problem(s), %d warning(s)", fails, warns)), nil
 	case "/pause", "/resume", "/expire":
+		cmds := map[string]func(Store, []string, io.Writer) error{"/pause": cmdPause, "/resume": cmdResume, "/expire": cmdExpire}
 		var out strings.Builder
-		var err error
-		switch cmd {
-		case "/pause":
-			err = cmdPause(b.s, args, &out)
-		case "/resume":
-			err = cmdResume(b.s, args, &out)
-		default:
-			err = cmdExpire(b.s, args, &out)
+		err := b.change(func() error { return cmds[cmd](b.s, args, &out) })
+		return pre(withError(out.String(), err)), nil
+	case "/add":
+		return b.add(args), nil
+	case "/show":
+		if len(args) != 1 {
+			return "usage: /show &lt;name&gt;", nil
 		}
-		text := out.String()
-		if err != nil {
-			text += "error: " + err.Error()
+		b.show(args[0])
+		return "", nil
+	case "/revoke":
+		if len(args) != 1 {
+			return "usage: /revoke &lt;name&gt;", nil
 		}
-		reply = pre(text)
+		if _, err := b.s.Get(args[0]); err != nil {
+			return html.EscapeString(err.Error()), nil
+		}
+		name := html.EscapeString(args[0])
+		return "Revoke <b>" + name + "</b>? Its node stops and its key is deleted for good; the client needs a new link.",
+			[]tgButton{{Text: "Revoke " + args[0], Data: "revoke:" + args[0]}, {Text: "Cancel", Data: "cancel"}}
+	case "/restart":
+		return "Recreate egress and every node? Clients lose the channel for about a minute, and the world tunnel may take 1-3 minutes to pick a server.",
+			[]tgButton{{Text: "Restart", Data: "restart"}, {Text: "Cancel", Data: "cancel"}}
+	case "/logs":
+		if len(args) != 1 {
+			return "usage: /logs &lt;name|egress&gt;", nil
+		}
+		return b.logs(args[0]), nil
+	}
+	return "Unknown command. /help", nil
+}
+
+// change runs fn under the data directory lock, like a CLI command.
+func (b *bot) change(fn func() error) error {
+	unlock, err := b.s.Lock(lockWait)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
+func withError(out string, err error) string {
+	if err != nil {
+		out += "\nerror: " + err.Error()
+	}
+	return out
+}
+
+// add creates a client: /add <name> <document-url> [expiry].
+func (b *bot) add(args []string) string {
+	if len(args) < 2 || len(args) > 3 {
+		return "usage: /add &lt;name&gt; &lt;document-url&gt; [never|2026-12-31|30d|2w|12h]\nEvery client needs a new document."
+	}
+	expires := "never"
+	if len(args) == 3 {
+		expires = args[2]
+	}
+	when, err := parseExpiry(expires, time.Now())
+	if err != nil {
+		return html.EscapeString(err.Error())
+	}
+	var c Client
+	err = b.change(func() error {
+		if c, err = b.s.Add(args[0], "mailru", args[1]); err != nil {
+			return err
+		}
+		if !when.IsZero() {
+			c.Expires = when
+			if err := b.s.Save(c); err != nil {
+				return err
+			}
+		}
+		if err := apply(b.s, io.Discard); err != nil {
+			return fmt.Errorf("added %s, but starting its node failed: %w", c.Name, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return html.EscapeString(err.Error())
+	}
+	name := html.EscapeString(c.Name)
+	return fmt.Sprintf("Added <b>%s</b>, access %s; its node is starting.\n/show %s gives the link and the QR code for the client's app.",
+		name, html.EscapeString(accessText(c, time.Now())), name)
+}
+
+// show sends what a client's app needs: the QR code and the fields for
+// manual entry. Both are secrets, so they are deleted after showKeep.
+func (b *bot) show(name string) {
+	fail := func(err error) { b.t.send(b.chat, html.EscapeString(err.Error())) }
+	c, err := b.s.Get(name)
+	if err != nil {
+		fail(err)
+		return
+	}
+	key, err := b.s.Key(c.Name)
+	if err != nil {
+		fail(err)
+		return
+	}
+	link, err := share.MakeLink(shareConfig(c, key))
+	if err != nil {
+		fail(err)
+		return
+	}
+	png, err := share.PNG(link, 512)
+	if err != nil {
+		fail(err)
+		return
+	}
+	e := html.EscapeString
+	keep := fmt.Sprintf("deleted in %d minutes", int(showKeep.Minutes()))
+	photo, err := b.t.sendPhoto(b.chat, png, fmt.Sprintf("<b>%s</b>: scan in the OpenFlux app (%s)", e(c.Name), keep))
+	if err != nil {
+		log.Printf("bot: /show: %v", err)
+		fail(errors.New("could not send the QR code"))
+		return
+	}
+	text, err := b.t.sendButtons(b.chat, fmt.Sprintf(`<b>%s</b>: access to the channel, pass it to its owner only (%s).
+Access: %s
+
+Manual entry:
+Transport: <code>%s</code>
+Document URL: <code>%s</code>
+Encryption key: <code>%s</code>
+Legacy codec: off
+
+Link:
+<code>%s</code>`, e(c.Name), keep, e(accessText(c, time.Now())), e(c.Transport), e(c.URL), e(key), e(link)), nil)
+	if err != nil {
+		log.Printf("bot: /show: %v", err)
+	}
+	time.AfterFunc(showKeep, func() {
+		for _, id := range []int64{photo, text} {
+			if id != 0 {
+				if err := b.t.deleteMessage(b.chat, id); err != nil {
+					log.Printf("bot: deleting /show message: %v", err)
+				}
+			}
+		}
+	})
+}
+
+// logs returns the tail of a node's or the egress's log.
+func (b *bot) logs(name string) string {
+	container := "reflux-egress"
+	if name != "egress" {
+		if err := validName(name); err != nil {
+			return html.EscapeString(err.Error())
+		}
+		container = "reflux-node-" + name
+	}
+	var out strings.Builder
+	old := dockerStderr
+	dockerStderr = &out // the core and the egress log to stderr
+	err := runDocker(&out, "logs", "--tail", "40", container)
+	dockerStderr = old
+	return preTail(withError(out.String(), err))
+}
+
+// press handles a confirmation button.
+func (b *bot) press(cb *tgCallback) {
+	m := cb.Message
+	if time.Since(time.Unix(m.Date, 0)) > confirmFor {
+		b.t.answer(cb.ID, "Too late: send the command again.")
+		b.t.edit(b.chat, m.MessageID, "Expired; send the command again.")
+		return
+	}
+	b.t.answer(cb.ID, "")
+	var result string
+	b.mu.Lock()
+	switch action, name, _ := strings.Cut(cb.Data, ":"); action {
+	case "revoke":
+		var out strings.Builder
+		err := b.change(func() error { return cmdRevoke(b.s, []string{name, "--yes"}, nil, &out) })
+		result = pre(withError(firstLine(out.String()), err))
+	case "restart":
+		err := b.change(func() error { return cmdRestart(b.s, io.Discard) })
+		result = pre(withError("Restarted egress and every node.", err))
 	default:
-		reply = "Unknown command. /help"
+		result = "Cancelled."
 	}
 	b.mu.Unlock()
-	if err := b.t.send(b.chat, reply); err != nil {
-		log.Printf("bot: reply not sent: %v", err)
+	if err := b.t.edit(b.chat, m.MessageID, result); err != nil {
+		log.Printf("bot: %v", err)
 	}
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return line
 }
 
 // pre marks text up as preformatted, cut to fit a message.
@@ -461,6 +679,19 @@ func pre(text string) string {
 			cut = 3900
 		}
 		text = text[:cut] + "\n…"
+	}
+	return "<pre>" + text + "</pre>"
+}
+
+// preTail is pre keeping the end of text: for logs.
+func preTail(text string) string {
+	text = html.EscapeString(strings.TrimSpace(text))
+	if len(text) > 3900 {
+		text = text[len(text)-3900:]
+		if i := strings.Index(text, "\n"); i >= 0 {
+			text = text[i+1:]
+		}
+		text = "…\n" + text
 	}
 	return "<pre>" + text + "</pre>"
 }

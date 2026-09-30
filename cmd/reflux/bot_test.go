@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testToken = "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
@@ -22,12 +24,17 @@ type fakeTG struct {
 	arrive  []tgUpdate
 	calls   int
 	sent    []sentMsg
-	failing bool // sendMessage fails
+	failing bool     // sendMessage fails
+	photos  []string // captions
+	deleted []int64
+	edited  []string
+	methods []string
 }
 
 type sentMsg struct {
-	Chat int64  `json:"chat_id"`
-	Text string `json:"text"`
+	Chat    int64           `json:"chat_id"`
+	Text    string          `json:"text"`
+	Buttons json.RawMessage `json:"reply_markup"`
 }
 
 func newFakeTG(t *testing.T) *fakeTG {
@@ -44,7 +51,29 @@ func newFakeTG(t *testing.T) *fakeTG {
 			b, _ := json.Marshal(map[string]any{"ok": true, "result": v})
 			w.Write(b)
 		}
+		f.methods = append(f.methods, method)
 		switch method {
+		case "sendPhoto":
+			r.ParseMultipartForm(1 << 20)
+			if _, _, err := r.FormFile("photo"); err != nil {
+				t.Errorf("sendPhoto without a photo: %v", err)
+			}
+			f.photos = append(f.photos, r.FormValue("caption"))
+			reply(map[string]any{"message_id": 1000 + len(f.photos)})
+		case "deleteMessage":
+			var p struct {
+				ID int64 `json:"message_id"`
+			}
+			json.NewDecoder(r.Body).Decode(&p)
+			f.deleted = append(f.deleted, p.ID)
+			reply(true)
+		case "editMessageText":
+			var p struct{ Text string }
+			json.NewDecoder(r.Body).Decode(&p)
+			f.edited = append(f.edited, p.Text)
+			reply(map[string]any{"message_id": 1})
+		case "answerCallbackQuery", "setMyCommands":
+			reply(true)
 		case "getMe":
 			reply(tgUser{ID: 1, FirstName: "ReFlux", Username: "reflux_test_bot"})
 		case "getUpdates":
@@ -290,5 +319,92 @@ func TestBotStatusFitsAPhone(t *testing.T) {
 	want := "world  up via world-3.conf\nrussia up direct\nphone  no status\n"
 	if got != want {
 		t.Errorf("status =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func press(id, chat int64, data string, sent time.Time) tgUpdate {
+	return tgUpdate{UpdateID: id, Callback: &tgCallback{
+		ID: "cb", From: &tgUser{ID: chat}, Data: data,
+		Message: &tgMessage{MessageID: 77, Date: sent.Unix(), Chat: tgChat{ID: chat, Type: "private"}},
+	}}
+}
+
+func TestBotManagesClients(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	calls := fakeDocker(t, "")
+	s := Store{Root: home}
+	f := newFakeTG(t)
+	b := newBot(s, botConfig{Token: testToken, Chat: 42})
+	old := showKeep
+	showKeep = 100 * time.Millisecond
+	defer func() { showKeep = old }()
+
+	b.handle(msg(1, 42, "/add guest "+testURL+" 30d"))
+	c, err := s.Get("guest")
+	if err != nil || c.Expires.IsZero() {
+		t.Fatalf("/add: client %+v, %v", c, err)
+	}
+	if !strings.Contains(strings.Join(*calls, "\n"), "up --detach --remove-orphans") {
+		t.Errorf("/add did not start the node: %q", *calls)
+	}
+
+	b.handle(msg(2, 42, "/show guest"))
+	key, _ := s.Key("guest")
+	m := f.messages()
+	if len(f.photos) != 1 || !strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+		t.Fatalf("/show sent photos %q and %+v", f.photos, m[len(m)-1])
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		f.mu.Lock()
+		n := len(f.deleted)
+		f.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the access data was not deleted: %v", f.deleted)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	b.handle(msg(3, 42, "/revoke guest"))
+	m = f.messages()
+	if !strings.Contains(string(m[len(m)-1].Buttons), "revoke:guest") {
+		t.Fatalf("/revoke did not ask for a confirmation: %+v", m[len(m)-1])
+	}
+	if _, err := s.Get("guest"); err != nil {
+		t.Fatal("revoked before the confirmation")
+	}
+	b.handle(press(4, 7, "revoke:guest", time.Now()))                  // a stranger's press
+	b.handle(press(5, 42, "revoke:guest", time.Now().Add(-time.Hour))) // too late
+	if _, err := s.Get("guest"); err != nil {
+		t.Fatal("revoked by a stranger or by a stale button")
+	}
+	b.handle(press(6, 42, "revoke:guest", time.Now()))
+	if _, err := s.Get("guest"); err == nil {
+		t.Error("not revoked after the confirmation")
+	}
+	if len(f.edited) != 2 || !strings.Contains(f.edited[0], "Expired") || !strings.Contains(f.edited[1], "Revoked guest") {
+		t.Errorf("edits = %q", f.edited)
+	}
+}
+
+func TestBotLogsKeepTheEnd(t *testing.T) {
+	t.Setenv("REFLUX_HOME", t.TempDir())
+	fakeDocker(t, "")
+	runDocker = func(stdout io.Writer, args ...string) error {
+		for i := 0; i < 400; i++ {
+			fmt.Fprintf(dockerStderr, "line %03d of the egress log\n", i)
+		}
+		return nil
+	}
+	got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42}).logs("egress")
+	if !strings.Contains(got, "line 399") || strings.Contains(got, "line 000") || len(got) > 4096 {
+		t.Errorf("logs reply (%d bytes) does not keep the end:\n%.200s", len(got), got)
+	}
+	if got := newBot(Store{Root: t.TempDir()}, botConfig{Chat: 42}).logs("../etc"); strings.Contains(got, "<pre>") {
+		t.Errorf("a bad name reached docker: %s", got)
 	}
 }

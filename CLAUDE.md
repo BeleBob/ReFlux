@@ -56,7 +56,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   recreates nodes started before their `node.conf` changed. `reflux bot` is a
   Telegram bot (systemd user service, token in `~/reflux/telegram.json`): it runs
   the doctor checks every minute and reports findings whose `Sig` changed for
-  two runs; it talks to the Bot API from the host, not through egress.
+  two runs; it talks to the Bot API from the host, not through egress. It also
+  manages clients (`/add`, `/show` with auto-delete, `/revoke` and `/restart` behind
+  a confirm button). Commands that change clients or containers hold the flock
+  `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**

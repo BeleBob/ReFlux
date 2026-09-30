@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,14 +37,31 @@ type tgChat struct {
 }
 
 type tgMessage struct {
-	From *tgUser `json:"from"`
-	Chat tgChat  `json:"chat"`
-	Text string  `json:"text"`
+	MessageID int64   `json:"message_id"`
+	Date      int64   `json:"date"`
+	From      *tgUser `json:"from"`
+	Chat      tgChat  `json:"chat"`
+	Text      string  `json:"text"`
+}
+
+// tgCallback is a press on an inline button.
+type tgCallback struct {
+	ID      string     `json:"id"`
+	From    *tgUser    `json:"from"`
+	Message *tgMessage `json:"message"`
+	Data    string     `json:"data"`
 }
 
 type tgUpdate struct {
-	UpdateID int64      `json:"update_id"`
-	Message  *tgMessage `json:"message"`
+	UpdateID int64       `json:"update_id"`
+	Message  *tgMessage  `json:"message"`
+	Callback *tgCallback `json:"callback_query"`
+}
+
+// tgButton is an inline button; its data comes back in a tgCallback.
+type tgButton struct {
+	Text string `json:"text"`
+	Data string `json:"callback_data"`
 }
 
 // tgError is an error the API answered with.
@@ -66,6 +85,11 @@ func (t *telegram) call(method string, params any, timeout time.Duration, result
 		return t.redact(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	return t.do(req, method, timeout, result)
+}
+
+// do sends an API request and decodes the answer into result.
+func (t *telegram) do(req *http.Request, method string, timeout time.Duration, result any) error {
 	client := *t.http
 	client.Timeout = timeout
 	resp, err := client.Do(req)
@@ -113,7 +137,7 @@ func (t *telegram) getUpdates(offset int64, wait time.Duration) ([]tgUpdate, err
 	err := t.call("getUpdates", map[string]any{
 		"offset":          offset,
 		"timeout":         int(wait.Seconds()),
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}, wait+20*time.Second, &ups)
 	return ups, err
 }
@@ -121,10 +145,74 @@ func (t *telegram) getUpdates(offset int64, wait time.Duration) ([]tgUpdate, err
 // send posts an HTML message to chat. The Bot API takes up to 4096
 // characters; callers cut long text before marking it up (see pre).
 func (t *telegram) send(chat int64, html string) error {
-	return t.call("sendMessage", map[string]any{
+	_, err := t.sendButtons(chat, html, nil)
+	return err
+}
+
+// sendButtons posts an HTML message with a row of inline buttons under it
+// (none if buttons is empty) and returns its id.
+func (t *telegram) sendButtons(chat int64, html string, buttons []tgButton) (int64, error) {
+	params := map[string]any{
 		"chat_id":                  chat,
 		"text":                     html,
 		"parse_mode":               "HTML",
 		"disable_web_page_preview": true,
+	}
+	if len(buttons) > 0 {
+		params["reply_markup"] = map[string]any{"inline_keyboard": [][]tgButton{buttons}}
+	}
+	var m tgMessage
+	err := t.call("sendMessage", params, 20*time.Second, &m)
+	return m.MessageID, err
+}
+
+// sendPhoto posts a PNG with an HTML caption (up to 1024 characters) and
+// returns the message id.
+func (t *telegram) sendPhoto(chat int64, png []byte, caption string) (int64, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	w.WriteField("chat_id", strconv.FormatInt(chat, 10))
+	w.WriteField("caption", caption)
+	w.WriteField("parse_mode", "HTML")
+	part, err := w.CreateFormFile("photo", "qr.png")
+	if err != nil {
+		return 0, err
+	}
+	part.Write(png)
+	if err := w.Close(); err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequest("POST", tgAPI+"/bot"+t.token+"/sendPhoto", &body)
+	if err != nil {
+		return 0, t.redact(err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	var m tgMessage
+	err = t.do(req, "sendPhoto", 60*time.Second, &m)
+	return m.MessageID, err
+}
+
+func (t *telegram) deleteMessage(chat, id int64) error {
+	return t.call("deleteMessage", map[string]any{"chat_id": chat, "message_id": id}, 20*time.Second, nil)
+}
+
+// edit replaces a message's text and drops its buttons.
+func (t *telegram) edit(chat, id int64, html string) error {
+	return t.call("editMessageText", map[string]any{
+		"chat_id": chat, "message_id": id, "text": html, "parse_mode": "HTML",
 	}, 20*time.Second, nil)
+}
+
+// answer acknowledges a button press, or the client shows a spinner.
+func (t *telegram) answer(callbackID, text string) error {
+	return t.call("answerCallbackQuery", map[string]any{"callback_query_id": callbackID, "text": text}, 20*time.Second, nil)
+}
+
+// setCommands fills the command menu of the chat input.
+func (t *telegram) setCommands(cmds [][2]string) error {
+	var list []map[string]string
+	for _, c := range cmds {
+		list = append(list, map[string]string{"command": c[0], "description": c[1]})
+	}
+	return t.call("setMyCommands", map[string]any{"commands": list}, 20*time.Second, nil)
 }
