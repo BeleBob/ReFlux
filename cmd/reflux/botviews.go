@@ -55,53 +55,57 @@ func (b *bot) doctorScreen() screen {
 }
 
 // short is a working check in a few words.
-func (b *bot) short(f finding) string {
+func (b *bot) short(f finding) string { return shortText(b.s, b.lang, f) }
+
+// shortText is a working check in a few words, in l.
+func shortText(s Store, l lang, f finding) string {
+	t := func(id string, args ...any) string { return tr(l, id, args...) }
 	a := f.Args
 	str := func(i int) string {
 		if i >= len(a) {
 			return ""
 		}
 		if p, ok := a[i].(phrase); ok {
-			return b.tr(p.id, p.args...)
+			return t(p.id, p.args...)
 		}
 		return fmt.Sprint(a[i])
 	}
 	switch f.Msg {
 	case "module.ok":
-		return b.tr("short.module")
+		return t("short.module")
 	case "hostrule.ok":
-		return b.tr("short.hostrule")
+		return t("short.hostrule")
 	case "configs.ok":
-		return b.tr("short.configs", len(strings.Split(str(0), ",")), b.tr("gw.ru."+b.s.russiaMode()))
+		return t("short.configs", len(strings.Split(str(0), ",")), t("gw.ru."+s.russiaMode()))
 	case "docker.ok":
-		return b.tr("short.docker", str(0), str(1))
+		return t("short.docker", str(0), str(1))
 	case "image.ok":
-		return b.tr("short.image", imageName(str(0)), str(1), str(2))
+		return t("short.image", imageName(str(0)), str(1), str(2))
 	case "image.local":
-		return b.tr("short.image.local", imageName(str(0)))
+		return t("short.image.local", imageName(str(0)))
 	case "egress.ok":
 		if strings.Contains(str(0), "healthy") && !strings.Contains(str(0), "unhealthy") {
-			return b.tr("short.egress.ok")
+			return t("short.egress.ok")
 		}
-		return b.tr("short.egress", str(0))
+		return t("short.egress", str(0))
 	case "world.up":
-		return b.tr("short.world", strings.TrimSuffix(str(0), ".conf"), shortTime(str(1)))
+		return t("short.world", strings.TrimSuffix(str(0), ".conf"), shortTime(str(1)))
 	case "russia.up":
-		return b.tr("short.russia", str(0), a[1])
+		return t("short.russia", str(0), a[1])
 	case "killswitch":
-		return b.tr("short.killswitch", a[0])
+		return t("short.killswitch", a[0])
 	case "carrier.direct":
-		return b.tr("short.carrier", a[0])
+		return t("short.carrier", a[0])
 	case "node.ok":
-		return b.tr("short.node", str(0), str(1), str(2), str(3), str(4))
+		return t("short.node", str(0), str(1), str(2), str(3), str(4))
 	case "node.inactive":
 		return str(0) + ": " + str(1)
 	case "cron.ok":
-		return b.tr("short.cron")
+		return t("short.cron")
 	case "disk.ok":
-		return b.tr("short.disk", str(0), a[1])
+		return t("short.disk", str(0), a[1])
 	}
-	return f.text(b.lang)
+	return f.text(l)
 }
 
 // shortTime shortens a local "2006-01-02 15:04:05": the time of day for

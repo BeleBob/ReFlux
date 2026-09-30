@@ -62,7 +62,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   (`messages`: English and Russian with the same arguments, checked by a test); the
   CLI prints English, the bot the owner's language (`lang` in `telegram.json`).
   Doctor findings carry a message id and arguments; the egress state comes from
-  its `/run/reflux-egress/status.json`. Commands that change clients or containers hold the flock
+  its `/run/reflux-egress/status.json`. `reflux web` is the same panel for the LAN
+  (`web.go`, `web/panel.html` embedded; systemd user service `reflux-web`): it
+  listens on the LAN address in `~/reflux/web.json`, answers private addresses
+  only, signs in `trusted` addresses or browsers with a one-time link (`/web`
+  in the bot, `reflux web login`; token and session hashes in `web-*.json`),
+  and takes POSTs from its own origin only. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders

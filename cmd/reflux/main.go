@@ -46,6 +46,8 @@ USAGE
   reflux bot <setup|install|test|run>
                            Telegram bot: alerts when a doctor check changes,
                            /status, /doctor, /pause, /resume, /expire
+  reflux web <install|login|run>
+                           web panel for the home network (same as the bot)
   reflux logs <name|egress> [--follow]
 
 ENVIRONMENT
@@ -195,6 +197,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdGateway(s, rest, stdout)
 	case "bot":
 		return cmdBot(s, rest, stdin, stdout)
+	case "web":
+		return cmdWeb(s, rest, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }

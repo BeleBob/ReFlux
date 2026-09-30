@@ -1,0 +1,261 @@
+{{define "head"}}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
+<title>{{.Title}} · ReFlux</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#e4e7ec; --accent:#2f6fed; --ok:#12805c; --warn:#b54708; --bad:#c01048; }
+@media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1b2029; --fg:#e6e9ef; --mute:#98a2b3; --line:#2c3340; --accent:#6b9bff; --ok:#3ccb8f; --warn:#f5a524; --bad:#ff6b8b; } }
+* { box-sizing:border-box; }
+body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; }
+header .brand { font-weight:700; margin-right:8px; }
+header a { color:var(--fg); text-decoration:none; padding:4px 8px; border-radius:6px; }
+header a:hover { background:var(--bg); }
+header form { margin-left:auto; }
+main { max-width:960px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+h1 { font-size:20px; margin:4px 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
+table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--mute); font-weight:500; font-size:13px; }
+a { color:var(--accent); }
+.mute { color:var(--mute); font-size:13px; }
+.notice { border-left:4px solid var(--ok); } .error { border-left:4px solid var(--bad); }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .FAIL { color:var(--bad); }
+.row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
+button, input[type=submit] { font:inherit; padding:6px 12px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { border-color:var(--bad); color:var(--bad); }
+button.current { border-color:var(--ok); color:var(--ok); font-weight:600; }
+input[type=text], input[type=date], textarea { font:inherit; padding:6px 8px; border-radius:7px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
+input[type=text] { min-width:220px; } textarea { width:100%; }
+pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--bg); padding:10px; border-radius:8px; max-height:70vh; overflow:auto; }
+code { word-break:break-all; }
+img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:8px; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; } dt { color:var(--mute); }
+</style>
+</head>
+<body>
+<header>
+<span class="brand">🛰 ReFlux</span>
+<a href="/">{{t "web.nav.home"}}</a>
+<a href="/doctor">{{t "b.doctor"}}</a>
+<a href="/gateway">{{t "b.gateway"}}</a>
+<a href="/speed">{{t "b.speed"}}</a>
+<a href="/add">{{t "b.add"}}</a>
+<form method="post" action="/logout"><button>{{t "web.logout"}}</button></form>
+</header>
+<main>
+{{if .Notice}}<div class="card notice">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="card error">{{.Error}}</div>{{end}}
+{{end}}
+
+{{define "foot"}}
+<p class="mute">{{t "web.updated" .Now}}</p>
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "signin"}}<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReFlux</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 16px;color:#1d2330}code{background:#f0f2f5;padding:2px 5px;border-radius:4px}.e{color:#c01048}.n{color:#12805c}</style></head>
+<body>
+<h1>🛰 ReFlux</h1>
+{{if .Error}}<p class="e">{{.Error}}</p>{{end}}
+{{if .Notice}}<p class="n">{{.Notice}}</p>{{end}}
+<p>{{t "web.signin.text"}}</p>
+</body></html>
+{{end}}
+
+{{define "error"}}{{template "head" .}}
+<div class="card">{{if .Back}}<a href="{{.Back}}">{{t "web.back"}}</a> · {{end}}<a href="/">{{t "web.nav.home"}}</a></div>
+{{template "foot" .}}{{end}}
+
+{{define "home"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">
+<h2>{{t "web.tunnels"}}</h2>
+{{with .Egress}}
+<dl>
+<dt>🌍</dt><dd>{{if .WorldOK}}<span class="ok">✅</span>{{else}}<span class="FAIL">❌</span>{{end}} {{.World}}{{if .Selected}} <span class="mute">({{t "ui.gw.choice" .Selected}})</span>{{end}}</dd>
+<dt>🇷🇺</dt><dd>{{if .RUOK}}{{if .RUFallback}}<span class="warn">⚠️</span>{{else}}<span class="ok">✅</span>{{end}}{{else}}<span class="FAIL">❌</span>{{end}} {{$.Body.Russia}}</dd>
+<dt>📄</dt><dd>{{if .CarrierDirect}}{{t "gw.carrier.direct"}} · {{t "gw.carrier.addrs" (len .Carriers)}}{{else}}{{t "gw.carrier.tunnel"}}{{end}}</dd>
+<dt>🛡</dt><dd>{{t "ui.killswitch" .Dropped}}</dd>
+</dl>
+{{else}}<p class="FAIL">{{t "ui.egress.none"}}</p>{{end}}
+</div>
+<div class="card">
+<h2>{{t "web.clients"}}</h2>
+{{if .Clients}}
+<table>
+<tr><th></th><th>{{t "web.col.name"}}</th><th>{{t "web.col.state"}}</th><th>{{t "web.col.access"}}</th></tr>
+{{range .Clients}}
+<tr><td>{{.Mark}}</td><td><a href="/c/{{.Name}}">{{.Name}}</a>{{if .Owner}}<br><span class="mute">{{.Owner}}</span>{{end}}</td><td>{{.State}}</td><td>{{.Access}}</td></tr>
+{{end}}
+</table>
+<p class="mute">{{t "ui.clients.hint"}}</p>
+{{else}}<p>{{t "web.none"}} <a href="/add">{{t "b.add"}}</a></p>{{end}}
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "clientinfo"}}
+<h1>{{.Row.Mark}} {{.Row.Name}}</h1>
+<dl>
+<dt>{{t "web.col.access"}}</dt><dd>{{.Row.Access}}</dd>
+<dt>{{t "web.node"}}</dt><dd>{{.Node}}</dd>
+<dt>{{t "web.col.state"}}</dt><dd>{{.Row.State}}</dd>
+<dt>Telegram</dt><dd>{{if .Row.Owner}}{{.Row.Owner}}{{else}}{{t "ui.tg.none"}}{{end}}</dd>
+<dt>{{t "web.transport"}}</dt><dd>{{.Transport}}</dd>
+<dt>{{t "web.created"}}</dt><dd>{{.Created}}</dd>
+</dl>
+{{end}}
+
+{{define "client"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">{{template "clientinfo" .}}</div>
+<div class="card">
+<form method="post" action="/c/{{.Row.Name}}/show" class="row"><button class="primary">{{t "web.show"}}</button></form>
+<div class="row">
+{{if .Paused}}<form method="post" action="/c/{{.Row.Name}}/resume"><button>{{t "b.resume"}}</button></form>
+{{else}}<form method="post" action="/c/{{.Row.Name}}/pause"><button>{{t "b.pause"}}</button></form>{{end}}
+<a href="/logs/{{.Row.Name}}">{{t "b.logs"}}</a>
+</div>
+</div>
+<div class="card">
+<h2>{{t "b.access"}}</h2>
+<form method="post" action="/c/{{.Row.Name}}/expire" class="row">
+<button name="how" value="+1">{{t "b.plus1"}}</button><button name="how" value="+7">{{t "b.plus7"}}</button>
+<button name="how" value="+30">{{t "b.plus30"}}</button><button name="how" value="+90">{{t "b.plus90"}}</button>
+<button name="how" value="+365">{{t "b.plus365"}}</button>
+<button name="how" value="never">{{t "b.never"}}</button><button name="how" value="now" class="danger">{{t "b.endnow"}}</button>
+</form>
+<form method="post" action="/c/{{.Row.Name}}/expire" class="row">
+<input type="hidden" name="how" value="date">
+<label>{{t "web.expiry.date"}} <input type="date" name="date" value="{{.Expires}}" required></label>
+<button>{{t "web.set"}}</button>
+</form>
+<p class="mute">{{t "ui.access.hint"}}</p>
+</div>
+<div class="card">
+<h2>{{t "b.rename"}}</h2>
+<form method="post" action="/c/{{.Row.Name}}/rename" class="row">
+<input type="text" name="to" required pattern="[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?" placeholder="{{.Row.Name}}">
+<button>{{t "b.rename"}}</button>
+</form>
+<p class="mute">{{t "web.rename.hint"}}</p>
+{{if .Row.Owner}}<form method="post" action="/c/{{.Row.Name}}/unlink" class="row"><button>{{t "b.tg.off"}}</button></form>{{end}}
+</div>
+<div class="card">
+<h2>{{t "b.revoke"}}</h2>
+<form method="post" action="/c/{{.Row.Name}}/revoke" class="row">
+<input type="text" name="confirm" required placeholder="{{.Row.Name}}">
+<button class="danger">{{t "b.revoke"}}</button>
+</form>
+<p class="mute">{{t "web.revoke.hint"}}</p>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "show"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">
+<h1>{{.Row.Mark}} {{.Row.Name}}</h1>
+<p class="warn">{{t "web.show.note"}}</p>
+<img class="qr" src="{{.QR}}" alt="QR">
+<h2>{{t "web.link"}}</h2>
+<textarea rows="4" readonly>{{.Link}}</textarea>
+<h2>{{t "web.manual"}}</h2>
+<dl>
+<dt>{{t "web.transport"}}</dt><dd><code>{{.Transport}}</code></dd>
+<dt>{{t "web.field.url"}}</dt><dd><code>{{.URL}}</code></dd>
+<dt>{{t "web.field.key"}}</dt><dd><code>{{.Key}}</code></dd>
+<dt>Legacy codec</dt><dd>{{t "web.off"}}</dd>
+</dl>
+<p><a href="/c/{{.Row.Name}}">{{t "web.back"}}</a></p>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "logs"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">
+<h1>{{t "b.logs"}}: {{.Name}}</h1>
+<p class="row"><a href="/logs/{{.Name}}">{{t "b.refresh"}}</a>{{if ne .Name "egress"}} · <a href="/c/{{.Name}}">{{t "web.back"}}</a>{{end}} · <a href="/logs/egress">egress</a></p>
+<pre>{{.Text}}</pre>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "add"}}{{template "head" .}}
+<div class="card">
+<h1>{{t "web.add.title"}}</h1>
+<form method="post" action="/add">
+<p><label>{{t "web.add.name"}}<br><input type="text" name="name" required pattern="[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?"></label><br><span class="mute">{{t "web.add.name.hint"}}</span></p>
+<p><label>{{t "web.add.url"}}<br><input type="text" name="url" required style="width:100%"></label><br><span class="mute">{{t "web.add.url.hint"}}</span></p>
+<p><label>{{t "web.add.expires"}}<br><input type="text" name="expires" placeholder="never"></label><br><span class="mute">{{t "web.add.expires.hint"}}</span></p>
+<p><button class="primary">{{t "b.add"}}</button></p>
+</form>
+</div>
+{{template "foot" .}}{{end}}
+
+{{define "doctor"}}{{template "head" .}}
+{{with .Body}}
+<div class="card"><h1>{{t "b.doctor"}}</h1><p>{{.Summary}}</p></div>
+{{range .Sections}}
+<div class="card">
+<h2>{{.Title}}</h2>
+{{range .Lines}}<div class="row"><span class="{{.Level}}">{{if eq .Level "ok"}}✅{{else if eq .Level "warn"}}⚠️{{else}}❌{{end}}</span> {{.Text}}</div>{{end}}
+</div>
+{{end}}
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "gateway"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">
+<h1>{{t "b.gateway"}}</h1>
+{{with .Egress}}<dl>
+<dt>🌍</dt><dd>{{if .WorldOK}}✅{{else}}❌{{end}} {{.World}}</dd>
+<dt>🇷🇺</dt><dd>{{if .RUOK}}{{if .RUFallback}}⚠️{{else}}✅{{end}}{{else}}❌{{end}} {{$.Body.Russia}}</dd>
+</dl>{{else}}<p class="FAIL">{{t "ui.egress.none"}}</p>{{end}}
+</div>
+<div class="card">
+<h2>{{t "web.gw.world"}}</h2>
+<p>{{if .Chosen}}{{t "ui.gw.choice" .Chosen}}{{else}}{{t "ui.gw.choice" (t "ui.gw.auto")}}{{end}}</p>
+<form method="post" action="/gateway/world" class="row">
+{{range .Worlds}}<button name="name" value="{{.}}" {{if and $.Body.Egress (eq . $.Body.Egress.World)}}class="current"{{end}}>{{.}}</button>{{end}}
+<button name="name" value="auto">{{t "b.auto"}}</button>
+</form>
+<p class="mute">{{t "web.gw.world.hint"}}</p>
+</div>
+<div class="card">
+<h2>{{t "web.gw.russia"}}</h2>
+<form method="post" action="/gateway/russia">
+{{range .RuModes}}<p><label><input type="radio" name="mode" value="{{.}}" {{if eq . $.Body.RuMode}}checked{{end}}> {{t (printf "gw.ru.%s" .)}}</label></p>{{end}}
+<p><label><input type="checkbox" name="confirm" value="yes"> {{t "web.gw.restartbox"}}</label></p>
+<button>{{t "web.apply"}}</button>
+</form>
+</div>
+<div class="card">
+<h2>{{t "web.gw.carrier"}}</h2>
+<form method="post" action="/gateway/carrier">
+<p><label><input type="radio" name="mode" value="direct" {{if .Carrier}}checked{{end}}> {{t "gw.carrier.direct"}}{{if .Carrier}} · {{t "gw.carrier.addrs" .Carriers}}{{end}}</label></p>
+<p><label><input type="radio" name="mode" value="tunnel" {{if not .Carrier}}checked{{end}}> {{t "gw.carrier.tunnel"}}</label></p>
+<p><label><input type="checkbox" name="confirm" value="yes"> {{t "web.gw.restartbox"}}</label></p>
+<button>{{t "web.apply"}}</button>
+</form>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "speed"}}{{template "head" .}}
+<div class="card">
+<h1>{{t "b.speed"}}</h1>
+{{with .Body}}{{range .}}<p>{{.}}</p>{{end}}{{end}}
+<form method="post" action="/speed"><button class="primary">{{t "web.speed.run"}}</button></form>
+<p class="mute">{{t "web.speed.hint"}}</p>
+</div>
+{{template "foot" .}}{{end}}
