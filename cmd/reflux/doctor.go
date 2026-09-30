@@ -138,9 +138,13 @@ func (d *doctor) host(s Store) {
 	world, _ := filepath.Glob(filepath.Join(dir, "world-*.conf"))
 	ru, _ := filepath.Glob(filepath.Join(dir, "ru-*.conf"))
 	_, directErr := os.Stat(filepath.Join(dir, "ru-direct"))
+	_, fallbackErr := os.Stat(filepath.Join(dir, "ru-fallback-direct"))
 	russia := ph("ru.tunnelconf", strings.Join(baseNames(ru), ", "))
-	if directErr == nil {
+	switch {
+	case directErr == nil:
 		russia = ph("ru.direct")
+	case fallbackErr == nil:
+		russia = ph("ru.tunnelfallback", strings.Join(baseNames(ru), ", "))
 	}
 	switch {
 	case len(world) == 0:
@@ -210,7 +214,8 @@ type egressStatus struct {
 	WorldOK    bool      `json:"world_ok"`
 	WorldSince time.Time `json:"world_since"`
 	RUOK       bool      `json:"ru_ok"`
-	RUMode     string    `json:"ru_mode"` // "tunnel" or "direct"
+	RUMode     string    `json:"ru_mode"` // "tunnel" or "direct": the way in use
+	RUFallback bool      `json:"ru_fallback"`
 	RUPrefixes int       `json:"ru_prefixes"`
 	RUListAt   time.Time `json:"ru_list_updated"`
 	Dropped    int64     `json:"killswitch_dropped"`
@@ -229,6 +234,9 @@ func readEgressStatus() (egressStatus, error) {
 }
 
 func ruMode(st egressStatus) phrase {
+	if st.RUFallback {
+		return ph("ru.fallback")
+	}
 	if st.RUMode == "direct" {
 		return ph("ru.direct")
 	}
@@ -259,9 +267,12 @@ func (d *doctor) egress() {
 	} else {
 		d.add(levelFail, "world", "down "+st.World, "world.down", st.World)
 	}
-	if st.RUOK {
+	switch {
+	case st.RUOK && st.RUFallback:
+		d.add(levelWarn, "russia", "fallback", "russia.fallback")
+	case st.RUOK:
 		d.add(levelOK, "russia", "up "+st.RUMode, "russia.up", ruMode(st), st.RUPrefixes, st.RUListAt.Local().Format(time.DateOnly))
-	} else {
+	default:
 		d.add(levelFail, "russia", "down "+st.RUMode, "russia.down", ruMode(st))
 	}
 	if st.Error != "" {

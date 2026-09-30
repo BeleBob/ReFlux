@@ -85,12 +85,15 @@ func run() {
 	stop := make(chan struct{})
 
 	for {
-		ru, direct, world, err := loadConfigs(configDir)
+		ru, direct, fallback, world, err := loadConfigs(configDir)
 		if err == nil {
-			c.ru, c.ruDirect, c.world = ru, direct, world
+			c.ru, c.ruDirect, c.ruFallback, c.world = ru, direct, fallback, world
 			russia := ru.Name
 			if direct {
 				russia = "direct (" + directFile + ")"
+			}
+			if fallback {
+				russia += ", out of the uplink while it does not answer (" + fallbackFile + ")"
 			}
 			log.Printf("configs: russia %s, world %d in order (%s first)", russia, len(world), world[0].Name)
 			break

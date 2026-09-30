@@ -33,6 +33,11 @@ const (
 	// rounds in a row fail; a round is probeEvery apart.
 	failLimit  = 3
 	probeEvery = 10 * time.Second
+
+	// With a direct fallback, Russia moves back into its tunnel once the
+	// tunnel has answered this many rounds in a row (5 minutes): each move
+	// breaks the connections to Russian addresses, the carriers' included.
+	recoverRounds = 30
 )
 
 // Probe targets: answered by anycast resolvers worldwide, and outside the
@@ -65,11 +70,17 @@ type controller struct {
 	run    runner
 	runDir string // setconf files and status.json
 
-	ru       awgConf
-	ruDirect bool // Russia leaves through the uplink, not a tunnel
-	world    []awgConf
-	cur      int // index into world of the active tunnel
-	gw       netip.Addr
+	ru         awgConf
+	ruDirect   bool // Russia leaves through the uplink, never a tunnel
+	ruFallback bool // Russia leaves through the uplink while its tunnel is down
+	world      []awgConf
+	cur        int // index into world of the active tunnel
+	gw         netip.Addr
+
+	// routeMu serializes the changes of the Russian routes: the prefix
+	// refresh and the moves between the tunnel and the uplink.
+	routeMu  sync.Mutex
+	onDirect bool // the RU prefixes are routed out of the uplink now
 
 	mu       sync.Mutex
 	prefixes []netip.Prefix // RU prefixes routed to Russia
@@ -84,7 +95,8 @@ type status struct {
 	WorldSince time.Time `json:"world_since"`
 	Failures   int       `json:"world_failures"`
 	RUOK       bool      `json:"ru_ok"`
-	RUMode     string    `json:"ru_mode"` // "tunnel" or "direct"
+	RUMode     string    `json:"ru_mode"`               // "tunnel" or "direct": the way in use
+	RUFallback bool      `json:"ru_fallback,omitempty"` // direct because the tunnel is down
 	RUPrefixes int       `json:"ru_prefixes"`
 	RUListAt   time.Time `json:"ru_list_updated"`
 	Dropped    int64     `json:"killswitch_dropped"` // packets the kill switch stopped
@@ -92,12 +104,17 @@ type status struct {
 }
 
 // directFile in the config directory sends Russian addresses out of the
-// uplink (the host's own provider) instead of a Russian tunnel.
-const directFile = "ru-direct"
+// uplink (the host's own provider) instead of a Russian tunnel;
+// fallbackFile keeps the tunnel and sends them out of the uplink only while
+// the tunnel does not answer.
+const (
+	directFile   = "ru-direct"
+	fallbackFile = "ru-fallback-direct"
+)
 
 // loadConfigs reads world-*.conf (in name order: the failover order) and,
 // unless directFile is there, ru-*.conf (the first one is used) from dir.
-func loadConfigs(dir string) (ru awgConf, direct bool, world []awgConf, err error) {
+func loadConfigs(dir string) (ru awgConf, direct, fallback bool, world []awgConf, err error) {
 	read := func(pattern string) ([]awgConf, error) {
 		files, err := filepath.Glob(filepath.Join(dir, pattern))
 		if err != nil {
@@ -119,22 +136,23 @@ func loadConfigs(dir string) (ru awgConf, direct bool, world []awgConf, err erro
 		return out, nil
 	}
 	if world, err = read("world-*.conf"); err != nil {
-		return awgConf{}, false, nil, err
+		return awgConf{}, false, false, nil, err
 	}
 	if len(world) == 0 {
-		return awgConf{}, false, nil, fmt.Errorf("%s needs at least one world-*.conf", dir)
+		return awgConf{}, false, false, nil, fmt.Errorf("%s needs at least one world-*.conf", dir)
 	}
 	if _, err := os.Stat(filepath.Join(dir, directFile)); err == nil {
-		return awgConf{}, true, world, nil
+		return awgConf{}, true, false, world, nil
 	}
 	rus, err := read("ru-*.conf")
 	if err != nil {
-		return awgConf{}, false, nil, err
+		return awgConf{}, false, false, nil, err
 	}
 	if len(rus) == 0 {
-		return awgConf{}, false, nil, fmt.Errorf("%s needs a ru-*.conf, or a %s file to send Russia out directly", dir, directFile)
+		return awgConf{}, false, false, nil, fmt.Errorf("%s needs a ru-*.conf, or a %s file to send Russia out directly", dir, directFile)
 	}
-	return rus[0], false, world, nil
+	_, err = os.Stat(filepath.Join(dir, fallbackFile))
+	return rus[0], false, err == nil, world, nil
 }
 
 // carrierDNS are the resolvers unbound asks for the carriers' domains
@@ -144,9 +162,11 @@ const carrierDNS = "77.88.8.8, 77.88.8.1"
 
 // killSwitch is the nftables ruleset applied before any tunnel exists:
 // out of the uplink only UDP to the active tunnel servers may leave, so a
-// packet either goes through a tunnel or nowhere. In direct mode, packets
-// to Russian addresses (set ru4) may leave too. Every DNS query, to any
-// address, is answered by the local resolver.
+// packet either goes through a tunnel or nowhere. When Russia may leave
+// directly (always, or as a fallback), packets to the addresses in set ru4
+// may leave too; the set is filled only while Russia is routed out of the
+// uplink. Every DNS query, to any address, is answered by the local
+// resolver.
 func killSwitch(ruDirect bool) string {
 	direct := ""
 	if ruDirect {
@@ -206,9 +226,9 @@ func setBatch(verb, set string, ps []netip.Prefix) string {
 	return b.String()
 }
 
-// ruTarget is where Russian prefixes are routed.
+// ruTarget is where Russian prefixes are routed. The caller holds routeMu.
 func (c *controller) ruTarget() string {
-	if c.ruDirect {
+	if c.onDirect {
 		return "via " + c.gw.String() + " dev " + uplink
 	}
 	return "dev " + ruIface
@@ -239,7 +259,8 @@ func (c *controller) defaultGateway() (netip.Addr, error) {
 // uplink) to egress-only. The kill switch goes first, so nothing leaves
 // in between.
 func (c *controller) setup() error {
-	if _, err := c.run(killSwitch(c.ruDirect), "nft", "-f", "-"); err != nil {
+	c.onDirect = c.ruDirect
+	if _, err := c.run(killSwitch(c.ruDirect || c.ruFallback), "nft", "-f", "-"); err != nil {
 		return err
 	}
 	// A retry after a partial setup finds the route already gone: keep the
@@ -344,18 +365,21 @@ func (c *controller) failover() error {
 }
 
 // setPrefixes routes the RU prefixes to Russia (the tunnel, or the uplink
-// in direct mode), changing only what differs from the routes already
-// there. In direct mode the kill switch opens for the new prefixes before
-// they are routed out, and closes for the old ones after they are not.
+// while Russia leaves directly), changing only what differs from the routes
+// already there. Out of the uplink, the kill switch opens for the new
+// prefixes before they are routed out, and closes for the old ones after
+// they are not.
 func (c *controller) setPrefixes(next []netip.Prefix, at time.Time) error {
 	if len(next) < minRUPrefixes {
 		return fmt.Errorf("RU list has %d prefixes, fewer than %d: not applied", len(next), minRUPrefixes)
 	}
+	c.routeMu.Lock()
+	defer c.routeMu.Unlock()
 	c.mu.Lock()
 	prev := c.prefixes
 	c.mu.Unlock()
 	add, del := diffPrefixes(prev, next)
-	if c.ruDirect && len(add) > 0 {
+	if c.onDirect && len(add) > 0 {
 		if _, err := c.run(setBatch("add", "ru4", add), "nft", "-f", "-"); err != nil {
 			return err
 		}
@@ -365,7 +389,7 @@ func (c *controller) setPrefixes(next []netip.Prefix, at time.Time) error {
 			return err
 		}
 	}
-	if c.ruDirect && len(del) > 0 {
+	if c.onDirect && len(del) > 0 {
 		if _, err := c.run(setBatch("delete", "ru4", del), "nft", "-f", "-"); err != nil {
 			return err
 		}
@@ -377,6 +401,94 @@ func (c *controller) setPrefixes(next []netip.Prefix, at time.Time) error {
 	c.mu.Unlock()
 	log.Printf("ru: %d prefixes routed (+%d -%d)", len(next), len(add), len(del))
 	return nil
+}
+
+// switchRussia moves the RU prefixes out of the uplink (direct) or back
+// into the Russian tunnel. Out: the kill switch opens for them first, then
+// they are routed out. Back: they are routed into the tunnel first, then
+// the kill switch closes, so no packet to Russia is dropped on the way.
+func (c *controller) switchRussia(direct bool) error {
+	c.routeMu.Lock()
+	defer c.routeMu.Unlock()
+	c.mu.Lock()
+	ps := c.prefixes
+	c.mu.Unlock()
+	if direct {
+		if len(ps) > 0 {
+			if _, err := c.run(setBatch("add", "ru4", ps), "nft", "-f", "-"); err != nil {
+				return err
+			}
+		}
+		c.onDirect = true
+	} else {
+		c.onDirect = false
+	}
+	if len(ps) > 0 {
+		if _, err := c.run(routeBatch(ps, nil, c.ruTarget()), "ip", "-batch", "-"); err != nil {
+			return err
+		}
+	}
+	if !direct {
+		if _, err := c.run("", "nft", "flush", "set", "inet", "reflux", "ru4"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ruRounds counts the probe rounds of Russia.
+type ruRounds struct {
+	failures int // in a row the way in use failed (the tunnel, or the uplink)
+	healthy  int // in a row the tunnel answered
+	direct   int // in a row the uplink failed while it is the fallback
+}
+
+// russia probes Russia once and, with a direct fallback, moves the RU
+// prefixes out of the uplink when the tunnel has failed failLimit rounds
+// and back when it has answered recoverRounds. It returns whether Russian
+// traffic has a way out.
+func (c *controller) russia(r *ruRounds) (bool, error) {
+	if c.ruDirect {
+		if c.probe(uplink, ruProbes, nil) {
+			r.failures = 0
+		} else {
+			r.failures++
+		}
+		return r.failures < failLimit, nil
+	}
+	// ping -I binds to the interface: the tunnel is probed even while the
+	// probe address is routed out of the uplink.
+	if c.probe(ruIface, ruProbes, nil) {
+		r.failures, r.healthy = 0, r.healthy+1
+	} else {
+		r.failures, r.healthy = r.failures+1, 0
+	}
+	tunnelUp := r.failures < failLimit
+	if !c.ruFallback {
+		return tunnelUp, nil
+	}
+	switch {
+	case !c.onDirect && !tunnelUp:
+		log.Printf("ru: tunnel %s does not answer: Russia leaves through the uplink until it does", c.ru.Name)
+		r.direct = 0
+		if err := c.switchRussia(true); err != nil {
+			return false, fmt.Errorf("ru: fallback to the uplink: %w", err)
+		}
+	case c.onDirect && r.healthy >= recoverRounds:
+		log.Printf("ru: tunnel %s answers again: Russia goes back into it", c.ru.Name)
+		if err := c.switchRussia(false); err != nil {
+			return false, fmt.Errorf("ru: back into the tunnel: %w", err)
+		}
+	}
+	if !c.onDirect {
+		return tunnelUp, nil
+	}
+	if c.probe(uplink, ruProbes, nil) {
+		r.direct = 0
+	} else {
+		r.direct++
+	}
+	return r.direct < failLimit, nil
 }
 
 // probe reports whether any target answers a ping through iface, or any
@@ -399,14 +511,11 @@ func (c *controller) probe(iface string, targets, tcpTargets []string) bool {
 // never returns to an earlier config on its own: each switch breaks the
 // clients' connections, so a working tunnel is kept.
 func (c *controller) watch(stop <-chan struct{}) {
-	failures, ruFailures := 0, 0
-	ruVia, ruMode := ruIface, "tunnel"
-	if c.ruDirect {
-		ruVia, ruMode = uplink, "direct"
-	}
+	failures := 0
+	var ru ruRounds
 	c.mu.Lock()
 	c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
-	c.st.RUOK, c.st.RUMode = true, ruMode
+	c.st.RUOK, c.st.RUMode = true, ruModeName(c.onDirect)
 	c.mu.Unlock()
 	for {
 		worldOK := c.probe(worldIface, worldProbes, worldTCP)
@@ -415,15 +524,14 @@ func (c *controller) watch(stop <-chan struct{}) {
 		} else {
 			failures++
 		}
-		// One lost ping is not an outage: the Russian tunnel is reported
-		// down, like the world one is failed over, after failLimit rounds.
-		if c.probe(ruVia, ruProbes, nil) {
-			ruFailures = 0
-		} else {
-			ruFailures++
-		}
-		ruOK := ruFailures < failLimit
+		// One lost ping is not an outage: Russia is reported down, like the
+		// world tunnel is failed over, after failLimit rounds.
+		ruOK, ruErr := c.russia(&ru)
 		var errText string
+		if ruErr != nil {
+			errText = ruErr.Error()
+			log.Print(errText)
+		}
 		if failures >= failLimit && len(c.world) > 1 {
 			if err := c.failover(); err != nil {
 				errText = err.Error()
@@ -439,10 +547,12 @@ func (c *controller) watch(stop <-chan struct{}) {
 		if dropped >= 0 {
 			c.st.Dropped = dropped
 		}
-		if c.st.RUOK != ruOK {
-			log.Printf("ru: %s %s", ruMode, map[bool]string{true: "up", false: "down"}[ruOK])
+		mode := ruModeName(c.onDirect)
+		if c.st.RUOK != ruOK || c.st.RUMode != mode {
+			log.Printf("ru: %s %s", mode, map[bool]string{true: "up", false: "down"}[ruOK])
 		}
 		c.st.WorldOK, c.st.RUOK, c.st.Failures, c.st.Error = worldOK, ruOK, failures, errText
+		c.st.RUMode, c.st.RUFallback = mode, c.onDirect && !c.ruDirect
 		c.st.Updated = time.Now().UTC()
 		st := c.st
 		c.mu.Unlock()
@@ -455,6 +565,13 @@ func (c *controller) watch(stop <-chan struct{}) {
 		case <-time.After(probeEvery):
 		}
 	}
+}
+
+func ruModeName(direct bool) string {
+	if direct {
+		return "direct"
+	}
+	return "tunnel"
 }
 
 var droppedRe = regexp.MustCompile(`oifname "` + uplink + `" counter packets (\d+) bytes \d+ drop`)
@@ -516,7 +633,11 @@ func statusText(st status, now time.Time) string {
 	var b bytes.Buffer
 	yes := map[bool]string{true: "up", false: "DOWN"}
 	fmt.Fprintf(&b, "world  %-5s via %s (since %s)\n", yes[st.WorldOK], st.World, st.WorldSince.Format(time.DateTime))
-	fmt.Fprintf(&b, "russia %-5s %s, %d prefixes (list from %s)\n", yes[st.RUOK], st.RUMode, st.RUPrefixes, st.RUListAt.Format(time.DateOnly))
+	mode := st.RUMode
+	if st.RUFallback {
+		mode += " (fallback: the tunnel does not answer)"
+	}
+	fmt.Fprintf(&b, "russia %-5s %s, %d prefixes (list from %s)\n", yes[st.RUOK], mode, st.RUPrefixes, st.RUListAt.Format(time.DateOnly))
 	fmt.Fprintf(&b, "kill switch stopped %d packets\n", st.Dropped)
 	fmt.Fprintf(&b, "checked %s ago\n", now.Sub(st.Updated).Round(time.Second))
 	if st.Error != "" {

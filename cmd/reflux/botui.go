@@ -301,8 +301,11 @@ func (b *bot) home() screen {
 			world = "❌ " + html.EscapeString(st.World)
 		}
 		russia := "✅ " + b.tr(ruMode(st).id)
-		if !st.RUOK {
+		switch {
+		case !st.RUOK:
 			russia = "❌ " + b.tr(ruMode(st).id)
+		case st.RUFallback:
+			russia = "⚠️ " + b.tr(ruMode(st).id)
 		}
 		t.WriteString(b.tr("ui.world", world) + "\n" + b.tr("ui.russia", russia) + "\n" + b.tr("ui.killswitch", st.Dropped) + "\n")
 	}
