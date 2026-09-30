@@ -109,6 +109,14 @@ func testL4UDPDatagramRoundTrip(t *testing.T, codec string) {
 			t.Fatal(err)
 		}
 	}
+	if codec == "negotiated" {
+		// The client's Start returns when the client is ready, but the exit
+		// is ready only once the client's next hello arrives, and an exit's
+		// Start does not wait at all. On a busy CI runner the check below
+		// ran in between. The tunnels read the negotiated limits when they
+		// are built, so wait for both sides.
+		waitHandshake(t, clientTransport, exitTransport)
+	}
 	exit := NewTCPTunnelMode(exitTransport, true, ExitModeL4)
 	client := NewTCPTunnelMode(clientTransport, false, ExitModeL4)
 	defer exit.Close()
@@ -163,4 +171,21 @@ func testLANIPv4(t *testing.T) net.IP {
 	}
 	t.Skip("no non-loopback IPv4 interface for UDP integration test")
 	return nil
+}
+
+func waitHandshake(t *testing.T, sides ...transport.Transport) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for _, side := range sides {
+		p := side.(transport.PeerParameterProvider)
+		for {
+			if _, ready := p.PeerParameters(); ready {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("session handshake did not complete within 30s")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }
