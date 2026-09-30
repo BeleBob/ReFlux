@@ -81,6 +81,13 @@ type controller struct {
 	remembered string // the world server last saved as the one that held
 	gw         netip.Addr
 
+	// carrierHosts, when set (carrierFile), are routed out of the uplink
+	// by address; carriers holds those addresses and when each was last
+	// resolved. lookup resolves a host (resolveLocal; tests replace it).
+	carrierHosts []string
+	carriers     map[netip.Addr]time.Time
+	lookup       func(host string) ([]netip.Addr, error)
+
 	// routeMu serializes the changes of the Russian routes: the prefix
 	// refresh and the moves between the tunnel and the uplink.
 	routeMu  sync.Mutex
@@ -105,7 +112,11 @@ type status struct {
 	RUPrefixes int       `json:"ru_prefixes"`
 	RUListAt   time.Time `json:"ru_list_updated"`
 	Dropped    int64     `json:"killswitch_dropped"` // packets the kill switch stopped
-	Error      string    `json:"error,omitempty"`
+	// CarrierDirect: the carriers' servers leave out of the uplink;
+	// Carriers are their addresses routed so.
+	CarrierDirect bool     `json:"carrier_direct,omitempty"`
+	Carriers      []string `json:"carrier_addrs,omitempty"`
+	Error         string   `json:"error,omitempty"`
 }
 
 // directFile in the config directory sends Russian addresses out of the
@@ -238,10 +249,13 @@ const carrierDNS = "77.88.8.8, 77.88.8.1"
 // may leave too; the set is filled only while Russia is routed out of the
 // uplink. Every DNS query, to any address, is answered by the local
 // resolver.
-func killSwitch(ruDirect bool) string {
+func killSwitch(ruDirect, carriers bool) string {
 	direct := ""
 	if ruDirect {
 		direct = "\n\t\toifname \"" + uplink + "\" ip daddr @ru4 accept"
+	}
+	if carriers {
+		direct += "\n\t\toifname \"" + uplink + "\" ip daddr @carrier4 accept"
 	}
 	return `table inet reflux
 delete table inet reflux
@@ -252,6 +266,9 @@ table inet reflux {
 	set ru4 {
 		type ipv4_addr
 		flags interval
+	}
+	set carrier4 {
+		type ipv4_addr
 	}
 	chain output {
 		type filter hook output priority 0; policy accept;
@@ -331,7 +348,7 @@ func (c *controller) defaultGateway() (netip.Addr, error) {
 // in between.
 func (c *controller) setup() error {
 	c.onDirect = c.ruDirect
-	if _, err := c.run(killSwitch(c.ruDirect || c.ruFallback), "nft", "-f", "-"); err != nil {
+	if _, err := c.run(killSwitch(c.ruDirect || c.ruFallback, len(c.carrierHosts) > 0), "nft", "-f", "-"); err != nil {
 		return err
 	}
 	// A retry after a partial setup finds the route already gone: keep the
@@ -607,6 +624,8 @@ func (c *controller) probe(iface string, targets, tcpTargets []string) bool {
 func (c *controller) watch(stop <-chan struct{}) {
 	failures := 0
 	var ru ruRounds
+	var carriersAt time.Time
+	var carrierErr string
 	c.mu.Lock()
 	c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
 	c.st.RUOK, c.st.RUMode = true, ruModeName(c.onDirect)
@@ -621,6 +640,19 @@ func (c *controller) watch(stop <-chan struct{}) {
 			c.mu.Lock()
 			c.st.World, c.st.WorldSince = c.world[c.cur].Name, time.Now().UTC()
 			c.mu.Unlock()
+		}
+		if len(c.carrierHosts) > 0 && time.Since(carriersAt) >= carrierEvery {
+			carriersAt = time.Now()
+			// The resolver starts after the tunnels: until it answers, the
+			// carriers go through the Russian tunnel as before.
+			msg := ""
+			if err := c.refreshCarriers(carriersAt); err != nil {
+				msg = err.Error()
+			}
+			if msg != carrierErr && msg != "" {
+				log.Print(msg)
+			}
+			carrierErr = msg
 		}
 		worldOK := c.probe(worldIface, worldProbes, worldTCP)
 		if worldOK {
@@ -661,6 +693,7 @@ func (c *controller) watch(stop <-chan struct{}) {
 		c.st.WorldOK, c.st.RUOK, c.st.Failures, c.st.Error = worldOK, ruOK, failures, errText
 		c.st.RUMode, c.st.RUFallback = mode, c.onDirect && !c.ruDirect
 		c.st.Selected = c.picked
+		c.st.CarrierDirect, c.st.Carriers = len(c.carrierHosts) > 0, c.carrierAddrs()
 		c.st.Updated = time.Now().UTC()
 		st := c.st
 		c.mu.Unlock()
@@ -746,6 +779,9 @@ func statusText(st status, now time.Time) string {
 		mode += " (fallback: the tunnel does not answer)"
 	}
 	fmt.Fprintf(&b, "russia %-5s %s, %d prefixes (list from %s)\n", yes[st.RUOK], mode, st.RUPrefixes, st.RUListAt.Format(time.DateOnly))
+	if st.CarrierDirect {
+		fmt.Fprintf(&b, "carriers direct: %d addresses out of the uplink\n", len(st.Carriers))
+	}
 	fmt.Fprintf(&b, "kill switch stopped %d packets\n", st.Dropped)
 	fmt.Fprintf(&b, "checked %s ago\n", now.Sub(st.Updated).Round(time.Second))
 	if st.Error != "" {

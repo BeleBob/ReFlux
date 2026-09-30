@@ -277,7 +277,7 @@ var alertCategories = []string{"tunnels", "nodes", "updates", "server"}
 // category is the group of a check's alerts.
 func category(key string) string {
 	switch {
-	case key == "world", key == "russia", key == "egress", key == "egress-error", key == "kill-switch":
+	case key == "world", key == "russia", key == "egress", key == "egress-error", key == "kill-switch", key == "carrier":
 		return "tunnels"
 	case strings.HasPrefix(key, "node:"), strings.HasPrefix(key, "doc:"), key == "clients":
 		return "nodes"

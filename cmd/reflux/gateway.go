@@ -19,6 +19,9 @@ const (
 	worldSelect    = "world-select"
 	ruDirectFile   = "ru-direct"
 	ruFallbackFile = "ru-fallback-direct"
+	// carrierFile routes the carriers' servers (mail.ru) out of the
+	// uplink, not through the Russian tunnel; read when the egress starts.
+	carrierFile = "carrier-direct"
 )
 
 func (s Store) egressDir() string { return filepath.Join(s.Root, "egress") }
@@ -101,11 +104,33 @@ func (s Store) setRussiaMode(mode string) error {
 	return set(ruFallbackFile, mode == "fallback")
 }
 
+// carrierDirect reports whether the carriers' servers leave directly.
+func (s Store) carrierDirect() bool {
+	_, err := os.Stat(filepath.Join(s.egressDir(), carrierFile))
+	return err == nil
+}
+
+// setCarrierDirect writes or removes carrierFile; the egress reads it
+// when it starts.
+func (s Store) setCarrierDirect(on bool) error {
+	path := filepath.Join(s.egressDir(), carrierFile)
+	if on {
+		return os.WriteFile(path, nil, 0o600)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 const gatewayUsage = `usage:
   reflux gateway                       world servers and how Russia leaves
   reflux gateway <world-N.conf|auto>   switch the world tunnel (within 10 s)
   reflux gateway russia <fallback|tunnel|direct>
-                                       how Russia leaves; restarts egress and nodes`
+                                       how Russia leaves; restarts egress and nodes
+  reflux gateway carrier <direct|tunnel>
+                                       the mail.ru channel itself: out of the uplink
+                                       or through the Russian tunnel; restarts too`
 
 func cmdGateway(s Store, args []string, stdout io.Writer) error {
 	switch {
@@ -127,8 +152,21 @@ func cmdGateway(s Store, args []string, stdout io.Writer) error {
 		if chosen == "" {
 			fmt.Fprintln(stdout, "No server chosen: the egress keeps the one that works.")
 		}
-		fmt.Fprintf(stdout, "Russia: %s\n\n%s\n", s.russiaMode(), gatewayUsage)
+		carrier := "through the Russian tunnel"
+		if s.carrierDirect() {
+			carrier = "direct"
+		}
+		fmt.Fprintf(stdout, "Russia: %s\nmail.ru channel: %s\n\n%s\n", s.russiaMode(), carrier, gatewayUsage)
 		return nil
+	case len(args) == 2 && args[0] == "carrier":
+		if args[1] != "direct" && args[1] != "tunnel" {
+			return errors.New(gatewayUsage)
+		}
+		if err := s.setCarrierDirect(args[1] == "direct"); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "mail.ru channel: %s. Restarting egress and nodes...\n", args[1])
+		return cmdRestart(s, stdout)
 	case len(args) == 2 && args[0] == "russia":
 		if err := s.setRussiaMode(args[1]); err != nil {
 			return err

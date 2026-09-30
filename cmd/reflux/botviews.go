@@ -90,6 +90,8 @@ func (b *bot) short(f finding) string {
 		return b.tr("short.russia", str(0), a[1])
 	case "killswitch":
 		return b.tr("short.killswitch", a[0])
+	case "carrier.direct":
+		return b.tr("short.carrier", a[0])
 	case "node.ok":
 		return b.tr("short.node", str(0), str(1), str(2), str(3), str(4))
 	case "node.inactive":
@@ -183,7 +185,15 @@ func (b *bot) gatewayScreen() screen {
 	} else {
 		t.WriteString(b.tr("ui.egress.none") + "\n")
 	}
-	t.WriteString(b.tr("ui.gw.choice", how) + "\n" + b.tr("ui.gw.rumode", b.tr("gw.ru."+b.s.russiaMode())) + "\n\n" + b.tr("ui.gw.hint"))
+	carrier := b.tr("gw.carrier.tunnel")
+	if b.s.carrierDirect() {
+		carrier = b.tr("gw.carrier.direct")
+		if stErr == nil && st.CarrierDirect {
+			carrier += " · " + b.tr("gw.carrier.addrs", len(st.Carriers))
+		}
+	}
+	t.WriteString(b.tr("ui.gw.choice", how) + "\n" + b.tr("ui.gw.rumode", b.tr("gw.ru."+b.s.russiaMode())) + "\n" +
+		b.tr("ui.gw.carrier", carrier) + "\n\n" + b.tr("ui.gw.hint"))
 
 	kb := keyboard{}
 	var row []tgButton
@@ -211,7 +221,15 @@ func (b *bot) gatewayScreen() screen {
 		}
 		ru = append(ru, tgButton{Text: label, Data: "gwr:" + m})
 	}
-	kb = append(kb, ru, []tgButton{b.btn("b.refresh", "gw"), b.btn("b.home", "home")})
+	var carrierRow []tgButton
+	for _, m := range []string{"direct", "tunnel"} {
+		label := b.tr("b.carrier." + m)
+		if (m == "direct") == b.s.carrierDirect() {
+			label = "✅ " + label
+		}
+		carrierRow = append(carrierRow, tgButton{Text: label, Data: "gwc:" + m})
+	}
+	kb = append(kb, ru, carrierRow, []tgButton{b.btn("b.refresh", "gw"), b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
 
@@ -237,6 +255,33 @@ func (b *bot) russiaAsk(mode string) screen {
 		{b.btn("b.confirm.ru", "gwr!:"+mode+":"+stamp())},
 		{b.btn("b.cancel", "gw")},
 	}}
+}
+
+func (b *bot) carrierAsk(mode string) screen {
+	if mode != "direct" && mode != "tunnel" {
+		return b.gatewayScreen()
+	}
+	return screen{b.tr("ui.gw.carriersure", b.tr("gw.carrier."+mode)), keyboard{
+		{b.btn("b.confirm.ru", "gwc!:"+mode+":"+stamp())},
+		{b.btn("b.cancel", "gw")},
+	}}
+}
+
+// setCarrier routes the mail.ru channel directly or through the Russian
+// tunnel; the egress reads it at start, so it restarts with the nodes.
+func (b *bot) setCarrier(mode string) screen {
+	err := b.change(func() error {
+		if err := b.s.setCarrierDirect(mode == "direct"); err != nil {
+			return err
+		}
+		return cmdRestart(b.s, io.Discard)
+	})
+	if err != nil {
+		return b.failed(err, b.btn("b.gateway", "gw"))
+	}
+	sc := b.gatewayScreen()
+	sc.text = b.tr("ui.restart.done") + "\n\n" + sc.text
+	return sc
 }
 
 // setRussia changes how Russia leaves and restarts the egress (and the

@@ -77,6 +77,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `awg-ru` (or, with `egress/ru-direct`, out of `eth0` with the kill switch
   opening only nft set `ru4`; with `egress/ru-fallback-direct`, out of `eth0` only
   while `awg-ru` fails `failLimit` rounds, back after `recoverRounds`),
+  with `egress/carrier-direct` the carriers' servers (mail.ru hosts, resolved every
+  minute into nft set `carrier4` and /32 routes) out of `eth0` while other RU
+  traffic stays in the tunnel,
   the owner's world server choice in `egress/world-select` (`reflux gateway`,
   applied once per change, failover still moves on), world failover in file order without automatic
   return; after a restart it starts with the owner's choice, else the last world

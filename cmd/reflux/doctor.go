@@ -209,17 +209,19 @@ func dateOf(rfc3339 string) string {
 
 // egressStatus is the egress controller's status.json (see reflux-egress).
 type egressStatus struct {
-	Updated    time.Time `json:"updated"`
-	World      string    `json:"world"`
-	WorldOK    bool      `json:"world_ok"`
-	WorldSince time.Time `json:"world_since"`
-	RUOK       bool      `json:"ru_ok"`
-	RUMode     string    `json:"ru_mode"` // "tunnel" or "direct": the way in use
-	RUFallback bool      `json:"ru_fallback"`
-	RUPrefixes int       `json:"ru_prefixes"`
-	RUListAt   time.Time `json:"ru_list_updated"`
-	Dropped    int64     `json:"killswitch_dropped"`
-	Error      string    `json:"error"`
+	Updated       time.Time `json:"updated"`
+	World         string    `json:"world"`
+	WorldOK       bool      `json:"world_ok"`
+	WorldSince    time.Time `json:"world_since"`
+	RUOK          bool      `json:"ru_ok"`
+	RUMode        string    `json:"ru_mode"` // "tunnel" or "direct": the way in use
+	RUFallback    bool      `json:"ru_fallback"`
+	CarrierDirect bool      `json:"carrier_direct"`
+	Carriers      []string  `json:"carrier_addrs"`
+	RUPrefixes    int       `json:"ru_prefixes"`
+	RUListAt      time.Time `json:"ru_list_updated"`
+	Dropped       int64     `json:"killswitch_dropped"`
+	Error         string    `json:"error"`
 }
 
 // readEgressStatus asks the running egress for its status.
@@ -274,6 +276,9 @@ func (d *doctor) egress() {
 		d.add(levelOK, "russia", "up "+st.RUMode, "russia.up", ruMode(st), st.RUPrefixes, st.RUListAt.Local().Format(time.DateOnly))
 	default:
 		d.add(levelFail, "russia", "down "+st.RUMode, "russia.down", ruMode(st))
+	}
+	if st.CarrierDirect {
+		d.ok("carrier", "carrier.direct", len(st.Carriers))
 	}
 	if st.Error != "" {
 		d.warn("egress-error", "egress.error", st.Error)
