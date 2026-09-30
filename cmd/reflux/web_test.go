@@ -16,8 +16,11 @@ type webTest struct {
 	t   *testing.T
 	s   Store
 	h   http.Handler
+	w   *webServer
 	jar []*http.Cookie
 }
+
+func webOf(t *testing.T, wt *webTest) *webServer { return wt.w }
 
 func newWebTest(t *testing.T, trusted ...string) *webTest {
 	t.Helper()
@@ -36,7 +39,7 @@ func newWebTest(t *testing.T, trusted ...string) *webTest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &webTest{t: t, s: s, h: w.routes()}
+	return &webTest{t: t, s: s, h: w.routes(), w: w}
 }
 
 // do sends a request from addr (a LAN machine by default) with the
@@ -213,15 +216,52 @@ func TestWebPagesRender(t *testing.T) {
 		if _, err := wt.s.Add("phone", "mailru", testURL); err != nil {
 			t.Fatal(err)
 		}
-		for _, p := range []string{"/", "/c/phone", "/add", "/doctor", "/gateway", "/speed", "/logs/phone", "/logs/egress", "/?ok=added"} {
+		// Figures for the tiles and charts: two samples of a fake host.
+		proc, sys := fakeHostTree(t)
+		writeFile(t, proc+"/stat", "cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
+		writeFile(t, proc+"/meminfo", "MemTotal: 8000000 kB\nMemAvailable: 6000000 kB\nSwapTotal: 1000 kB\nSwapFree: 500 kB\n")
+		writeFile(t, proc+"/loadavg", "1.45 1.12 1.09 1/310 1\n")
+		writeFile(t, proc+"/uptime", "90000 1\n")
+		writeFile(t, sys+"/class/hwmon/hwmon1/name", "coretemp\n")
+		writeFile(t, sys+"/class/hwmon/hwmon1/temp1_input", "41000\n")
+		writeFile(t, sys+"/class/hwmon/hwmon1/temp1_label", "Package id 0\n")
+		w := webOf(t, wt)
+		// A running egress, so the pages show the tunnels too.
+		inner := runDocker
+		runDocker = func(stdout io.Writer, args ...string) error {
+			if strings.Join(args, " ") == "exec reflux-egress cat /run/reflux-egress/status.json" {
+				io.WriteString(stdout, `{"world":"world-3.conf","world_ok":true,"world_selected":"world-3.conf","ru_ok":true,`+
+					`"ru_mode":"tunnel","ru_fallback":true,"carrier_direct":true,"carrier_addrs":["95.163.59.187"],"killswitch_dropped":0}`)
+				return nil
+			}
+			return inner(stdout, args...)
+		}
+		w.stats.tick(time.Now().Add(-10 * time.Second))
+		writeFile(t, proc+"/stat", "cpu  200 0 100 800 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
+		w.stats.tick(time.Now().Add(-5 * time.Second))
+		writeFile(t, proc+"/stat", "cpu  500 0 100 900 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
+		w.stats.tick(time.Now())
+		wt.s.logEvents([]event{{At: time.Now(), Level: "FAIL", RU: "мир не работает", EN: "world is down"}})
+		for _, p := range []string{"/", "/server", "/events", "/c/phone", "/add", "/doctor", "/gateway", "/speed", "/logs/phone", "/logs/egress", "/?ok=added", "/c/phone?ok=restarted_node"} {
 			rec := wt.do("GET", p, nil)
 			if rec.Code != http.StatusOK {
 				t.Errorf("%s %s: %d\n%s", l, p, rec.Code, rec.Body)
 				continue
 			}
-			if m := rawIDRe.FindString(rec.Body.String()); m != "" {
+			body := rec.Body.String()
+			if m := rawIDRe.FindString(body); m != "" {
 				t.Errorf("%s %s shows the raw message id %q", l, p, m)
 			}
+			if strings.Contains(body, "%!") {
+				t.Errorf("%s %s has a formatting error:\n%s", l, p, body)
+			}
+		}
+		if body := wt.do("GET", "/server", nil).Body.String(); !strings.Contains(body, "75%") || !strings.Contains(body, "41 °C") ||
+			!strings.Contains(body, "<polyline") {
+			t.Errorf("%s: server page lacks the figures:\n%s", l, body)
+		}
+		if body := wt.do("GET", "/", nil).Body.String(); !strings.Contains(body, map[string]string{"ru": "мир не работает", "en": "world is down"}[l]) {
+			t.Errorf("%s: home lacks the latest event", l)
 		}
 		if rec := wt.do("GET", "/c/nobody", nil); !strings.Contains(rec.Body.String(), "nobody") {
 			t.Errorf("unknown client page: %d", rec.Code)

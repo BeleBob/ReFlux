@@ -67,7 +67,11 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   listens on the LAN address in `~/reflux/web.json`, answers private addresses
   only, signs in `trusted` addresses or browsers with a one-time link (`/web`
   in the bot, `reflux web login`; token and session hashes in `web-*.json`),
-  and takes POSTs from its own origin only. Commands that change clients or containers hold the flock
+  and takes POSTs from its own origin only. Its sampler (`webstats.go`) reads the
+  host from /proc and /sys (`hostmetrics.go`, roots overridable in tests) every 5 s
+  for an hour of charts (server-rendered SVG, no scripts) and the nodes every 10 s
+  into per-day traffic in `state/<name>/traffic.json` (survives node and panel
+  restarts). The bot logs its alerts to `events.jsonl` in both languages. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders

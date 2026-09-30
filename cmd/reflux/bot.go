@@ -339,13 +339,24 @@ func (b *bot) watch() {
 func (b *bot) check(first bool) []string {
 	fs := runChecks(b.s)
 	var news []string
+	var evs []event
+	now := time.Now()
 	for _, a := range b.mon.update(fs, b.lang) {
+		evs = append(evs, a.event(now))
 		if !b.mute[category(a.key)] {
-			news = append(news, a.text)
+			news = append(news, a.text(b.lang))
 		}
 	}
-	if first && !b.mute["updates"] {
-		news = []string{startMessage(fs, b.lang)}
+	if first {
+		warns, fails := count(fs)
+		evs = append(evs, event{At: now, Level: "info",
+			RU: tr(langRU, "ev.started", fails, warns), EN: tr(langEN, "ev.started", fails, warns)})
+		if !b.mute["updates"] {
+			news = []string{startMessage(fs, b.lang)}
+		}
+	}
+	if err := b.s.logEvents(evs); err != nil {
+		log.Printf("bot: event log: %v", err)
 	}
 	return news
 }
@@ -400,7 +411,26 @@ type pendingChange struct {
 
 // alert is one piece of news and the check it comes from.
 type alert struct {
-	key, text string
+	key  string
+	f    finding
+	info bool // news that is not a problem: a failover, an update
+}
+
+// text renders the alert for Telegram (HTML) in l.
+func (a alert) text(l lang) string {
+	if a.info {
+		return "ℹ️ " + html.EscapeString(a.f.text(l))
+	}
+	return alertLine(a.f, l)
+}
+
+// event is the alert for the event log.
+func (a alert) event(at time.Time) event {
+	lv := a.f.Level.String()
+	if a.info {
+		lv = "info"
+	}
+	return event{At: at, Level: lv, RU: a.f.text(langRU), EN: a.f.text(langEN)}
 }
 
 func (m *monitor) update(fs []finding, l lang) []alert {
@@ -455,11 +485,11 @@ func (m *monitor) update(fs []finding, l lang) []alert {
 		m.reported[k] = c
 		switch {
 		case c.Level != levelOK:
-			news = append(news, alert{k, alertLine(c, l)})
+			news = append(news, alert{key: k, f: c})
 		case was && r.Level != levelOK:
-			news = append(news, alert{k, alertLine(c, l)}) // resolved
+			news = append(news, alert{key: k, f: c}) // resolved
 		case was:
-			news = append(news, alert{k, "ℹ️ " + html.EscapeString(c.text(l))}) // a failover, an update
+			news = append(news, alert{key: k, f: c, info: true}) // a failover, an update
 		}
 	}
 	return news

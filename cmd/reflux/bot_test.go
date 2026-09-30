@@ -241,7 +241,7 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 	for i, st := range steps {
 		var texts []string
 		for _, a := range m.update(st.fs, langEN) {
-			texts = append(texts, a.text)
+			texts = append(texts, a.text(langEN))
 		}
 		if got := strings.Join(texts, "\n"); got != st.news {
 			t.Errorf("run %d: news %q, want %q", i, got, st.news)

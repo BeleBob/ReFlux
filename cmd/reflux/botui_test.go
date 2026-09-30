@@ -255,3 +255,37 @@ func TestMutedAlertsAreNotSent(t *testing.T) {
 		}
 	}
 }
+
+func TestBotServerScreenAndNodeRestart(t *testing.T) {
+	proc, sys := fakeHostTree(t)
+	writeFile(t, proc+"/stat", "cpu  100 0 100 700 100 0 0 0 0 0\ncpu0 1 0 0 0\ncpu1 1 0 0 0\n")
+	writeFile(t, proc+"/meminfo", "MemTotal: 8000000 kB\nMemAvailable: 6000000 kB\n")
+	writeFile(t, proc+"/loadavg", "1.45 1.12 1.09 1/310 1\n")
+	writeFile(t, proc+"/uptime", "90000 1\n")
+	writeFile(t, sys+"/class/hwmon/hwmon1/name", "coretemp\n")
+	writeFile(t, sys+"/class/hwmon/hwmon1/temp1_input", "41000\n")
+	old := measureWindow
+	measureWindow = 10 * time.Millisecond
+	defer func() { measureWindow = old }()
+
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	calls := fakeDocker(t, "")
+	s := Store{Root: home}
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeTG(t)
+	b := newBot(s, botConfig{Token: testToken, Chat: 42, Lang: "ru"})
+	b.handle(press(1, 42, "srv", time.Now()))
+	for _, want := range []string{"Процессор: ", "ядер 2", "Память: 25%", "Температура: 41 °C", "Работает 25 ч"} {
+		if !strings.Contains(f.edited[0], want) {
+			t.Errorf("server screen lacks %q:\n%s", want, f.edited[0])
+		}
+	}
+	*calls = nil
+	b.handle(press(2, 42, "rsn:phone", time.Now()))
+	if !strings.Contains(strings.Join(*calls, "\n"), "up --detach --no-deps --force-recreate node-phone") {
+		t.Errorf("node restart ran %q", *calls)
+	}
+}

@@ -304,3 +304,37 @@ func (b *bot) setRussia(mode string) screen {
 	sc.text = b.tr("ui.restart.done") + "\n\n" + sc.text
 	return sc
 }
+
+// serverScreen shows the host's vital signs, measured over a second.
+func (b *bot) serverScreen() screen {
+	h := measureHost(measureWindow)
+	p := h.Point
+	var t strings.Builder
+	fmt.Fprintf(&t, "%s · %s\n", b.tr("ui.server.title"), time.Now().Format("15:04"))
+	t.WriteString(b.tr("ui.server.cpu", p.CPU, fmt.Sprintf("%.2f", h.Load[0]), h.CPUs) + "\n")
+	t.WriteString(b.tr("ui.server.mem", p.Mem, humanBytes(h.Mem.Used()), humanBytes(h.Mem.Total)) + "\n")
+	if len(h.Temps) > 0 {
+		t.WriteString(b.tr("ui.server.temp", h.Temps[0].C) + "\n")
+	}
+	t.WriteString(b.tr("ui.server.uptime", durationIn(b.lang, h.Uptime)) + "\n")
+	t.WriteString(b.tr("ui.server.egress", mbit(b.lang, p.EgRx), mbit(b.lang, p.EgTx)) + "\n")
+	t.WriteString(b.tr("ui.server.lan", mbit(b.lang, p.LanRx), mbit(b.lang, p.LanTx)) + "\n")
+	if len(h.Disks) > 0 {
+		t.WriteString("\n" + b.tr("ui.server.disks") + "\n")
+		for _, d := range h.Disks {
+			mark := "▫️"
+			if d.Percent() >= 90 {
+				mark = "⚠️"
+			}
+			fmt.Fprintf(&t, "%s %s — %.0f%% · %s\n", mark, html.EscapeString(d.Mount), d.Percent(),
+				b.tr("web.free", humanBytes(d.Total-d.Used)))
+		}
+	}
+	if len(h.Top) > 0 {
+		t.WriteString("\n" + b.tr("ui.server.top") + "\n")
+		for _, pu := range h.Top {
+			fmt.Fprintf(&t, "%s — %.0f%%\n", html.EscapeString(pu.Name), pu.Percent)
+		}
+	}
+	return screen{t.String(), keyboard{{b.btn("b.refresh", "srv"), b.btn("b.home", "home")}}}
+}

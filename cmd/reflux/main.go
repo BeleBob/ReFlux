@@ -35,7 +35,7 @@ USAGE
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, apply, remove old ReFlux images
-  reflux restart           recreate egress and all nodes
+  reflux restart [name]    recreate egress and all nodes, or one client's node
   reflux heal              recreate nodes stranded by an egress restart
                            (quiet; for cron: * * * * * reflux heal)
   reflux status            egress tunnels, nodes, who is online
@@ -171,6 +171,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		if egress == "" {
 			egress = "not running"
 		}
+		h := measureHost(measureWindow)
+		fmt.Fprintf(stdout, "host: CPU %.0f%% (load %.2f, %d CPUs), memory %.0f%% (%s of %s)",
+			h.Point.CPU, h.Load[0], h.CPUs, h.Point.Mem, humanBytes(h.Mem.Used()), humanBytes(h.Mem.Total))
+		if len(h.Temps) > 0 {
+			fmt.Fprintf(stdout, ", %.0f °C", h.Temps[0].C)
+		}
+		fmt.Fprintf(stdout, ", up %s\n", humanDurationEN(h.Uptime))
 		fmt.Fprintf(stdout, "egress container: %s\n", egress)
 		if err := runDocker(stdout, "exec", "reflux-egress", "reflux-egress", "status"); err != nil {
 			fmt.Fprintln(stdout, "egress: no status (not running?)")
@@ -184,6 +191,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return nil
 	case "restart":
+		if len(rest) == 1 {
+			return restartNode(s, rest[0], stdout)
+		}
 		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
@@ -231,6 +241,23 @@ func cmdRestart(s Store, stdout io.Writer) error {
 	}
 	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
 }
+
+// restartNode recreates one client's node; egress and the others stay.
+func restartNode(s Store, name string, stdout io.Writer) error {
+	c, err := s.Get(name)
+	if err != nil {
+		return err
+	}
+	if !c.Active(time.Now()) {
+		return fmt.Errorf("%s is %s: its node does not run", name, accessText(c, time.Now()))
+	}
+	if err := render(s); err != nil {
+		return err
+	}
+	return runDocker(stdout, composeArgs(s, "up", "--detach", "--no-deps", "--force-recreate", "node-"+name)...)
+}
+
+func humanDurationEN(d time.Duration) string { return durationIn(langEN, d) }
 
 func dataDir() (string, error) {
 	if d := os.Getenv("REFLUX_HOME"); d != "" {

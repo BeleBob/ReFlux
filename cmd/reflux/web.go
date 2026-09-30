@@ -37,21 +37,45 @@ type webServer struct {
 	tmpl *template.Template
 	// mu runs the handlers one at a time: they run docker and swap
 	// dockerStderr, like the bot's commands.
-	mu sync.Mutex
+	mu    sync.Mutex
+	stats *sampler
 }
 
 func newWebServer(s Store, cfg webConfig) (*webServer, error) {
 	w := &webServer{s: s, cfg: cfg}
-	funcs := template.FuncMap{
-		// t renders a message in the page's language; set per request.
-		"t": func(id string, args ...any) string { return tr(langRU, id, args...) },
-	}
-	t, err := template.New("panel").Funcs(funcs).ParseFS(webFiles, "web/panel.html")
+	w.stats = newSampler(s, &w.mu)
+	t, err := template.New("panel").Funcs(webFuncs(langRU)).ParseFS(webFiles, "web/panel.html")
 	if err != nil {
 		return nil, err
 	}
 	w.tmpl = t
 	return w, nil
+}
+
+// webFuncs are the templates' helpers in l.
+func webFuncs(l lang) template.FuncMap {
+	return template.FuncMap{
+		"t":     func(id string, args ...any) string { return tr(l, id, args...) },
+		"dur":   func(d time.Duration) string { return durationIn(l, d) },
+		"mbit":  func(v float64) string { return mbit(l, v) },
+		"ago":   func(t time.Time) string { return ago(l, t) },
+		"bytes": humanBytes,
+		"spark": spark,
+		"pct":   pct,
+		"bar":   barLevel,
+		"f0":    func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) },
+		"f1":    func(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) },
+		"f2":    func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) },
+		"hhmm":  func(t time.Time) string { return t.Local().Format("02.01 15:04:05") },
+		"etext": func(e event) string { return e.Text(l) },
+		"add":   func(a, b float64) float64 { return a + b },
+		"sub": func(a, b uint64) uint64 {
+			if b > a {
+				return 0
+			}
+			return a - b
+		},
+	}
 }
 
 // lang is the owner's language: the bot's setting, Russian by default.
@@ -66,6 +90,8 @@ func (w *webServer) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", w.login)
 	mux.HandleFunc("GET /{$}", w.page(w.home))
+	mux.HandleFunc("GET /server", w.page(w.server))
+	mux.HandleFunc("GET /events", w.page(w.events))
 	mux.HandleFunc("GET /c/{name}", w.page(w.client))
 	mux.HandleFunc("POST /c/{name}/show", w.page(w.show))
 	mux.HandleFunc("POST /c/{name}/{action}", w.action(w.clientAction))
@@ -159,10 +185,12 @@ func (w *webServer) logout(rw http.ResponseWriter, r *http.Request) {
 
 // pageData is what every page gets.
 type pageData struct {
-	Title  string
-	Notice string
-	Error  string
-	Now    string
+	Title   string
+	Active  string // the menu item of the page
+	Version string
+	Notice  string
+	Error   string
+	Now     string
 	// Refresh reloads the page after this many seconds (0: never).
 	Refresh int
 	// Back is the page an error came from.
@@ -218,9 +246,10 @@ func (w *webServer) render(rw http.ResponseWriter, status int, name string, data
 	l := w.lang()
 	t, err := w.tmpl.Clone()
 	if err == nil {
-		t = t.Funcs(template.FuncMap{"t": func(id string, args ...any) string { return tr(l, id, args...) }})
+		t = t.Funcs(webFuncs(l))
 	}
 	data.Now = time.Now().Format("15:04:05")
+	data.Version = version()
 	var buf bytes.Buffer
 	if err == nil {
 		err = t.ExecuteTemplate(&buf, name, data)
@@ -240,17 +269,48 @@ func (w *webServer) render(rw http.ResponseWriter, status int, name string, data
 // clientRow is a client on the home page.
 type clientRow struct {
 	Name, Mark, Owner, State, Access string
+	Today                            dayTraffic
+	Down, Up                         float64 // bytes per second, lately
+}
+
+// tiles are the host's vital signs on the home and server pages.
+type tiles struct {
+	Now            hostNow
+	CPU, Mem, Temp []float64
+	Lan, Egress    []float64 // down and up together, bytes per second
+	RootDisk       *disk
+	Ready          bool // the sampler has two readings
+}
+
+func (w *webServer) tiles() tiles {
+	now, hist := w.stats.snapshot()
+	t := tiles{Now: now, Ready: len(hist) > 0}
+	for _, p := range hist {
+		t.CPU = append(t.CPU, p.CPU)
+		t.Mem = append(t.Mem, p.Mem)
+		t.Temp = append(t.Temp, p.TempC)
+		t.Lan = append(t.Lan, p.LanRx+p.LanTx)
+		t.Egress = append(t.Egress, p.EgRx+p.EgTx)
+	}
+	for i := range now.Disks {
+		if now.Disks[i].Mount == "/" {
+			t.RootDisk = &now.Disks[i]
+		}
+	}
+	return t
 }
 
 type homeData struct {
 	Egress  *egressStatus
 	Russia  string
 	Clients []clientRow
+	Tiles   tiles
+	Events  []event
 }
 
 func (w *webServer) home(r *http.Request) (string, pageData, error) {
 	l := w.lang()
-	var d homeData
+	d := homeData{Tiles: w.tiles(), Events: w.s.readEvents(5)}
 	if st, err := readEgressStatus(); err == nil {
 		d.Egress = &st
 		d.Russia = tr(l, ruMode(st).id)
@@ -263,15 +323,30 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 			owner = v.c.Telegram.String()
 		}
 		p := accessPhrase(v.c, now)
-		d.Clients = append(d.Clients, clientRow{
-			Name: v.c.Name, Mark: v.mark(), Owner: owner, State: stateText(l, v), Access: tr(l, p.id, p.args...),
-		})
+		ct := w.stats.clientTraffic(v.c.Name, now)
+		row := clientRow{Name: v.c.Name, Mark: v.mark(), Owner: owner, State: stateText(l, v),
+			Access: tr(l, p.id, p.args...), Today: ct.Today}
+		// Keepalives are not traffic worth a figure: from 50 kbit/s on.
+		if n := len(ct.Rates); n > 0 && ct.Rates[n-1].Down+ct.Rates[n-1].Up >= 6250 {
+			row.Down, row.Up = ct.Rates[n-1].Down, ct.Rates[n-1].Up
+		}
+		d.Clients = append(d.Clients, row)
 	}
-	return "home", pageData{Title: tr(l, "web.nav.home"), Refresh: 15, Body: d}, err
+	return "home", pageData{Title: tr(l, "web.nav.home"), Active: "home", Refresh: 15, Body: d}, err
+}
+
+func (w *webServer) server(r *http.Request) (string, pageData, error) {
+	return "server", pageData{Title: tr(w.lang(), "web.nav.server"), Active: "server", Refresh: 15, Body: w.tiles()}, nil
+}
+
+func (w *webServer) events(r *http.Request) (string, pageData, error) {
+	return "events", pageData{Title: tr(w.lang(), "web.nav.events"), Active: "events", Refresh: 60, Body: w.s.readEvents(200)}, nil
 }
 
 type clientData struct {
 	Row       clientRow
+	Traffic   clientTraffic
+	Down, Up  []float64 // the rates lately, for the chart
 	Node      string
 	Created   string
 	Transport string
@@ -299,6 +374,11 @@ func (w *webServer) clientData(name string) (clientData, error) {
 	if c.Telegram != nil {
 		d.Row.Owner = c.Telegram.String()
 	}
+	d.Traffic = w.stats.clientTraffic(c.Name, time.Now())
+	for _, p := range d.Traffic.Rates {
+		d.Down = append(d.Down, p.Down)
+		d.Up = append(d.Up, p.Up)
+	}
 	if !c.Expires.IsZero() {
 		d.Expires = c.Expires.Local().AddDate(0, 0, -1).Format(time.DateOnly)
 	}
@@ -320,7 +400,7 @@ func (w *webServer) client(r *http.Request) (string, pageData, error) {
 	if err != nil {
 		return "error", pageData{}, err
 	}
-	return "client", pageData{Title: d.Row.Name, Body: d}, nil
+	return "client", pageData{Title: d.Row.Name, Active: "home", Body: d}, nil
 }
 
 // show is the client page with its access data: a POST, so it never sits
@@ -389,6 +469,8 @@ func (w *webServer) clientAction(r *http.Request) (string, error) {
 	case "rename":
 		to := strings.TrimSpace(r.FormValue("to"))
 		return "/c/" + url.PathEscape(to) + "?ok=renamed", change(func() error { return cmdRename(w.s, name, to, io.Discard) })
+	case "restart":
+		return back + "?ok=restarted_node", change(func() error { return restartNode(w.s, name, io.Discard) })
 	case "unlink":
 		return back + "?ok=unlinked", change(func() error {
 			c, err := w.s.Get(name)
@@ -450,7 +532,7 @@ func (w *webServer) logs(r *http.Request) (string, pageData, error) {
 }
 
 func (w *webServer) addForm(r *http.Request) (string, pageData, error) {
-	return "add", pageData{Title: tr(w.lang(), "web.add.title")}, nil
+	return "add", pageData{Title: tr(w.lang(), "web.add.title"), Active: "add"}, nil
 }
 
 func (w *webServer) add(r *http.Request) (string, error) {
@@ -536,11 +618,12 @@ func (w *webServer) doctor(r *http.Request) (string, pageData, error) {
 	if warns+fails > 0 {
 		summary = tr(l, "ui.doctor.sum", fails, warns)
 	}
-	return "doctor", pageData{Title: tr(l, "b.doctor"), Refresh: 60,
+	return "doctor", pageData{Title: tr(l, "b.doctor"), Active: "doctor", Refresh: 60,
 		Body: map[string]any{"Summary": summary, "Sections": secs}}, nil
 }
 
 type gatewayData struct {
+	Tunnels  []tunnel
 	Egress   *egressStatus
 	Russia   string
 	Worlds   []string
@@ -554,13 +637,13 @@ type gatewayData struct {
 func (w *webServer) gateway(r *http.Request) (string, pageData, error) {
 	l := w.lang()
 	d := gatewayData{Worlds: w.s.worldConfigs(), Chosen: w.s.chosenWorld(), RuMode: w.s.russiaMode(),
-		RuModes: russiaModes, Carrier: w.s.carrierDirect()}
+		RuModes: russiaModes, Carrier: w.s.carrierDirect(), Tunnels: readTunnels()}
 	if st, err := readEgressStatus(); err == nil {
 		d.Egress = &st
 		d.Russia = tr(l, ruMode(st).id)
 		d.Carriers = len(st.Carriers)
 	}
-	return "gateway", pageData{Title: tr(l, "b.gateway"), Refresh: 30, Body: d}, nil
+	return "gateway", pageData{Title: tr(l, "b.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil
 }
 
 func (w *webServer) gatewayAction(r *http.Request) (string, error) {
@@ -595,11 +678,11 @@ func (w *webServer) gatewayAction(r *http.Request) (string, error) {
 }
 
 func (w *webServer) speedForm(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed")}, nil
+	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed"}, nil
 }
 
 func (w *webServer) speed(r *http.Request) (string, pageData, error) {
-	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Body: speedLines(w.lang(), speedTest())}, nil
+	return "speed", pageData{Title: tr(w.lang(), "b.speed"), Active: "speed", Body: speedLines(w.lang(), speedTest())}, nil
 }
 
 // ---- command ----
@@ -625,6 +708,9 @@ func cmdWeb(s Store, args []string, stdout io.Writer) error {
 			return err
 		}
 		log.Printf("web: serving on http://%s", cfg.Listen)
+		stop := make(chan struct{})
+		defer close(stop)
+		go w.stats.run(stop)
 		srv := &http.Server{Addr: cfg.Listen, Handler: w.routes(), ReadHeaderTimeout: 10 * time.Second}
 		return srv.ListenAndServe()
 	case "login":

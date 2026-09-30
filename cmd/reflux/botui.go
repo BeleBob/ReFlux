@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "speedtest", "gateway", "web", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "web", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -147,6 +147,8 @@ func (b *bot) message(text string) screen {
 		return b.speed()
 	case "/gateway":
 		return b.gatewayScreen()
+	case "/server":
+		return b.serverScreen()
 	case "/web":
 		link, err := b.s.loginLink()
 		if err != nil {
@@ -260,6 +262,14 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.toggleMute(arg), ""
 	case "gw":
 		return b.gatewayScreen(), ""
+	case "srv":
+		return b.serverScreen(), ""
+	case "rsn":
+		err := b.change(func() error { return restartNode(b.s, arg, io.Discard) })
+		if err != nil {
+			return b.failed(err, b.btn("b.back", "c:"+arg)), ""
+		}
+		return b.clientScreen(arg), b.tr("ui.node.restarting")
 	case "gws":
 		return b.chooseWorld(arg)
 	case "gwr":
@@ -412,8 +422,8 @@ func (b *bot) home() screen {
 	return screen{t.String(), keyboard{
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
-		{b.btn("b.gateway", "gw"), b.btn("b.speed", "sp")},
-		{b.btn("b.settings", "set")},
+		{b.btn("b.server", "srv"), b.btn("b.gateway", "gw")},
+		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
 	}}
 }
 
@@ -458,7 +468,7 @@ func (b *bot) clientScreen(name string) screen {
 		{b.btn("b.qr", "qr:"+c.Name), toggle},
 		{b.btn("b.access", "acc:"+c.Name), b.btn("b.telegram", "tg:"+c.Name)},
 		{b.btn("b.rename", "ren:"+c.Name), b.btn("b.logs", "lg:"+c.Name)},
-		{b.btn("b.revoke", "rv:"+c.Name)},
+		{b.btn("b.restartnode", "rsn:"+c.Name), b.btn("b.revoke", "rv:"+c.Name)},
 		{b.btn("b.clients", "cls"), b.btn("b.home", "home")},
 	}}
 }

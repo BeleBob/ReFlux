@@ -5,45 +5,76 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
 <title>{{.Title}} · ReFlux</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6fed'/%3E%3Cpath d='M9 22V10h7a4 4 0 0 1 0 8h-3l6 4' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-:root { --bg:#f6f7f9; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#e4e7ec; --accent:#2f6fed; --ok:#12805c; --warn:#b54708; --bad:#c01048; }
-@media (prefers-color-scheme: dark) { :root { --bg:#12151b; --card:#1b2029; --fg:#e6e9ef; --mute:#98a2b3; --line:#2c3340; --accent:#6b9bff; --ok:#3ccb8f; --warn:#f5a524; --bad:#ff6b8b; } }
+:root { --bg:#f4f6f9; --card:#fff; --fg:#1d2330; --mute:#667085; --line:#e4e7ec; --soft:#eef2f7; --accent:#2f6fed; --ok:#12805c; --warn:#b54708; --bad:#c01048; }
+@media (prefers-color-scheme: dark) { :root { --bg:#10131a; --card:#1a1f29; --fg:#e6e9ef; --mute:#98a2b3; --line:#2a313d; --soft:#222936; --accent:#6b9bff; --ok:#3ccb8f; --warn:#f5a524; --bad:#ff6b8b; } }
 * { box-sizing:border-box; }
-body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); }
-header { background:var(--card); border-bottom:1px solid var(--line); padding:10px 16px; display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center; }
-header .brand { font-weight:700; margin-right:8px; }
-header a { color:var(--fg); text-decoration:none; padding:4px 8px; border-radius:6px; }
-header a:hover { background:var(--bg); }
+body { margin:0; font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--fg); font-variant-numeric:tabular-nums; }
+header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--line); padding:8px 16px; display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center; }
+header .brand { font-weight:700; margin-right:10px; display:flex; align-items:center; gap:6px; }
+header .brand i { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent); }
+header nav { display:flex; flex-wrap:wrap; gap:2px; }
+header nav a { color:var(--fg); text-decoration:none; padding:5px 10px; border-radius:7px; }
+header nav a:hover { background:var(--soft); }
+header nav a.on { background:var(--accent); color:#fff; }
 header form { margin-left:auto; }
-main { max-width:960px; margin:0 auto; padding:16px; }
-.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
-h1 { font-size:20px; margin:4px 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
-table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
-th { color:var(--mute); font-weight:500; font-size:13px; }
+main { max-width:1080px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+h1 { font-size:21px; margin:2px 0 10px; } h2 { font-size:15px; margin:0 0 10px; color:var(--mute); font-weight:600; text-transform:uppercase; letter-spacing:.03em; }
+.scroll { overflow-x:auto; }
+table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+tr:last-child td { border-bottom:0; }
+th { color:var(--mute); font-weight:500; font-size:13px; white-space:nowrap; }
+td.num, th.num { text-align:right; white-space:nowrap; }
 a { color:var(--accent); }
 .mute { color:var(--mute); font-size:13px; }
 .notice { border-left:4px solid var(--ok); } .error { border-left:4px solid var(--bad); }
-.ok { color:var(--ok); } .warn { color:var(--warn); } .FAIL { color:var(--bad); }
+.ok { color:var(--ok); } .warn { color:var(--warn); } .FAIL { color:var(--bad); } .info { color:var(--accent); }
 .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
-button, input[type=submit] { font:inherit; padding:6px 12px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; }
-button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { border-color:var(--bad); color:var(--bad); }
+button { font:inherit; padding:7px 13px; border-radius:8px; border:1px solid var(--line); background:var(--soft); color:var(--fg); cursor:pointer; }
+button:hover { border-color:var(--accent); }
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { border-color:var(--bad); color:var(--bad); background:transparent; }
 button.current { border-color:var(--ok); color:var(--ok); font-weight:600; }
-input[type=text], input[type=date], textarea { font:inherit; padding:6px 8px; border-radius:7px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
-input[type=text] { min-width:220px; } textarea { width:100%; }
-pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--bg); padding:10px; border-radius:8px; max-height:70vh; overflow:auto; }
-code { word-break:break-all; }
-img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:8px; }
-dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0; } dt { color:var(--mute); }
+input[type=text], input[type=date], textarea { font:inherit; padding:7px 9px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
+input[type=text] { min-width:220px; } textarea { width:100%; font-size:13px; }
+pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--soft); padding:10px; border-radius:8px; max-height:70vh; overflow:auto; }
+code { word-break:break-all; background:var(--soft); padding:1px 5px; border-radius:5px; }
+img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:10px; }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 16px; margin:0; } dt { color:var(--mute); }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin-bottom:14px; }
+.tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px 8px; }
+.tile .label { color:var(--mute); font-size:13px; }
+.tile .value { font-size:24px; font-weight:650; line-height:1.3; }
+.tile .sub { color:var(--mute); font-size:12.5px; min-height:1.3em; }
+svg.spark { width:100%; height:44px; display:block; margin-top:6px; }
+svg.spark .line { fill:none; stroke:var(--accent); stroke-width:1.6; vector-effect:non-scaling-stroke; }
+svg.spark .area { fill:var(--accent); opacity:.12; }
+.bar { height:8px; border-radius:6px; background:var(--soft); overflow:hidden; margin:4px 0 2px; }
+.bar i { display:block; height:100%; background:var(--ok); border-radius:6px; }
+.bar i.warn { background:var(--warn); } .bar i.FAIL { background:var(--bad); }
+.pill { display:inline-block; padding:1px 8px; border-radius:999px; font-size:12px; background:var(--soft); color:var(--mute); }
+.pill.ok { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
+.pill.warn { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
+.pill.FAIL { background:color-mix(in srgb, var(--bad) 15%, transparent); color:var(--bad); }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px; }
+.grid2 .card { margin-bottom:0; }
+footer { max-width:1080px; margin:0 auto; padding:4px 16px 24px; color:var(--mute); font-size:12.5px; }
+@media (max-width:600px) { header nav a { padding:4px 7px; font-size:14px; } .tile .value { font-size:20px; } }
 </style>
 </head>
 <body>
 <header>
-<span class="brand">🛰 ReFlux</span>
-<a href="/">{{t "web.nav.home"}}</a>
-<a href="/doctor">{{t "b.doctor"}}</a>
-<a href="/gateway">{{t "b.gateway"}}</a>
-<a href="/speed">{{t "b.speed"}}</a>
-<a href="/add">{{t "b.add"}}</a>
+<span class="brand"><i></i>ReFlux</span>
+<nav>
+<a href="/" {{if eq .Active "home"}}class="on"{{end}}>{{t "web.nav.home"}}</a>
+<a href="/server" {{if eq .Active "server"}}class="on"{{end}}>{{t "web.nav.server"}}</a>
+<a href="/doctor" {{if eq .Active "doctor"}}class="on"{{end}}>{{t "b.doctor"}}</a>
+<a href="/gateway" {{if eq .Active "gateway"}}class="on"{{end}}>{{t "b.gateway"}}</a>
+<a href="/events" {{if eq .Active "events"}}class="on"{{end}}>{{t "web.nav.events"}}</a>
+<a href="/speed" {{if eq .Active "speed"}}class="on"{{end}}>{{t "b.speed"}}</a>
+<a href="/add" {{if eq .Active "add"}}class="on"{{end}}>{{t "b.add"}}</a>
+</nav>
 <form method="post" action="/logout"><button>{{t "web.logout"}}</button></form>
 </header>
 <main>
@@ -52,53 +83,133 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 {{end}}
 
 {{define "foot"}}
-<p class="mute">{{t "web.updated" .Now}}</p>
 </main>
+<footer>{{t "web.updated" .Now}} · reflux {{.Version}}</footer>
 </body>
 </html>
 {{end}}
 
 {{define "signin"}}<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReFlux</title>
-<style>body{font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 16px;color:#1d2330}code{background:#f0f2f5;padding:2px 5px;border-radius:4px}.e{color:#c01048}.n{color:#12805c}</style></head>
-<body>
-<h1>🛰 ReFlux</h1>
+<style>body{font:15px/1.6 system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 16px;color:#1d2330;background:#f4f6f9}.c{background:#fff;border:1px solid #e4e7ec;border-radius:12px;padding:18px 20px}.e{color:#c01048}.n{color:#12805c}@media (prefers-color-scheme:dark){body{background:#10131a;color:#e6e9ef}.c{background:#1a1f29;border-color:#2a313d}}</style></head>
+<body><div class="c">
+<h1>ReFlux</h1>
 {{if .Error}}<p class="e">{{.Error}}</p>{{end}}
 {{if .Notice}}<p class="n">{{.Notice}}</p>{{end}}
 <p>{{t "web.signin.text"}}</p>
-</body></html>
+</div></body></html>
 {{end}}
 
 {{define "error"}}{{template "head" .}}
 <div class="card">{{if .Back}}<a href="{{.Back}}">{{t "web.back"}}</a> · {{end}}<a href="/">{{t "web.nav.home"}}</a></div>
 {{template "foot" .}}{{end}}
 
+{{define "tiles"}}
+{{if .Ready}}
+<div class="tiles">
+<div class="tile"><div class="label">{{t "web.tile.cpu"}}</div><div class="value">{{f0 .Now.Point.CPU}}%</div>
+<div class="sub">{{t "web.tile.load" (f2 (index .Now.Load 0)) .Now.CPUs}}</div>{{spark .CPU 100}}</div>
+<div class="tile"><div class="label">{{t "web.tile.mem"}}</div><div class="value">{{f0 .Now.Point.Mem}}%</div>
+<div class="sub">{{t "web.of" (bytes .Now.Mem.Used) (bytes .Now.Mem.Total)}}</div>{{spark .Mem 100}}</div>
+<div class="tile"><div class="label">{{t "web.tile.temp"}}</div><div class="value">{{if .Now.Temps}}{{f0 .Now.Point.TempC}} °C{{else}}—{{end}}</div>
+<div class="sub">{{with .Now.Temps}}{{(index . 0).Label}}{{end}}</div>{{spark .Temp 0}}</div>
+<div class="tile"><div class="label">{{t "web.tile.egress"}}</div><div class="value">{{mbit (add .Now.Point.EgRx .Now.Point.EgTx)}}</div>
+<div class="sub">↓ {{mbit .Now.Point.EgRx}} · ↑ {{mbit .Now.Point.EgTx}}</div>{{spark .Egress 0}}</div>
+{{with .RootDisk}}<div class="tile"><div class="label">{{t "web.tile.disk" .Mount}}</div><div class="value">{{f0 .Percent}}%</div>
+<div class="sub">{{t "web.free" (bytes (sub .Total .Used))}}</div><div class="bar"><i class="{{bar .Percent}}" style="width:{{pct .Percent}}%"></i></div></div>{{end}}
+</div>
+{{else}}<div class="card mute">{{t "web.tile.wait"}}</div>{{end}}
+{{end}}
+
 {{define "home"}}{{template "head" .}}
 {{with .Body}}
+{{template "tiles" .Tiles}}
+<div class="grid2">
 <div class="card">
 <h2>{{t "web.tunnels"}}</h2>
 {{with .Egress}}
 <dl>
-<dt>🌍</dt><dd>{{if .WorldOK}}<span class="ok">✅</span>{{else}}<span class="FAIL">❌</span>{{end}} {{.World}}{{if .Selected}} <span class="mute">({{t "ui.gw.choice" .Selected}})</span>{{end}}</dd>
-<dt>🇷🇺</dt><dd>{{if .RUOK}}{{if .RUFallback}}<span class="warn">⚠️</span>{{else}}<span class="ok">✅</span>{{end}}{{else}}<span class="FAIL">❌</span>{{end}} {{$.Body.Russia}}</dd>
-<dt>📄</dt><dd>{{if .CarrierDirect}}{{t "gw.carrier.direct"}} · {{t "gw.carrier.addrs" (len .Carriers)}}{{else}}{{t "gw.carrier.tunnel"}}{{end}}</dd>
-<dt>🛡</dt><dd>{{t "ui.killswitch" .Dropped}}</dd>
+<dt>🌍 {{t "web.world"}}</dt><dd>{{if .WorldOK}}<span class="pill ok">✓</span>{{else}}<span class="pill FAIL">✕</span>{{end}} {{.World}}{{if .Selected}} <span class="mute">· {{t "ui.gw.choice" .Selected}}</span>{{end}}</dd>
+<dt>🇷🇺 {{t "web.gw.russia"}}</dt><dd>{{if .RUOK}}{{if .RUFallback}}<span class="pill warn">!</span>{{else}}<span class="pill ok">✓</span>{{end}}{{else}}<span class="pill FAIL">✕</span>{{end}} {{$.Body.Russia}}</dd>
+<dt>📄 {{t "web.gw.carrier"}}</dt><dd>{{if .CarrierDirect}}{{t "gw.carrier.direct"}} · {{t "gw.carrier.addrs" (len .Carriers)}}{{else}}{{t "gw.carrier.tunnel"}}{{end}}</dd>
+<dt>🛡 Kill switch</dt><dd>{{t "web.blocked" .Dropped}}</dd>
 </dl>
 {{else}}<p class="FAIL">{{t "ui.egress.none"}}</p>{{end}}
 </div>
 <div class="card">
+<h2>{{t "web.events.recent"}}</h2>
+{{range .Events}}<div class="row"><span class="{{.Level}}">{{template "evicon" .Level}}</span><span class="mute">{{hhmm .At}}</span> {{etext .}}</div>
+{{else}}<p class="mute">{{t "web.events.none"}}</p>{{end}}
+<p><a href="/events">{{t "web.events.all"}}</a></p>
+</div>
+</div>
+<div class="card" style="margin-top:14px">
 <h2>{{t "web.clients"}}</h2>
 {{if .Clients}}
-<table>
-<tr><th></th><th>{{t "web.col.name"}}</th><th>{{t "web.col.state"}}</th><th>{{t "web.col.access"}}</th></tr>
+<div class="scroll"><table>
+<tr><th></th><th>{{t "web.col.name"}}</th><th>{{t "web.col.state"}}</th><th>{{t "web.col.access"}}</th><th class="num">{{t "web.col.today"}}</th></tr>
 {{range .Clients}}
-<tr><td>{{.Mark}}</td><td><a href="/c/{{.Name}}">{{.Name}}</a>{{if .Owner}}<br><span class="mute">{{.Owner}}</span>{{end}}</td><td>{{.State}}</td><td>{{.Access}}</td></tr>
+<tr><td>{{.Mark}}</td><td><a href="/c/{{.Name}}">{{.Name}}</a>{{if .Owner}}<br><span class="mute">{{.Owner}}</span>{{end}}</td><td>{{.State}}{{if or .Down .Up}}<br><span class="mute">↓ {{mbit .Down}} · ↑ {{mbit .Up}}</span>{{end}}</td><td>{{.Access}}</td><td class="num">↓ {{bytes .Today.Down}}<br>↑ {{bytes .Today.Up}}</td></tr>
 {{end}}
-</table>
+</table></div>
 <p class="mute">{{t "ui.clients.hint"}}</p>
 {{else}}<p>{{t "web.none"}} <a href="/add">{{t "b.add"}}</a></p>{{end}}
 </div>
 {{end}}
+{{template "foot" .}}{{end}}
+
+{{define "evicon"}}{{if eq . "ok"}}✅{{else if eq . "warn"}}⚠️{{else if eq . "FAIL"}}❌{{else}}ℹ️{{end}}{{end}}
+
+{{define "server"}}{{template "head" .}}
+{{with .Body}}
+{{template "tiles" .}}
+{{if .Ready}}
+<div class="tiles">
+<div class="tile"><div class="label">{{t "web.tile.lan"}}</div><div class="value">{{mbit (add .Now.Point.LanRx .Now.Point.LanTx)}}</div>
+<div class="sub">↓ {{mbit .Now.Point.LanRx}} · ↑ {{mbit .Now.Point.LanTx}}</div>{{spark .Lan 0}}</div>
+<div class="tile"><div class="label">{{t "web.tile.uptime"}}</div><div class="value">{{dur .Now.Uptime}}</div>
+<div class="sub">{{t "web.tile.loadall" (f2 (index .Now.Load 0)) (f2 (index .Now.Load 1)) (f2 (index .Now.Load 2))}}</div></div>
+{{if .Now.Mem.SwapTotal}}<div class="tile"><div class="label">Swap</div><div class="value">{{bytes (sub .Now.Mem.SwapTotal .Now.Mem.SwapFree)}}</div>
+<div class="sub">{{t "web.of" (bytes (sub .Now.Mem.SwapTotal .Now.Mem.SwapFree)) (bytes .Now.Mem.SwapTotal)}}</div></div>{{end}}
+</div>
+<p class="mute">{{t "web.hist"}}</p>
+<div class="grid2">
+<div class="card">
+<h2>{{t "web.disks"}}</h2>
+{{range .Now.Disks}}<div><div class="row" style="justify-content:space-between;margin:0"><span>{{.Mount}}</span><span class="mute">{{bytes .Used}} / {{bytes .Total}} · {{f0 .Percent}}%</span></div>
+<div class="bar"><i class="{{bar .Percent}}" style="width:{{pct .Percent}}%"></i></div></div>{{end}}
+</div>
+<div class="card">
+<h2>{{t "web.sensors"}}</h2>
+{{if .Now.Temps}}<div class="scroll"><table>{{range .Now.Temps}}<tr><td>{{.Label}}</td><td class="num">{{f0 .C}} °C</td></tr>{{end}}</table></div>
+{{else}}<p class="mute">{{t "web.nosensors"}}</p>{{end}}
+</div>
+<div class="card">
+<h2>{{t "web.containers"}}</h2>
+<div class="scroll"><table>
+<tr><th>{{t "web.col.container"}}</th><th class="num">{{t "web.col.cpu"}}</th><th class="num">{{t "web.col.mem"}}</th></tr>
+{{range .Now.Containers}}<tr><td>{{.Name}}</td><td class="num">{{f1 .CPU}}%</td><td class="num">{{bytes .MemBytes}}</td></tr>{{end}}
+</table></div>
+</div>
+<div class="card">
+<h2>{{t "web.top"}}</h2>
+<div class="scroll"><table>
+<tr><th>{{t "web.col.process"}}</th><th class="num">{{t "web.col.cpu"}}</th></tr>
+{{range .Now.Top}}<tr><td>{{.Name}}</td><td class="num">{{f1 .Percent}}%</td></tr>{{else}}<tr><td class="mute" colspan="2">{{t "web.top.idle"}}</td></tr>{{end}}
+</table></div>
+<p class="mute">{{t "web.top.hint"}}</p>
+</div>
+</div>
+{{end}}
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "events"}}{{template "head" .}}
+<div class="card">
+<h1>{{t "web.nav.events"}}</h1>
+{{range .Body}}<div class="row"><span class="{{.Level}}">{{template "evicon" .Level}}</span><span class="mute">{{hhmm .At}}</span> {{etext .}}</div>
+{{else}}<p class="mute">{{t "web.events.none"}}</p>{{end}}
+</div>
 {{template "foot" .}}{{end}}
 
 {{define "clientinfo"}}
@@ -115,15 +226,29 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 
 {{define "client"}}{{template "head" .}}
 {{with .Body}}
-<div class="card">{{template "clientinfo" .}}</div>
-<div class="card">
-<form method="post" action="/c/{{.Row.Name}}/show" class="row"><button class="primary">{{t "web.show"}}</button></form>
+<div class="grid2">
+<div class="card">{{template "clientinfo" .}}
+<form method="post" action="/c/{{.Row.Name}}/show" class="row" style="margin-top:12px"><button class="primary">{{t "web.show"}}</button></form>
 <div class="row">
 {{if .Paused}}<form method="post" action="/c/{{.Row.Name}}/resume"><button>{{t "b.resume"}}</button></form>
-{{else}}<form method="post" action="/c/{{.Row.Name}}/pause"><button>{{t "b.pause"}}</button></form>{{end}}
+{{else}}<form method="post" action="/c/{{.Row.Name}}/pause"><button>{{t "b.pause"}}</button></form>
+<form method="post" action="/c/{{.Row.Name}}/restart"><button>{{t "web.restart.node"}}</button></form>{{end}}
 <a href="/logs/{{.Row.Name}}">{{t "b.logs"}}</a>
 </div>
 </div>
+<div class="card">
+<h2>{{t "web.traffic"}}</h2>
+<div class="scroll"><table>
+<tr><th></th><th class="num">↓ {{t "web.down"}}</th><th class="num">↑ {{t "web.up"}}</th></tr>
+<tr><td>{{t "web.traffic.today"}}</td><td class="num">{{bytes .Traffic.Today.Down}}</td><td class="num">{{bytes .Traffic.Today.Up}}</td></tr>
+<tr><td>{{t "web.traffic.month"}}</td><td class="num">{{bytes .Traffic.Month.Down}}</td><td class="num">{{bytes .Traffic.Month.Up}}</td></tr>
+<tr><td>{{t "web.traffic.all"}}</td><td class="num">{{bytes .Traffic.All.Down}}</td><td class="num">{{bytes .Traffic.All.Up}}</td></tr>
+</table></div>
+<p class="mute" style="margin-bottom:0">↓ {{t "web.down"}}, {{t "web.hist"}}</p>{{spark .Down 0}}
+<p class="mute">{{t "web.traffic.note"}}</p>
+</div>
+</div>
+<div class="grid2" style="margin-top:14px">
 <div class="card">
 <h2>{{t "b.access"}}</h2>
 <form method="post" action="/c/{{.Row.Name}}/expire" class="row">
@@ -147,14 +272,13 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 </form>
 <p class="mute">{{t "web.rename.hint"}}</p>
 {{if .Row.Owner}}<form method="post" action="/c/{{.Row.Name}}/unlink" class="row"><button>{{t "b.tg.off"}}</button></form>{{end}}
-</div>
-<div class="card">
-<h2>{{t "b.revoke"}}</h2>
+<h2 style="margin-top:16px">{{t "b.revoke"}}</h2>
 <form method="post" action="/c/{{.Row.Name}}/revoke" class="row">
 <input type="text" name="confirm" required placeholder="{{.Row.Name}}">
 <button class="danger">{{t "b.revoke"}}</button>
 </form>
 <p class="mute">{{t "web.revoke.hint"}}</p>
+</div>
 </div>
 {{end}}
 {{template "foot" .}}{{end}}
@@ -164,9 +288,9 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 <div class="card">
 <h1>{{.Row.Mark}} {{.Row.Name}}</h1>
 <p class="warn">{{t "web.show.note"}}</p>
-<img class="qr" src="{{.QR}}" alt="QR">
-<h2>{{t "web.link"}}</h2>
-<textarea rows="4" readonly>{{.Link}}</textarea>
+<div class="grid2">
+<div><img class="qr" src="{{.QR}}" alt="QR"></div>
+<div>
 <h2>{{t "web.manual"}}</h2>
 <dl>
 <dt>{{t "web.transport"}}</dt><dd><code>{{.Transport}}</code></dd>
@@ -174,6 +298,10 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 <dt>{{t "web.field.key"}}</dt><dd><code>{{.Key}}</code></dd>
 <dt>Legacy codec</dt><dd>{{t "web.off"}}</dd>
 </dl>
+</div>
+</div>
+<h2 style="margin-top:14px">{{t "web.link"}}</h2>
+<textarea rows="4" readonly>{{.Link}}</textarea>
 <p><a href="/c/{{.Row.Name}}">{{t "web.back"}}</a></p>
 </div>
 {{end}}
@@ -204,25 +332,36 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 {{define "doctor"}}{{template "head" .}}
 {{with .Body}}
 <div class="card"><h1>{{t "b.doctor"}}</h1><p>{{.Summary}}</p></div>
+<div class="grid2">
 {{range .Sections}}
 <div class="card">
 <h2>{{.Title}}</h2>
-{{range .Lines}}<div class="row"><span class="{{.Level}}">{{if eq .Level "ok"}}✅{{else if eq .Level "warn"}}⚠️{{else}}❌{{end}}</span> {{.Text}}</div>{{end}}
+{{range .Lines}}<div class="row"><span class="{{.Level}}">{{template "evicon" .Level}}</span> {{.Text}}</div>{{end}}
 </div>
 {{end}}
+</div>
 {{end}}
 {{template "foot" .}}{{end}}
 
 {{define "gateway"}}{{template "head" .}}
 {{with .Body}}
+<div class="grid2">
 <div class="card">
 <h1>{{t "b.gateway"}}</h1>
 {{with .Egress}}<dl>
-<dt>🌍</dt><dd>{{if .WorldOK}}✅{{else}}❌{{end}} {{.World}}</dd>
-<dt>🇷🇺</dt><dd>{{if .RUOK}}{{if .RUFallback}}⚠️{{else}}✅{{end}}{{else}}❌{{end}} {{$.Body.Russia}}</dd>
+<dt>🌍 {{t "web.world"}}</dt><dd>{{if .WorldOK}}<span class="pill ok">✓</span>{{else}}<span class="pill FAIL">✕</span>{{end}} {{.World}}</dd>
+<dt>🇷🇺 {{t "web.gw.russia"}}</dt><dd>{{if .RUOK}}{{if .RUFallback}}<span class="pill warn">!</span>{{else}}<span class="pill ok">✓</span>{{end}}{{else}}<span class="pill FAIL">✕</span>{{end}} {{$.Body.Russia}}</dd>
 </dl>{{else}}<p class="FAIL">{{t "ui.egress.none"}}</p>{{end}}
 </div>
 <div class="card">
+<h2>{{t "web.tunnels.detail"}}</h2>
+{{if .Tunnels}}<div class="scroll"><table>
+<tr><th>{{t "web.col.iface"}}</th><th>{{t "web.col.handshake"}}</th><th class="num">↓ / ↑</th></tr>
+{{range .Tunnels}}<tr><td>{{.Iface}}</td><td>{{ago .Handshake}}</td><td class="num">{{bytes .Rx}} / {{bytes .Tx}}</td></tr>{{end}}
+</table></div>{{else}}<p class="mute">{{t "ui.egress.none"}}</p>{{end}}
+</div>
+</div>
+<div class="card" style="margin-top:14px">
 <h2>{{t "web.gw.world"}}</h2>
 <p>{{if .Chosen}}{{t "ui.gw.choice" .Chosen}}{{else}}{{t "ui.gw.choice" (t "ui.gw.auto")}}{{end}}</p>
 <form method="post" action="/gateway/world" class="row">
@@ -231,6 +370,7 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 </form>
 <p class="mute">{{t "web.gw.world.hint"}}</p>
 </div>
+<div class="grid2">
 <div class="card">
 <h2>{{t "web.gw.russia"}}</h2>
 <form method="post" action="/gateway/russia">
@@ -247,6 +387,7 @@ dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 14px; margin:0
 <p><label><input type="checkbox" name="confirm" value="yes"> {{t "web.gw.restartbox"}}</label></p>
 <button>{{t "web.apply"}}</button>
 </form>
+</div>
 </div>
 {{end}}
 {{template "foot" .}}{{end}}
