@@ -340,22 +340,27 @@ func TestLoadConfigsOrdersWorldByName(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ru, direct, world, err := loadConfigs(dir)
+	ru, direct, fallback, world, err := loadConfigs(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if direct || ru.Name != "ru-1.conf" || len(world) != 2 || world[0].Name != "world-1.conf" || world[1].Name != "world-2.conf" {
+	if direct || fallback || ru.Name != "ru-1.conf" || len(world) != 2 || world[0].Name != "world-1.conf" || world[1].Name != "world-2.conf" {
 		t.Errorf("ru=%s direct=%v world=%v", ru.Name, direct, []string{world[0].Name, world[1].Name})
+	}
+	// ru-fallback-direct keeps the tunnel and adds the fallback.
+	os.WriteFile(filepath.Join(dir, fallbackFile), nil, 0o600)
+	if ru, direct, fallback, _, err := loadConfigs(dir); err != nil || direct || !fallback || ru.Name != "ru-1.conf" {
+		t.Errorf("with %s: ru=%s direct=%v fallback=%v err=%v", fallbackFile, ru.Name, direct, fallback, err)
 	}
 	// ru-direct wins over a Russian config, and a Russian config is then
 	// not needed at all.
 	os.WriteFile(filepath.Join(dir, directFile), nil, 0o600)
 	os.Remove(filepath.Join(dir, "ru-1.conf"))
-	if _, direct, _, err := loadConfigs(dir); err != nil || !direct {
-		t.Errorf("with %s: direct=%v err=%v", directFile, direct, err)
+	if _, direct, fallback, _, err := loadConfigs(dir); err != nil || !direct || fallback {
+		t.Errorf("with %s: direct=%v fallback=%v err=%v", directFile, direct, fallback, err)
 	}
 	os.Remove(filepath.Join(dir, directFile))
-	if _, _, _, err := loadConfigs(dir); err == nil {
+	if _, _, _, _, err := loadConfigs(dir); err == nil {
 		t.Error("no ru-*.conf and no ru-direct accepted")
 	}
 }
@@ -530,5 +535,110 @@ func TestResolverAnswersRedirectedQueries(t *testing.T) {
 	}
 	if !strings.Contains(unboundConf, "interface: 127.0.0.1\n") {
 		t.Error("unbound listens beyond loopback")
+	}
+}
+
+func ruPrefixes() []netip.Prefix {
+	var ps []netip.Prefix
+	for i := 0; i < minRUPrefixes; i++ {
+		ps = append(ps, netip.PrefixFrom(addr(uint32(i+1)<<8), 24))
+	}
+	return ps
+}
+
+// With ru-fallback-direct, Russia leaves through the uplink while its
+// tunnel is down and goes back once the tunnel has answered for a while;
+// the kill switch opens before the routes move out and closes after they
+// are back.
+func TestRussiaFallsBackToTheUplinkAndReturns(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n", failing: map[string]bool{}}
+	c := testController(t, f)
+	c.ruFallback = true
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if indexOf(f.calls, "ip link add awg-ru") < 0 {
+		t.Fatal("the Russian tunnel is not brought up with a fallback")
+	}
+	if !strings.Contains(f.stdin[0], "@ru4 accept") {
+		t.Fatal("the kill switch has no rule for the fallback")
+	}
+	if err := c.setPrefixes(ruPrefixes(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.stdin[len(f.stdin)-1], "via 172.31.250.1") {
+		t.Fatal("Russia routed out of the uplink while its tunnel is up")
+	}
+
+	var r ruRounds
+	f.failing["ping -c 1 -W 3 -I awg-ru"] = true
+	for i := 1; i < failLimit; i++ {
+		if ok, err := c.russia(&r); !ok || err != nil || c.onDirect {
+			t.Fatalf("round %d: ok=%v err=%v direct=%v; want to wait for failLimit", i, ok, err, c.onDirect)
+		}
+	}
+	f.calls, f.stdin = nil, nil
+	if ok, err := c.russia(&r); !ok || err != nil || !c.onDirect {
+		t.Fatalf("after %d failed rounds: ok=%v err=%v direct=%v", failLimit, ok, err, c.onDirect)
+	}
+	set, routes := indexOf(f.calls, "nft -f -"), indexOf(f.calls, "ip -batch -")
+	if set < 0 || routes < set || !strings.HasPrefix(f.stdin[set], "add element inet reflux ru4 { 0.0.1.0/24,") ||
+		!strings.HasPrefix(f.stdin[routes], "route replace 0.0.1.0/24 via 172.31.250.1 dev eth0\n") {
+		t.Fatalf("fallback steps:\n%s", strings.Join(f.calls, "\n"))
+	}
+	if indexOf(f.calls, "ping -c 1 -W 3 -I eth0 77.88.8.8") < 0 {
+		t.Error("the uplink is not probed while it carries Russia")
+	}
+	// A refreshed list goes out of the uplink too while the fallback lasts.
+	f.calls, f.stdin = nil, nil
+	if err := c.setPrefixes(append(ruPrefixes(), netip.MustParsePrefix("100.0.0.0/24")), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if b := f.stdin[indexOf(f.calls, "ip -batch -")]; b != "route replace 100.0.0.0/24 via 172.31.250.1 dev eth0\n" {
+		t.Errorf("refresh during the fallback: %q", b)
+	}
+
+	delete(f.failing, "ping -c 1 -W 3 -I awg-ru")
+	for i := 1; i < recoverRounds; i++ {
+		c.russia(&r)
+		if !c.onDirect {
+			t.Fatalf("back into the tunnel after %d good rounds, want %d", i, recoverRounds)
+		}
+	}
+	f.calls, f.stdin = nil, nil
+	if ok, err := c.russia(&r); !ok || err != nil || c.onDirect {
+		t.Fatalf("after %d good rounds: ok=%v err=%v direct=%v", recoverRounds, ok, err, c.onDirect)
+	}
+	routes, flush := indexOf(f.calls, "ip -batch -"), indexOf(f.calls, "nft flush set inet reflux ru4")
+	if routes < 0 || flush < routes || !strings.HasPrefix(f.stdin[routes], "route replace 0.0.1.0/24 dev awg-ru\n") {
+		t.Errorf("return steps:\n%s", strings.Join(f.calls, "\n"))
+	}
+}
+
+// Without the fallback file a dead Russian tunnel stays down: Russia is
+// never sent out of the uplink.
+func TestRussiaWithoutFallbackStaysInTheTunnel(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n", failing: map[string]bool{"ping -c 1 -W 3 -I awg-ru": true}}
+	c := testController(t, f)
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.stdin[0], "@ru4 accept") {
+		t.Error("the kill switch lets Russia out without a fallback")
+	}
+	var r ruRounds
+	ok := true
+	for i := 0; i < failLimit; i++ {
+		ok, _ = c.russia(&r)
+	}
+	if ok || c.onDirect || indexOf(f.calls, "ip -batch -") >= 0 {
+		t.Errorf("ok=%v direct=%v: Russia moved without a fallback", ok, c.onDirect)
+	}
+}
+
+func TestStatusTextNamesTheFallback(t *testing.T) {
+	st := status{WorldOK: true, World: "world-1.conf", RUOK: true, RUMode: "direct", RUFallback: true}
+	if txt := statusText(st, time.Now()); !strings.Contains(txt, "russia up    direct (fallback: the tunnel does not answer)") {
+		t.Errorf("status:\n%s", txt)
 	}
 }

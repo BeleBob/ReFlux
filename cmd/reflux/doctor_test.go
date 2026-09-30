@@ -15,6 +15,7 @@ import (
 type hostState struct {
 	module     bool
 	worldUp    bool
+	ruFallback bool
 	nodeStart  string // RFC 3339; egress started 2026-09-29T17:00:00Z
 	cron       string
 	dfUsed     string
@@ -55,7 +56,8 @@ func runDoctor(t *testing.T, st hostState) (string, error) {
 		}()
 	}
 	egress := fmt.Sprintf(`{"world":"world-1.conf","world_ok":%t,"world_since":"2026-09-29T19:56:08Z",`+
-		`"ru_ok":true,"ru_mode":"direct","ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0}`, st.worldUp)
+		`"ru_ok":true,"ru_mode":"direct","ru_fallback":%t,"ru_prefixes":8652,"ru_list_updated":"2026-09-29T19:50:09Z","killswitch_dropped":0}`,
+		st.worldUp, st.ruFallback)
 	runDocker = func(stdout io.Writer, args ...string) error {
 		switch call := strings.Join(args, " "); {
 		case strings.HasPrefix(call, "version"):
@@ -181,5 +183,17 @@ func TestTheBotReadsTheCrontabHourly(t *testing.T) {
 	}
 	if formatFindings(fs1) != formatFindings(fs2) {
 		t.Errorf("the reused cron finding differs:\n%s\n%s", formatFindings(fs1), formatFindings(fs2))
+	}
+}
+
+// Russia on its direct fallback works, but the owner should know the
+// tunnel is down.
+func TestDoctorWarnsAboutTheRussianFallback(t *testing.T) {
+	out, err := runDoctor(t, hostState{
+		module: true, worldUp: true, ruFallback: true, nodeStart: "2026-09-29T17:00:05Z", cron: "reflux heal", dfUsed: "10",
+		nodeStatus: &ipc.StatusPayload{Running: true},
+	})
+	if err != nil || !strings.Contains(out, "warn  russia leaves directly as a fallback") {
+		t.Errorf("err=%v\n%s", err, out)
 	}
 }
