@@ -255,6 +255,7 @@ func (b *bot) run() error {
 	if err != nil {
 		return err
 	}
+	cronEvery = time.Hour
 	if err := b.t.setCommands(botCommands); err != nil {
 		log.Printf("bot: command menu: %v", err)
 	}

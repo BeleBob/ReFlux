@@ -155,3 +155,33 @@ func TestDoctorNoticesADocumentThatKeepsDropping(t *testing.T) {
 		t.Errorf("no warning about the document:\n%s", out)
 	}
 }
+
+// crontab -l logs to the system log: the bot, checking every minute,
+// reads the crontab once an hour.
+func TestTheBotReadsTheCrontabHourly(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	fakeDocker(t, "")
+	n := 0
+	old := runCmd
+	runCmd = func(stdout io.Writer, name string, args ...string) error {
+		if name == "crontab" {
+			n++
+			io.WriteString(stdout, "* * * * * reflux heal\n")
+		}
+		return nil
+	}
+	defer func() { runCmd, cronEvery, cronLast.at = old, 0, time.Time{} }()
+	runChecks(s)
+	runChecks(s)
+	if n != 2 {
+		t.Errorf("doctor read the crontab %d times in 2 runs, want every run", n)
+	}
+	cronEvery = time.Hour
+	fs1, fs2 := runChecks(s), runChecks(s)
+	if n != 3 {
+		t.Errorf("the bot read the crontab %d more times in 2 runs, want 1", n-2)
+	}
+	if formatFindings(fs1) != formatFindings(fs2) {
+		t.Errorf("the reused cron finding differs:\n%s\n%s", formatFindings(fs1), formatFindings(fs2))
+	}
+}

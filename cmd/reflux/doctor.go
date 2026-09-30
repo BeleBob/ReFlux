@@ -316,7 +316,29 @@ func (d *doctor) docTrouble(name string) int {
 	return n
 }
 
+// cronEvery, when set, reuses the cron check for that long: the bot runs
+// the checks every minute, and every crontab -l writes a line to the
+// system log. The entry hardly ever changes.
+var (
+	cronEvery time.Duration
+	cronLast  struct {
+		at time.Time
+		f  finding
+	}
+)
+
 func (d *doctor) cron() {
+	if cronEvery > 0 && time.Since(cronLast.at) < cronEvery {
+		d.findings = append(d.findings, cronLast.f)
+		return
+	}
+	d.checkCron()
+	if cronEvery > 0 {
+		cronLast.at, cronLast.f = time.Now(), d.findings[len(d.findings)-1]
+	}
+}
+
+func (d *doctor) checkCron() {
 	var b strings.Builder
 	runCmd(&b, "crontab", "-l")
 	if strings.Contains(b.String(), "reflux heal") {
