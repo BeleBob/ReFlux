@@ -27,7 +27,10 @@ type lineChart struct {
 	Gap      time.Duration // points farther apart are not joined (0: all are)
 	Series   []chartSeries
 	Min, Max float64 // fixed scale; Max 0 scales to the data
-	Unit     func(float64) string
+	// Least is the least top of a scale fitted to the data, so a line
+	// near zero stays near the bottom instead of filling the chart.
+	Least float64
+	Unit  func(float64) string
 	// Threshold shades the band above it (0: none).
 	Threshold float64
 	Fill      bool // shade under the lines
@@ -106,7 +109,8 @@ func (c lineChart) render() template.HTML {
 				hi = math.Max(hi, v)
 			}
 		}
-		hi = math.Max(hi*1.15, c.Threshold)
+		// Room above the threshold, so its band shows.
+		hi = math.Max(math.Max(hi*1.15, c.Threshold*1.25), c.Least)
 		if hi <= 0 {
 			hi = 1
 		}

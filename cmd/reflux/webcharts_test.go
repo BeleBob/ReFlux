@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -104,5 +105,42 @@ func TestGauge(t *testing.T) {
 		if g := string(gauge(c.p, "<x>")); !strings.Contains(g, c.want) || !strings.Contains(g, "&lt;x&gt;") {
 			t.Errorf("gauge(%v) = %s", c.p, g)
 		}
+	}
+}
+
+// The value labels, left of the plot (the time labels are under it).
+var axisLabelRe = regexp.MustCompile(`x="48\.0" y="[^"]+" class="axis" text-anchor="end">([^<]*)<`)
+
+// Nearly idle traffic: the scale goes up to 1 Mbit/s and its labels differ.
+func TestTrafficAxis(t *testing.T) {
+	c := chartAt(0, time.Minute, 2*time.Minute)
+	c.Unit, c.Least = mbitAxis, 1
+	c.Series[0].Values = []float64{0, 0.0001, 0.0011} // Mbit/s
+	var labels []string
+	seen := map[string]bool{}
+	for _, m := range axisLabelRe.FindAllStringSubmatch(string(c.render()), -1) {
+		if seen[m[1]] {
+			t.Errorf("the label %q twice", m[1])
+		}
+		seen[m[1]] = true
+		labels = append(labels, m[1])
+	}
+	if len(labels) < 3 || labels[0] != "0" || labels[len(labels)-1] != "1" {
+		t.Errorf("labels %q, want 0 up to 1", labels)
+	}
+	for v, want := range map[float64]string{0: "0", 0.0001: "0", 0.0011: "0.0011", 0.6000000000000001: "0.6", 76.757: "76.8", 120.4: "120"} {
+		if got := mbitAxis(v); got != want {
+			t.Errorf("mbitAxis(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+// The data reaching the threshold still leaves its band in sight.
+func TestThresholdBandShows(t *testing.T) {
+	c := chartAt(0, time.Minute, 2*time.Minute)
+	c.Series[0].Values = []float64{1.4, 1.8, 1.7}
+	c.Threshold = 2
+	if svg := string(c.render()); !strings.Contains(svg, `class="zone"`) {
+		t.Errorf("no threshold band:\n%s", svg)
 	}
 }

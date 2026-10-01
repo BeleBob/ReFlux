@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"html/template"
-	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -123,9 +122,6 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 	// A gap: the panel was down (the minutes are a minute apart).
 	gap := max(4*span/chartPoints, 150*time.Second)
 	pctUnit := func(v float64) string { return fmt.Sprintf("%.0f%%", v) }
-	mbitUnit := func(v float64) string {
-		return strconv.FormatFloat(math.Round(v*8/1e6*1000)/1000, 'f', -1, 64)
-	}
 	add := func(id, title string, c lineChart) {
 		c.ID, c.Times, c.From, c.To, c.Gap = id, times, now.Add(-span), now, gap
 		v := chartView{Title: title, SVG: c.render(), Legend: c.Legend()}
@@ -144,13 +140,16 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 			{Name: tr(l, "web.load.5"), Values: col(func(q hostPoint) float64 { return q.Load5 })},
 			{Name: tr(l, "web.load.15"), Values: col(func(q hostPoint) float64 { return q.Load15 })},
 		}})
-	add("eg", tr(l, "web.chart.egress"), lineChart{Fill: true, Unit: mbitUnit, Series: []chartSeries{
-		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return q.EgRx })},
-		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return q.EgTx })},
+	// Traffic in Mbit/s, so the scale's steps are round in those; at
+	// least up to 1 Mbit/s, so keepalives stay at the bottom.
+	mb := func(v float64) float64 { return v * 8 / 1e6 }
+	add("eg", tr(l, "web.chart.egress"), lineChart{Fill: true, Unit: mbitAxis, Least: 1, Series: []chartSeries{
+		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return mb(q.EgRx) })},
+		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return mb(q.EgTx) })},
 	}})
-	add("lan", tr(l, "web.chart.lan"), lineChart{Fill: true, Unit: mbitUnit, Series: []chartSeries{
-		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return q.LanRx })},
-		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return q.LanTx })},
+	add("lan", tr(l, "web.chart.lan"), lineChart{Fill: true, Unit: mbitAxis, Least: 1, Series: []chartSeries{
+		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return mb(q.LanRx) })},
+		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return mb(q.LanTx) })},
 	}})
 	add("temp", tr(l, "web.chart.temp"), lineChart{Min: 20, Max: 100, Threshold: 85, Unit: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
 		Series: []chartSeries{{Name: tr(l, "web.tile.temp"), Values: col(func(q hostPoint) float64 { return q.TempC }), Color: "k3"}}})
@@ -174,4 +173,15 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 		}
 	}
 	return "server", pageData{Title: tr(l, "web.nav.server"), Active: "server", Refresh: 15, Body: d}, nil
+}
+
+// mbitAxis labels a rate in Mbit/s.
+func mbitAxis(m float64) string {
+	if m < 0.001 { // keepalives
+		return "0"
+	}
+	if m >= 100 {
+		return strconv.FormatFloat(m, 'f', 0, 64)
+	}
+	return strconv.FormatFloat(m, 'g', 3, 64)
 }
