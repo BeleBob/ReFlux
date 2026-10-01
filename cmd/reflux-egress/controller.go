@@ -568,8 +568,10 @@ func (c *controller) russia(r *ruRounds) (bool, error) {
 		return r.failures < failLimit, nil
 	}
 	// ping -I binds to the interface: the tunnel is probed even while the
-	// probe address is routed out of the uplink.
-	if c.probe(ruIface, ruProbes, nil) {
+	// probe address is routed out of the uplink. A second ping when the
+	// first gets no answer: one lost ping (6% were lost on the Russian
+	// tunnel) would reset the answers counted towards going back into it.
+	if c.probe(ruIface, ruProbes, nil) || c.probe(ruIface, ruProbes, nil) {
 		r.failures, r.healthy = 0, r.healthy+1
 	} else {
 		r.failures, r.healthy = r.failures+1, 0

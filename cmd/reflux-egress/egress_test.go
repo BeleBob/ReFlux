@@ -148,6 +148,7 @@ type fakeNet struct {
 	calls   []string
 	stdin   []string
 	failing map[string]bool // "ping -I awg-world" style prefixes
+	lose    map[string]int  // prefixes that fail this many more times
 	routes  string          // output of ip -4 route show default dev eth0
 }
 
@@ -158,6 +159,12 @@ func (f *fakeNet) run(stdin, name string, args ...string) (string, error) {
 	for prefix := range f.failing {
 		if strings.HasPrefix(call, prefix) || strings.Contains(call, prefix) {
 			return "", fmt.Errorf("%s failed", call)
+		}
+	}
+	for prefix, n := range f.lose {
+		if n > 0 && strings.HasPrefix(call, prefix) {
+			f.lose[prefix]--
+			return "", fmt.Errorf("%s lost", call)
 		}
 	}
 	switch {
@@ -612,6 +619,45 @@ func TestRussiaFallsBackToTheUplinkAndReturns(t *testing.T) {
 	routes, flush := indexOf(f.calls, "ip -batch -"), indexOf(f.calls, "nft flush set inet reflux ru4")
 	if routes < 0 || flush < routes || !strings.HasPrefix(f.stdin[routes], "route replace 0.0.1.0/24 dev awg-ru\n") {
 		t.Errorf("return steps:\n%s", strings.Join(f.calls, "\n"))
+	}
+}
+
+// A lossy tunnel that answers goes back into use: a lost ping is asked
+// again, so it neither fails a round nor resets the good ones.
+func TestRussiaReturnsOverALossyTunnel(t *testing.T) {
+	f := &fakeNet{routes: "default via 172.31.250.1 dev eth0\n", failing: map[string]bool{}, lose: map[string]int{}}
+	c := testController(t, f)
+	c.ruFallback = true
+	if err := c.setup(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.setPrefixes(ruPrefixes(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var r ruRounds
+	f.failing["ping -c 1 -W 3 -I awg-ru"] = true
+	for i := 0; i < failLimit; i++ {
+		c.russia(&r)
+	}
+	if !c.onDirect {
+		t.Fatal("a dead tunnel did not fall back")
+	}
+	delete(f.failing, "ping -c 1 -W 3 -I awg-ru")
+	for i := 1; i <= recoverRounds; i++ {
+		if i%4 == 0 {
+			f.lose["ping -c 1 -W 3 -I awg-ru"] = 1 // every fourth round loses a ping
+		}
+		c.russia(&r)
+	}
+	if c.onDirect {
+		t.Errorf("still direct after %d rounds of a tunnel losing a ping now and then", recoverRounds)
+	}
+	// Two pings lost in a row still count as a failed round.
+	f.lose["ping -c 1 -W 3 -I awg-ru"] = 2
+	r.failures = 0
+	c.russia(&r)
+	if r.failures != 1 {
+		t.Errorf("failures = %d after two lost pings, want 1", r.failures)
 	}
 }
 
