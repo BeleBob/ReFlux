@@ -80,6 +80,7 @@ svg.spark .area { fill:var(--c1); opacity:.12; }
 .pill.FAIL { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap:12px; }
 .grid2 .card { margin-bottom:0; }
+.grid2.charts2 { margin:12px 0; grid-template-columns:repeat(auto-fit, minmax(min(460px, 100%), 1fr)); }
 /* the server dashboard */
 .blocks { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap:12px; }
 .udt { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; }
@@ -105,7 +106,8 @@ svg.chart { width:100%; height:auto; display:block; }
 .chart .zone { fill:var(--bad); opacity:.08; }
 .chart .limit { stroke:var(--bad); stroke-dasharray:5 4; opacity:.8; vector-effect:non-scaling-stroke; }
 .chart .series { fill:none; stroke:var(--k); stroke-width:1.8; stroke-linejoin:round; stroke-linecap:round; vector-effect:non-scaling-stroke; }
-.chart .dot { fill:var(--k); }
+.chart .dot, .chart .col { fill:var(--k); }
+.chart .hit { fill:transparent; } .chart .hit:hover { fill:color-mix(in srgb, var(--fg) 7%, transparent); }
 .chart stop { stop-color:var(--k); }
 .k1 { --k:var(--c1); } .k2 { --k:var(--c2); } .k3 { --k:var(--c3); } .k4 { --k:var(--c4); }
 .legend { display:flex; flex-wrap:wrap; gap:4px 18px; font-size:12.5px; margin-top:6px; }
@@ -346,11 +348,15 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <tr><td>{{t "web.traffic.month"}}</td><td class="num">{{bytes .Traffic.Month.Down}}</td><td class="num">{{bytes .Traffic.Month.Up}}</td></tr>
 <tr><td>{{t "web.traffic.all"}}</td><td class="num">{{bytes .Traffic.All.Down}}</td><td class="num">{{bytes .Traffic.All.Up}}</td></tr>
 </table></div>
-<p class="mute" style="margin-bottom:0">↓ {{t "web.down"}}, {{t "web.hist"}}</p>{{spark .Down 0}}
 <p class="mute">{{t "web.traffic.note"}}</p>
 </div>
 </div>
-<div class="grid2" style="margin-top:14px">
+<div class="grid2 charts2">
+<div class="card"><h2>{{t "web.days"}}</h2>{{.Days}}
+<div class="legend">{{range .DaysLegend}}<span class="key {{.Color}}"><i></i>{{.Name}} <small>{{t "web.days.legend" .Last .Max}}</small></span>{{end}}</div></div>
+<div class="card"><h2>{{t "web.rate"}}</h2>{{.Rate}}{{template "legend" .RateLegend}}</div>
+</div>
+<div class="grid2">
 <div class="card">
 <h2>{{t "b.access"}}</h2>
 <form method="post" action="/c/{{.Row.Name}}/expire" class="row">

@@ -343,14 +343,17 @@ func (w *webServer) events(r *http.Request) (string, pageData, error) {
 }
 
 type clientData struct {
-	Row       clientRow
-	Traffic   clientTraffic
-	Down, Up  []float64 // the rates lately, for the chart
-	Node      string
-	Created   string
-	Transport string
-	Paused    bool
-	Expires   string // for the date field
+	Row     clientRow
+	Traffic clientTraffic
+	// Days is the traffic of the last days as bars, Rate the speed over
+	// the last hour (webbars.go).
+	Days, Rate             template.HTML
+	DaysLegend, RateLegend []legendEntry
+	Node                   string
+	Created                string
+	Transport              string
+	Paused                 bool
+	Expires                string // for the date field
 	// Shown only on the show page:
 	Link, Key, URL string
 	QR             template.URL // a data: URL of our own PNG
@@ -374,10 +377,8 @@ func (w *webServer) clientData(name string) (clientData, error) {
 		d.Row.Owner = c.Telegram.String()
 	}
 	d.Traffic = w.stats.clientTraffic(c.Name, time.Now())
-	for _, p := range d.Traffic.Rates {
-		d.Down = append(d.Down, p.Down)
-		d.Up = append(d.Up, p.Up)
-	}
+	d.Days, d.DaysLegend = w.trafficChart(l, c.Name, time.Now())
+	d.Rate, d.RateLegend = rateChart(l, d.Traffic.Rates, time.Now())
 	if !c.Expires.IsZero() {
 		d.Expires = c.Expires.Local().AddDate(0, 0, -1).Format(time.DateOnly)
 	}
