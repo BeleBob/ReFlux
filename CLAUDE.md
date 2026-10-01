@@ -88,6 +88,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   the client's first document (`context` once the main one is removed). Free
   documents come from `docs-pool.txt`; the doctor warns when a client is on a
   backup (IPC status `Active`).
+  Access requests (`requests.go`; the owner bot `botrequests.go`, the panel
+  `webrequests.go`, `reflux requests`): `requests/<telegram id>.json`, pending →
+  approved (a client named after the account, a pool document, linked) /
+  rejected / blocked; the client bot delivers approved ones and removes them.
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**

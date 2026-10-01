@@ -338,6 +338,7 @@ func (b *bot) watch() {
 		b.deliver(news)
 		b.mu.Lock()
 		b.sendReport(time.Now())
+		b.notifyRequests()
 		b.mu.Unlock()
 		time.Sleep(checkEvery)
 	}

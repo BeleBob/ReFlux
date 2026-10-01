@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "docs", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "report", "web", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "docs", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "report", "requests", "web", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -124,6 +124,8 @@ func (b *bot) message(text string) screen {
 		return b.help()
 	case "/report":
 		return b.reportScreen()
+	case "/requests":
+		return b.requestsScreen()
 	case "/settings", "/lang":
 		return b.settingsScreen()
 	case "/add":
@@ -296,6 +298,10 @@ func (b *bot) button(action, arg string) (screen, string) {
 			return b.gatewayScreen(), b.tr("ui.expired.button")
 		}
 		return b.setCarrier(mode), ""
+	case "rqs":
+		return b.requestsScreen(), ""
+	case "rq", "rq1":
+		return b.requestPress(action, arg), ""
 	case "dc", "dp", "du", "dr", "dr!":
 		return b.docsPress(action, arg), ""
 	case "rnk":
@@ -431,12 +437,16 @@ func (b *bot) home() screen {
 		fmt.Fprintf(&t, "%s <b>%s</b>%s · %s\n", v.mark(), html.EscapeString(v.c.Name), owner(v.c), b.state(v))
 	}
 	t.WriteString("\n" + b.tr("ui.updated", time.Now().Format("15:04:05")))
-	return screen{t.String(), keyboard{
+	kb := keyboard{
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
 		{b.btn("b.server", "srv"), b.btn("b.gateway", "gw")},
 		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
-	}}
+	}
+	if n := len(b.s.pendingRequests()); n > 0 {
+		kb = append(keyboard{{b.btn("b.rq", "rqs", n)}}, kb...)
+	}
+	return screen{t.String(), kb}
 }
 
 func (b *bot) clientScreen(name string) screen {
