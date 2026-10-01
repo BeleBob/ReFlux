@@ -20,9 +20,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/netbind"
-	"openflux/transport"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/netbind"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // baseRoomURL is where the rooms live. It's a variable only so tests can aim
@@ -404,9 +404,9 @@ func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration
 	if delay <= 0 {
 		delay = 150 * time.Millisecond
 	}
+	var lastErr error
 	for i := 0; i < n; i++ {
 		var a *cupsAuth
-		var lastErr error
 		for attempt := 0; attempt < 6; attempt++ {
 			a, lastErr = authorize(ctx, baseURL, nil)
 			if lastErr == nil {
@@ -424,7 +424,7 @@ func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration
 			}
 			utils.Debugf("[CUPS] room %d attempt %d failed: %v (wait %v)", i+1, attempt+1, lastErr, wait)
 			if !sleepCtx(ctx, wait) {
-				return nil, errStopped
+				return nil, fmt.Errorf("%w (%v)", errStopped, lastErr)
 			}
 		}
 		if a == nil {
@@ -438,9 +438,46 @@ func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("could not create any room")
+		return nil, fmt.Errorf("could not create any room: %v", lastErr)
 	}
 	return out, nil
+}
+
+// CreateRoomList creates new rooms, as an exit started without a room list
+// does, and returns their packed list for --url. The "Своя нода" wizard
+// creates them from the app so the node starts with the list in its config
+// and keeps the same rooms, and the same link, across restarts.
+func CreateRoomList(ctx context.Context) (string, error) {
+	cfg := DefaultCupsonlineConfig()
+	auths, err := createRooms(ctx, baseRoomURL, cfg.NumRooms, cfg.RoomCreatePause)
+	if err != nil {
+		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "429") {
+			return "", errors.New("cups.online отказывает этому адресу в новых комнатах (похоже на ограничение по частоте), попробуйте позже или выберите другой транспорт")
+		}
+		return "", err
+	}
+	ids := make([]string, len(auths))
+	for i, a := range auths {
+		ids[i] = a.roomUUID
+	}
+	return packRooms(ids), nil
+}
+
+// CreateRoom creates one room and returns its uuid: what a phpbox exit, which
+// joins exactly one room, needs.
+func CreateRoom(ctx context.Context) (string, error) {
+	cfg := DefaultCupsonlineConfig()
+	auths, err := createRooms(ctx, baseRoomURL, 1, cfg.RoomCreatePause)
+	if err != nil {
+		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "429") {
+			return "", errors.New("cups.online отказывает этому адресу в новых комнатах (похоже на ограничение по частоте), попробуйте позже или выберите другой транспорт")
+		}
+		return "", err
+	}
+	if len(auths) == 0 {
+		return "", errors.New("cups.online не создал комнату")
+	}
+	return auths[0].roomUUID, nil
 }
 
 func packRooms(ids []string) string {
@@ -522,11 +559,13 @@ type cupsWS struct {
 	ctx       context.Context
 	connected atomic.Bool
 
-	// recvBuf reassembles the peer's byte stream across messages (one packet
-	// may be split over several). Touched only by the read goroutine, and
-	// reset on every reconnect - a packet split across a drop is lost, like
-	// on any link.
-	recvBuf []byte
+	// recvBufs reassemble each peer's byte stream across messages (one packet
+	// may be split over several), one buffer per room member: when two members
+	// send at once - two generations of a PHP exit handing over - a packet cut
+	// across messages must not take the other member's bytes into its middle.
+	// Touched only by the read goroutine, and reset on every reconnect - a
+	// packet split across a drop is lost, like on any link.
+	recvBufs map[string][]byte
 
 	sendQueue chan []byte
 
@@ -714,7 +753,7 @@ func (w *cupsWS) connectAndServe() error {
 
 	conn.SetReadLimit(int64(w.config.MaxMessageBytes))
 	// Fresh socket, fresh stream: drop any half-assembled packet from before.
-	w.recvBuf = w.recvBuf[:0]
+	w.recvBufs = nil
 
 	if err := w.writeJSON(map[string]interface{}{
 		"id": 1, "connect": map[string]interface{}{"token": a.connToken, "name": "js"},
@@ -988,7 +1027,8 @@ func (w *cupsWS) handleReply(raw []byte) {
 	if payload == nil {
 		return
 	}
-	if uuid, _ := payload["user_uuid"].(string); uuid == w.auth().userUUID {
+	sender, _ := payload["user_uuid"].(string)
+	if sender == w.auth().userUUID {
 		return
 	}
 	cursors, _ := payload["cursors"].([]interface{})
@@ -1023,8 +1063,10 @@ func (w *cupsWS) handleReply(raw []byte) {
 
 	// Append to the running stream and pull out whole packets; a packet split
 	// across messages completes once the rest of it arrives.
-	w.recvBuf = append(w.recvBuf, chunk...)
-	buf := w.recvBuf
+	if w.recvBufs == nil {
+		w.recvBufs = make(map[string][]byte)
+	}
+	buf := append(w.recvBufs[sender], chunk...)
 	adv, count, total := 0, 0, 0
 	for len(buf)-adv >= 2 {
 		ln := int(binary.BigEndian.Uint16(buf[adv : adv+2]))
@@ -1045,12 +1087,18 @@ func (w *cupsWS) handleReply(raw []byte) {
 		total += ln
 	}
 	// Keep only the unconsumed tail. onData ran already, so moving the bytes
-	// now can't disturb a packet still in flight.
-	w.recvBuf = append(w.recvBuf[:0], buf[adv:]...)
-	// A stream that never yields a packet must not grow without bound.
-	if len(w.recvBuf) > w.config.MaxPayloadBytes+w.config.MaxMessageData {
+	// now can't disturb a packet still in flight. A member with nothing
+	// pending holds no buffer, so members who left cost nothing.
+	rest := append(buf[:0], buf[adv:]...)
+	switch {
+	case len(rest) == 0:
+		delete(w.recvBufs, sender)
+	case len(rest) > w.config.MaxPayloadBytes+w.config.MaxMessageData:
+		// A stream that never yields a packet must not grow without bound.
 		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.roomUUID)
-		w.recvBuf = w.recvBuf[:0]
+		delete(w.recvBufs, sender)
+	default:
+		w.recvBufs[sender] = rest
 	}
 	if count > 0 {
 		w.stats.packetsRecv.Add(uint64(count))

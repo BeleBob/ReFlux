@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 // An update that changes node.conf must reach nodes already running: they

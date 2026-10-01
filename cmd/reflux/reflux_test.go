@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"openflux/share"
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/share"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 const testURL = "https://cloud.mail.ru/public/AbCdEfGh1/IjKlMnOp2"

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // frameDemux splits one carrier between the two layerings OpenFlux has

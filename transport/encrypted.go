@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/crypto/scrypt"
 
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 const (

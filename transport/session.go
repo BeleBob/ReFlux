@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"openflux/transport/control"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // Session is one logical session between a client and an exit node.
@@ -843,6 +843,38 @@ func (s *Session) ActiveTransport() string {
 	return ""
 }
 
+// ActiveTransports names every carrier data goes through now: the
+// highest-priority live ones, which Send spreads flows over. ActiveTransport
+// is the first of them. Empty before the handshake or after Stop.
+func (s *Session) ActiveTransports() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready || s.stopped {
+		return nil
+	}
+	var names []string
+	for _, l := range topLinks(s.liveLinksLocked()) {
+		names = append(names, l.name)
+	}
+	return names
+}
+
+// topLinks is the group of live links Send uses: the first one and every
+// following one of the same priority.
+func topLinks(links []*transportLink) []*transportLink {
+	if len(links) == 0 {
+		return nil
+	}
+	top := links[:1:1]
+	for _, l := range links[1:] {
+		if l.priority != links[0].priority {
+			break
+		}
+		top = append(top, l)
+	}
+	return top
+}
+
 // LiveTransports names the carriers that currently reach the peer, highest
 // priority first. Empty before the handshake or after Stop.
 func (s *Session) LiveTransports() []string {
@@ -978,13 +1010,7 @@ func (s *Session) Send(p []byte) error {
 	}
 	raw = append(raw, p...)
 
-	top := links[:1]
-	for _, l := range links[1:] {
-		if l.priority != links[0].priority {
-			break
-		}
-		top = append(top, l)
-	}
+	top := topLinks(links)
 	key := extractFlowKeyBytes(p)
 	idx := int(flowHashBytes(key) % uint64(len(top)))
 	chosen := top[idx]

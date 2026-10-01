@@ -183,7 +183,15 @@ RSTs generated locally by the exit-node kernel.
   protocol (one object per line) for a desktop app to provision a new exit
   node over SSH non-interactively: it drives `provision/` to connect, has the
   VDS download and verify a pinned, hash-checked install script, and returns
-  the finished node's `openflux://` link. Secrets (SSH/sudo passwords, the
+  the finished node's `openflux://` link. A channel carries any mix of a
+  Yandex document, a Mail.ru public document and cups.online rooms (the
+  wizard creates them), with direct always as the backup. Optionally
+  `openflux-node-update.timer` keeps the server's core on the newest
+  `node-v*` release: every 6 hours it checks GitHub, verifies the core
+  against the release's own `node-install.sh` and `SHA256SUMS`, restarts
+  the channels and rolls back (and skips that release) if one does not stay
+  up. `repo=owner/name` in `/etc/openflux-node/update.conf` points it at
+  another repository's releases. Secrets (SSH/sudo passwords, the
   private key, the channel key) only ever travel on stdin, never on the
   command line or in a log.
 - **Legacy codec** - `--codec=legacy` reverts to the old per-packet LZ4 codec
@@ -506,6 +514,37 @@ context, with `direct` pointing at the exit:
 - Format and QR rendering live in the `share` package (`Encode`, `Decode`,
   `PNG`, `Bitmap`, `Terminal`), for apps to use as well.
 
+### Mode without a server (a PHP node on any web hosting)
+
+Instead of a VDS with a binary, the exit can be a small PHP program on an
+ordinary web hosting (free or paid: anything with PHP and FTP/FTPS). The client
+and the node meet in a cups.online room or a Mail.ru document, so the hosting
+never has to accept a connection and, from a network where only the channel
+opens, only the channel has to be reachable. TCP only (ports 80 and 443 at the
+exit), no key: the content stays protected by the apps' own TLS, and the hosting
+sees where you go. Flow control keeps a saturated carrier from starving
+handshakes. Sources and notes: [deploy/phpbox](deploy/phpbox/README.md).
+
+```
+# the client, as SOCKS5 and HTTP proxies, or as the system's full tunnel (utun/Wintun)
+./openflux --role=client --mode=stream --transport=cupsonline \
+    --url "https://interview.cups.online/live-coding/?room=<uuid>" --socks5 127.0.0.1:1080 --http-proxy 127.0.0.1:1081
+sudo ./openflux --role=client --mode=stream --inbound=tun --transport=mailru --url "https://cloud.mail.ru/public/..."
+```
+
+- **Putting the node on a hosting** is one of the apps' wizards ("Без сервера") or
+  the same steps from a script: `--node-wizard` speaks `php.probe`, `php.deploy`,
+  `php.check`, `php.start`, `php.stop`, `php.node`, `php.newRoom`, `php.link`,
+  `php.remove` (JSON lines; the answers are codes, see `provision/phphost`). Android
+  calls `PhpCall`, iOS `OpenFluxPhpCall`. The FTP password goes only through the pipe.
+- **Clients in the apps**: `mobile.StartStreamProxy` / `StartStreamPacket`,
+  `OpenFluxStartStreamClient` / `OpenFluxStartStreamPacketTunnel`. A link or QR for the
+  mode has `"mode":"stream"` (`share.ModeStream`) and one carrier.
+- **Full tunnel** (`tunnel.StreamNet`): packets go into a local stack that opens a
+  stream per TCP connection; DNS is answered locally with fake addresses and the name is
+  opened at the exit. QUIC, other UDP and IPv6 are dropped, so browsers fall back to TCP.
+- `-d` / `-dd` / `-ddd` work here like in the packet modes: `[STREAM] -> 526 bytes - stream 7 DATA`.
+
 ### Captchas
 
 - **Proof-of-work captcha** (`showcaptchafast`) is solved by the transport
@@ -583,7 +622,7 @@ Measure raw goodput through the transport, without touching the host network:
 | `--role` | `-r` | `client` | `client` \| `exit` \| `bench-send` \| `bench-sink` |
 | `--inbound` | `-i` | (platform) | `tun` (macOS/Windows via Wintun) \| `socks5` |
 | `--transport` | `-t` | `yandex` | `yandex` \| `vyandex` \| `boards` \| `oneme` \| `cupsonline` \| `mailru` |
-| `--mode` | `-m` | `l3` | Exit-node mode: `l3` \| `l4` |
+| `--mode` | `-m` | `l3` | Exit-node mode: `l3` \| `l4`; client: `stream` (the mode without a server, with `--transport=cupsonline\|mailru`, `--inbound=tun` for the full tunnel) |
 | `--codec` | `-c` | `batched` | `batched` \| `legacy` |
 | `--url` | `-u` | `http://#` | Document URL |
 | `--socks5` | `-s` | `:1080` | SOCKS5 listen address |

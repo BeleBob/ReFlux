@@ -61,6 +61,9 @@ type StatusPayload struct {
 	// Active names the carrier data currently goes through ("" when none
 	// reaches the peer). Sessions only.
 	Active string `json:"active,omitempty"`
+	// ActiveAll names every carrier data is spread over: several when they
+	// share the highest priority. Active is the first. Sessions only.
+	ActiveAll []string `json:"active_all,omitempty"`
 }
 
 type CommandPayload struct {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 // ipcSocket is where a node's core serves its IPC bridge (IPCSocket in

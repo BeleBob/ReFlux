@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-OpenFlux: an IPv4 TCP/UDP tunnel core in Go (module `openflux`). One binary is
+OpenFlux: an IPv4 TCP/UDP tunnel core in Go (module `github.com/p1neappleXpress/OpenFlux`). One binary is
 client, exit node, or benchmark depending on `--role`. Packets travel over
 pluggable "carrier" transports (Yandex.Docs/Volga/Board, MAX WebRTC,
 Cups.online, Mail.ru, direct TCP). README.md is the user-facing reference for
@@ -147,7 +147,7 @@ git diff --check
 
 - One test: `go test ./transport -run '^TestSessionAcceptsRestartedClient$' -count=1 -v`
 - Platform-specific files (`tun_darwin.go`, `tun_windows.go`, `tunnel/l3/backend_*.go`, `netbind_*`) only compile on their GOOS, so run the cross-builds after touching them.
-- `mobile/` is a **separate module** (`openflux-mobile`, `replace openflux => ..`). Root `go test ./...` does not cover it, and neither does CI: `cd mobile && go test ./...`. `mobile/ios` is `//go:build ios` and is built by `./build_ios.sh` (macOS + Xcode only).
+- `mobile/` is a **separate module** (`openflux-mobile`, `replace github.com/p1neappleXpress/OpenFlux => ..`). Root `go test ./...` does not cover it, and neither does CI: `cd mobile && go test ./...`. `mobile/ios` is `//go:build ios` and is built by `./build_ios.sh` (macOS + Xcode only).
 - Exit-node release binaries use `-tags exitnode`, which swaps `node_wizard.go` for a stub. Check that with `go build -tags exitnode .`.
 - Linux raw L3 integration tests need root in a throwaway network namespace:
   ```sh

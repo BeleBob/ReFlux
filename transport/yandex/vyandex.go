@@ -21,9 +21,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/netbind"
-	"openflux/transport"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/netbind"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 type VolgaConfig struct {

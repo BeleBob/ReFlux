@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 // runCmd runs a host command other than docker; tests replace it.

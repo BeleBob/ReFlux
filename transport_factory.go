@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"strconv"
 
-	"openflux/transport"
-	"openflux/transport/control"
-	"openflux/transport/cupsonline"
-	"openflux/transport/mailru"
-	"openflux/transport/manager"
-	"openflux/transport/oneme"
-	"openflux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
+	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
 // yandexCookiesFile is --yandex-cookies-file: a Netscape cookies.txt with

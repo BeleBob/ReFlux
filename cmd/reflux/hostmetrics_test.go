@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 // fakeHostTree points procRoot and sysRoot at a temporary tree.

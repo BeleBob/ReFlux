@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // stopOnSignal blocks until the process is asked to stop (SIGINT, SIGTERM,
