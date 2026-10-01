@@ -131,4 +131,17 @@ func TestNoteInTheBotAndTheCLI(t *testing.T) {
 	if got := f.lastEditText(); !strings.Contains(got, "📝 my phone") {
 		t.Errorf("client card:\n%s", got)
 	}
+	b.handle(press(2, 42, "cls", time.Now()))
+	if got := f.lastEditText(); !strings.Contains(got, "<i>my phone</i>") {
+		t.Errorf("clients screen:\n%s", got)
+	}
+	// The list: the note, and the backup documents after the transport.
+	s.AddDoc("phone", Doc{"mailru", docB})
+	var out strings.Builder
+	if err := run([]string{"list"}, nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "mailru+1") || !strings.Contains(out.String(), "my phone") {
+		t.Errorf("list:\n%s", out.String())
+	}
 }

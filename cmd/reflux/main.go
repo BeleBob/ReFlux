@@ -387,7 +387,7 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 	}
 	live := nodeStatuses(s, clients)
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTRANSPORT\tACCESS\tNODE\tCLIENT\tDOWN\tUP")
+	fmt.Fprintln(w, "NAME\tTRANSPORT\tACCESS\tNODE\tCLIENT\tDOWN\tUP\tNOTE")
 	now := time.Now()
 	for _, c := range clients {
 		node := states["reflux-node-"+c.Name]
@@ -403,12 +403,16 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 			// The node's view: what it sends goes down to the client.
 			down, up = humanBytes(st.BytesOut), humanBytes(st.BytesIn)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c.Name, c.Transport, accessText(c, now), node, client, down, up)
+		transport := c.Transport
+		if n := len(c.Backups); n > 0 {
+			transport += fmt.Sprintf("+%d", n) // backup documents
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", c.Name, transport, accessText(c, now), node, client, down, up, c.Note)
 	}
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "DOWN/UP: channel traffic to/from the client since the node started.")
+	fmt.Fprintln(stdout, "DOWN/UP: channel traffic to/from the client since the node started; +N: backup documents.")
 	return nil
 }
 
