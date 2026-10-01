@@ -35,6 +35,8 @@ USAGE
   reflux docs <name> [add <url|pool> | remove <n>]
                            a client's documents: backups make its node a
                            Session exit (the app imports the new link)
+  reflux requests [approve|reject|block|forget <id|@user>] [--expires +30|never]
+                           access requests from the client bot
   reflux pool [add <url>...]
                            prepared documents (docs-pool.txt): free and taken
   reflux revoke <name> [--yes]
@@ -209,6 +211,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
+	case "requests":
+		return cmdRequests(s, rest, stdout)
 	case "docs":
 		return cmdDocs(s, rest, stdout)
 	case "pool":
@@ -239,7 +243,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
-	"docs": true, "pool": true,
+	"docs": true, "pool": true, "requests": true,
 	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true, "backup": true, "restore": true,
 }

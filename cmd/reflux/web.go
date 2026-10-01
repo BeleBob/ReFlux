@@ -101,6 +101,8 @@ func (w *webServer) routes() http.Handler {
 	mux.HandleFunc("GET /logs/{name}", w.page(w.logs))
 	mux.HandleFunc("GET /add", w.page(w.addForm))
 	mux.HandleFunc("POST /add", w.action(w.add))
+	mux.HandleFunc("GET /requests", w.page(w.requests))
+	mux.HandleFunc("POST /requests/{id}/{action}", w.action(w.requestAction))
 	mux.HandleFunc("GET /doctor", w.page(w.doctor))
 	mux.HandleFunc("GET /gateway", w.page(w.gateway))
 	mux.HandleFunc("POST /gateway/{what}", w.action(w.gatewayAction))
@@ -198,7 +200,9 @@ type pageData struct {
 	Refresh int
 	// Back is the page an error came from.
 	Back string
-	Body any
+	// Pending is how many access requests wait, for the menu.
+	Pending int
+	Body    any
 }
 
 // page wraps a handler that renders: sign-in, the lock, the language.
@@ -253,6 +257,7 @@ func (w *webServer) render(rw http.ResponseWriter, status int, name string, data
 	}
 	data.Now = time.Now().Format("15:04:05")
 	data.Version = version()
+	data.Pending = len(w.s.pendingRequests())
 	var buf bytes.Buffer
 	if err == nil {
 		err = t.ExecuteTemplate(&buf, name, data)

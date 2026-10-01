@@ -23,6 +23,7 @@ a { color:var(--accent); }
 .side nav a.on { background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--fg); }
 .side nav a.on .ic { color:var(--accent); }
 .side .out { margin-top:auto; }
+.badge { display:inline-block; min-width:18px; padding:0 5px; border-radius:9px; background:var(--accent); color:#fff; font-size:11.5px; line-height:18px; text-align:center; font-weight:600; }
 .side .out button { width:100%; background:none; border:0; font:inherit; cursor:pointer; }
 .page { margin-left:212px; min-width:0; }
 .top { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; padding:11px 20px; background:color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter:blur(6px); border-bottom:1px solid var(--line); }
@@ -66,6 +67,7 @@ label.opt { display:inline-flex; align-items:center; gap:7px; cursor:pointer; }
 .choices label { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border:1px solid var(--line2); border-radius:6px; cursor:pointer; background:var(--panel2); }
 .choices label:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 16%, transparent); }
 .choices input[type=radio] { margin:0; }
+.rq { border-bottom:1px solid var(--line); padding:4px 0 8px; margin-bottom:8px; } .rq p { margin:0 0 6px; }
 .addform h2 { margin-bottom:12px; } .addform p { margin:0 0 12px; }
 pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--bg); border:1px solid var(--line); padding:10px; border-radius:6px; max-height:70vh; overflow:auto; }
 code { word-break:break-all; background:var(--panel2); padding:1px 5px; border-radius:4px; }
@@ -164,6 +166,7 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <a href="/gateway" title="{{t "web.nav.gateway"}}"{{if eq .Active "gateway"}} class="on"{{end}}>{{template "icon" "gateway"}}<span>{{t "web.nav.gateway"}}</span></a>
 <a href="/events" title="{{t "web.nav.events"}}"{{if eq .Active "events"}} class="on"{{end}}>{{template "icon" "events"}}<span>{{t "web.nav.events"}}</span></a>
 <a href="/speed" title="{{t "web.nav.speed"}}"{{if eq .Active "speed"}} class="on"{{end}}>{{template "icon" "speed"}}<span>{{t "web.nav.speed"}}</span></a>
+<a href="/requests" title="{{t "web.nav.requests"}}"{{if eq .Active "requests"}} class="on"{{end}}>{{template "icon" "requests"}}<span>{{t "web.nav.requests"}}{{if .Pending}} <b class="badge">{{.Pending}}</b>{{end}}</span></a>
 <a href="/add" title="{{t "web.nav.add"}}"{{if eq .Active "add"}} class="on"{{end}}>{{template "icon" "add"}}<span>{{t "web.nav.add"}}</span></a>
 </nav>
 <form method="post" action="/logout" class="out"><button title="{{t "web.logout"}}">{{template "icon" "logout"}}<span>{{t "web.logout"}}</span></button></form>
@@ -186,7 +189,7 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 </html>
 {{end}}
 
-{{define "icon"}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{if eq . "home"}}<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/>{{else if eq . "server"}}<rect x="3" y="3" width="7.5" height="9" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5" rx="1.5"/><rect x="13.5" y="11" width="7.5" height="10" rx="1.5"/><rect x="3" y="15" width="7.5" height="6" rx="1.5"/>{{else if eq . "doctor"}}<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>{{else if eq . "gateway"}}<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.2 3.6 3.2 14.4 0 18M12 3c-3.2 3.6-3.2 14.4 0 18"/>{{else if eq . "events"}}<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>{{else if eq . "speed"}}<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4.5-5.5"/>{{else if eq . "add"}}<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>{{else if eq . "logout"}}<path d="M14 4h5v16h-5"/><path d="m10 8-4 4 4 4M6 12h10"/>{{else if eq . "refresh"}}<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>{{end}}</svg>{{end}}
+{{define "icon"}}<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">{{if eq . "home"}}<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5h4v5"/>{{else if eq . "server"}}<rect x="3" y="3" width="7.5" height="9" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="5" rx="1.5"/><rect x="13.5" y="11" width="7.5" height="10" rx="1.5"/><rect x="3" y="15" width="7.5" height="6" rx="1.5"/>{{else if eq . "doctor"}}<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>{{else if eq . "gateway"}}<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3.2 3.6 3.2 14.4 0 18M12 3c-3.2 3.6-3.2 14.4 0 18"/>{{else if eq . "events"}}<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>{{else if eq . "speed"}}<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4.5-5.5"/>{{else if eq . "add"}}<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/>{{else if eq . "requests"}}<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 6.5 8.5 6.5 8.5-6.5"/>{{else if eq . "logout"}}<path d="M14 4h5v16h-5"/><path d="m10 8-4 4 4 4M6 12h10"/>{{else if eq . "refresh"}}<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/>{{end}}</svg>{{end}}
 
 {{define "signin"}}<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ReFlux</title>
@@ -454,6 +457,38 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <h2>{{t "b.logs"}}</h2>
 <p class="row"><a href="/logs/{{.Name}}">{{t "b.refresh"}}</a>{{if ne .Name "egress"}} · <a href="/c/{{.Name}}">{{t "web.back"}}</a>{{end}} · <a href="/logs/egress">egress</a></p>
 <pre>{{.Text}}</pre>
+</div>
+{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "requests"}}{{template "head" .}}
+{{with .Body}}
+<div class="card">
+<h2>{{t "web.rq.waiting"}}</h2>
+{{$any := false}}{{range .Rows}}{{if .Pending}}{{$any = true}}
+<div class="rq">
+<p><b>{{.Who}}</b> · <span class="mute">{{if eq .Kind "extend"}}{{t "web.rq.extend" .Client}}{{else}}{{t "web.rq.access"}}{{end}} · {{hhmm .At}} · id {{.ID}}</span>{{if .Text}}<br>«{{.Text}}»{{end}}</p>
+<div class="row">
+<form method="post" action="/requests/{{.ID}}/approve"><input type="hidden" name="how" value="+30"><button class="primary">{{t "b.rq.30"}}</button></form>
+<form method="post" action="/requests/{{.ID}}/approve"><input type="hidden" name="how" value="+90"><button>{{t "b.rq.90"}}</button></form>
+<form method="post" action="/requests/{{.ID}}/approve"><input type="hidden" name="how" value="never"><button>{{t "b.rq.never"}}</button></form>
+<form method="post" action="/requests/{{.ID}}/reject"><button>{{t "b.rq.reject"}}</button></form>
+<form method="post" action="/requests/{{.ID}}/block"><button class="danger">{{t "b.rq.block"}}</button></form>
+</div>
+</div>
+{{end}}{{end}}
+{{if not $any}}<p class="mute">{{t "ui.rq.none"}}</p>{{end}}
+<p class="mute">{{t "web.rq.hint" .Free}}</p>
+</div>
+<div class="card">
+<h2>{{t "web.rq.decided"}}</h2>
+<div class="scroll"><table>
+<thead><tr><th>{{t "web.rq.who"}}</th><th>{{t "web.col.state"}}</th><th>{{t "web.col.name"}}</th><th></th></tr></thead>
+<tbody>{{range .Rows}}{{if not .Pending}}<tr><td>{{.Who}}<br><span class="mute">id {{.ID}}</span></td><td>{{t (printf "rq.state.%s" .State)}}</td><td>{{if .Client}}<a href="/c/{{.Client}}">{{.Client}}</a>{{end}}</td>
+<td class="num"><form method="post" action="/requests/{{.ID}}/forget"><button>{{t "web.rq.forget"}}</button></form></td></tr>
+{{end}}{{end}}</tbody>
+</table></div>
+<p class="mute">{{t "web.rq.forget.hint"}}</p>
 </div>
 {{end}}
 {{template "foot" .}}{{end}}
