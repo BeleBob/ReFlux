@@ -66,6 +66,15 @@ func webFuncs(l lang) template.FuncMap {
 		"spark": spark,
 		"pct":   pct,
 		"bar":   barLevel,
+		"uplevel": func(v float64) string { // availability: 99.5% and up is fine
+			switch {
+			case v >= 99.5:
+				return "ok"
+			case v >= 95:
+				return "warn"
+			}
+			return "FAIL"
+		},
 		"f0":    func(v float64) string { return strconv.FormatFloat(v, 'f', 0, 64) },
 		"f1":    func(v float64) string { return strconv.FormatFloat(v, 'f', 1, 64) },
 		"f2":    func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) },
@@ -661,12 +670,21 @@ type gatewayData struct {
 	RuModes  []string
 	Carrier  bool
 	Carriers int
+	// Uptime: the tunnels' availability over the last 14 days, the newest
+	// day first, and over the whole span (uptime.go).
+	Uptime                    []uptimeView
+	UptimeWorld, UptimeRussia float64
+	UptimeChecked             bool
 }
 
 func (w *webServer) gateway(r *http.Request) (string, pageData, error) {
 	l := w.lang()
 	d := gatewayData{Worlds: w.s.worldConfigs(), Chosen: w.s.chosenWorld(), RuMode: w.s.russiaMode(),
 		RuModes: russiaModes, Carrier: w.s.carrierDirect(), Tunnels: readTunnels()}
+	now := time.Now()
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	world, russia, days := w.s.uptimeSpan(day.AddDate(0, 0, -13), day.AddDate(0, 0, 1))
+	d.Uptime, d.UptimeWorld, d.UptimeRussia, d.UptimeChecked = days, world.percent(), russia.percent(), world[1] > 0
 	if st, err := readEgressStatus(); err == nil {
 		d.Egress = &st
 		d.Russia = tr(l, ruMode(st).id)

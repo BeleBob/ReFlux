@@ -102,6 +102,29 @@ func (s Store) clientWeek(name string, from, to time.Time) clientWeek {
 	return w
 }
 
+// trafficNow is a client's traffic today and this month, from the
+// panel's traffic.json; ok is false when the panel keeps none.
+func (s Store) trafficNow(name string, now time.Time) (today, month dayTraffic, ok bool) {
+	b, err := os.ReadFile(s.trafficPath(name))
+	if err != nil {
+		return today, month, false
+	}
+	var tf trafficFile
+	if json.Unmarshal(b, &tf) != nil {
+		return today, month, false
+	}
+	day, mon := now.Format(time.DateOnly), now.Format("2006-01")
+	for d, t := range tf.Days {
+		if strings.HasPrefix(d, mon) {
+			month.Down, month.Up = month.Down+t.Down, month.Up+t.Up
+		}
+		if d == day {
+			today = t
+		}
+	}
+	return today, month, true
+}
+
 // weeklyReport is the report on [from, to); title names the span.
 func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string {
 	t := func(id string, a ...any) string { return tr(l, id, a...) }
@@ -167,6 +190,11 @@ func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string
 	}
 	if len(ending) > 0 {
 		b.WriteString("\n" + t("rep.ends") + "\n" + strings.Join(ending, "\n") + "\n")
+	}
+
+	// The tunnels' availability.
+	if world, russia, _ := s.uptimeSpan(from, to); world[1] > 0 {
+		b.WriteString("\n" + t("rep.uptime.tunnels", world.percent(), russia.percent()) + "\n")
 	}
 
 	// The server.

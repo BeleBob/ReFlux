@@ -246,6 +246,9 @@ func (cb *clientBot) home(u *tgUser) screen {
 			}
 		}
 		text := tr(l, "cb.channel", e(c.Name), tr(l, p.id, p.args...), state)
+		if _, month, ok := cb.s.trafficNow(c.Name, now); ok {
+			text += "\n" + tr(l, "cb.traffic", humanBytes(month.Down), humanBytes(month.Up))
+		}
 		kb := keyboard{{cb.btn(l, "b.cb.qr", "qr"), cb.btn(l, "b.cb.help", "help")}}
 		switch {
 		case rerr == nil && r.State == reqPending:
