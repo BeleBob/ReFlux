@@ -100,6 +100,10 @@ func shortText(s Store, l lang, f finding) string {
 		return t("short.node", str(0), str(1), str(2), str(3), str(4))
 	case "node.inactive":
 		return str(0) + ": " + str(1)
+	case "temp.ok":
+		return t("short.temp", a[0])
+	case "cpu.ok":
+		return t("short.cpu", a[0])
 	case "cron.ok":
 		return t("short.cron")
 	case "disk.ok":

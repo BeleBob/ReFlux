@@ -260,6 +260,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setLang(lang(arg)), ""
 	case "mute":
 		return b.toggleMute(arg), ""
+	case "lim":
+		return b.setLimit(arg), ""
 	case "gw":
 		return b.gatewayScreen(), ""
 	case "srv":
@@ -485,8 +487,58 @@ func (b *bot) settingsScreen() screen {
 		fmt.Fprintf(&t, "%s %s\n", mark, b.tr("alerts."+c+".about"))
 		kb = append(kb, []tgButton{{Text: mark + " " + b.tr("alerts."+c), Data: "mute:" + c}})
 	}
-	kb = append(kb, []tgButton{b.btn("b.home", "home")})
+	lim := b.s.hostLimits()
+	temp := b.tr("ui.limit.sensor")
+	if lim.TempWarn > 0 {
+		temp = b.tr("ui.limit.deg", lim.TempWarn)
+	} else if ts := readTemps(); len(ts) > 0 {
+		temp = b.tr("ui.limit.deg.sensor", int(lim.tempWarnAt(ts[0])))
+	}
+	t.WriteString("\n" + b.tr("ui.limits", temp, lim.CPUWarn) + "\n")
+	kb = append(kb,
+		[]tgButton{b.btn("b.temp.down", "lim:t-"), b.btn("b.temp.up", "lim:t+")},
+		[]tgButton{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")},
+		[]tgButton{b.btn("b.home", "home")})
 	return screen{t.String(), kb}
+}
+
+// setLimit moves a server warning's threshold a step: the temperature to
+// the next multiple of 5 °C (60-100), the CPU by 10% (50-100).
+func (b *bot) setLimit(arg string) screen {
+	c, err := b.s.loadBotConfig()
+	if err != nil {
+		return b.failed(err, b.btn("b.home", "home"))
+	}
+	lim := b.s.hostLimits()
+	switch arg {
+	case "t-", "t+":
+		at := lim.TempWarn
+		if at == 0 {
+			at = defaultTemp
+			if ts := readTemps(); len(ts) > 0 {
+				at = int(lim.tempWarnAt(ts[0]))
+			}
+		}
+		// To the next multiple of 5 down or up: 82 goes to 80 or 85.
+		if arg == "t-" {
+			at = (at - 1) / 5 * 5
+		} else {
+			at = at/5*5 + 5
+		}
+		c.TempWarn = min(max(at, 60), 100)
+	case "c-", "c+":
+		at := lim.CPUWarn
+		if arg == "c-" {
+			at -= 10
+		} else {
+			at += 10
+		}
+		c.CPUWarn = min(max(at, 50), 100)
+	}
+	if err := b.s.saveBotConfig(c); err != nil {
+		log.Printf("bot: saving the settings: %v", err)
+	}
+	return b.settingsScreen()
 }
 
 // toggleMute switches an alert category off or back on and saves it.

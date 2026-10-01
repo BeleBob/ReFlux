@@ -162,6 +162,9 @@ func cpuCount() int {
 type sensor struct {
 	Label string
 	C     float64
+	// High and Crit are the sensor's own limits (0: none): coretemp's
+	// max, where it warns, and crit, where the CPU slows itself down.
+	High, Crit float64
 }
 
 // readTemps reads the CPU sensors (coretemp, k10temp, zenpower) and, when
@@ -180,8 +183,15 @@ func readTemps() []sensor {
 			if err != nil {
 				continue
 			}
-			label, _ := os.ReadFile(strings.TrimSuffix(in, "_input") + "_label")
+			stem := strings.TrimSuffix(in, "_input")
+			label, _ := os.ReadFile(stem + "_label")
 			s := sensor{Label: strings.TrimSpace(string(label)), C: float64(v) / 1000}
+			if v, err := readUint(stem + "_max"); err == nil {
+				s.High = float64(v) / 1000
+			}
+			if v, err := readUint(stem + "_crit"); err == nil {
+				s.Crit = float64(v) / 1000
+			}
 			if s.Label == "" {
 				s.Label = chip
 			}

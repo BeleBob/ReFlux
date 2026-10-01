@@ -82,6 +82,7 @@ func quiet(stdout io.Writer, args ...string) error {
 func runChecks(s Store) []finding {
 	d := &doctor{}
 	d.host(s)
+	d.heat(s)
 	if d.docker() {
 		d.egress()
 		d.nodes(s)

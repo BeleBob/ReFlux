@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var fileExt = map[string]bool{"conf": true, "yml": true, "json": true, "sock": true, "service": true, "log": true}
+var fileExt = map[string]bool{"conf": true, "yml": true, "json": true, "sock": true, "service": true, "log": true, "stat": true}
 
 var verbRe = regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z]`)
 
