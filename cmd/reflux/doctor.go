@@ -338,7 +338,9 @@ func (d *doctor) nodes(s Store) {
 		}
 		st, ok := live[c.Name]
 		if !ok {
-			d.warn("node:"+c.Name, "node.nostatus", c.Name)
+			// Shown, but no alert: a reading lost to another reader would
+			// come back as "the node works again" two minutes later.
+			d.add(levelWarn, "node:"+c.Name, levelOK.String(), "node.nostatus", c.Name)
 			continue
 		}
 		d.ok("node:"+c.Name, "node.ok", c.Name,

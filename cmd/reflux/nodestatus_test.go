@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,6 +122,59 @@ func TestHumanBytes(t *testing.T) {
 		1_400_000_000: "1.4 GB", 25_000_000_000: "25 GB"} {
 		if got := humanBytes(n); got != want {
 			t.Errorf("humanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// The core serves one IPC client at a time and a new one cuts the last:
+// a reading cut by another reader (the panel and the bot at once) is
+// asked again, so the node does not look silent.
+func TestStatusSurvivesAnotherReader(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	os.MkdirAll(s.stateDir("phone"), 0o700)
+	srv := ipc.NewServer(s.ipcPath("phone"), nil)
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	st := ipc.StatusPayload{Running: true, Connected: true}
+	go func() {
+		for range time.Tick(250 * time.Millisecond) {
+			srv.SendStatus(&st)
+		}
+	}()
+	old := statusRetry
+	statusRetry = 50 * time.Millisecond
+	t.Cleanup(func() { statusRetry = old })
+	// Another reader arrives just after ours, and cuts it off.
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		if c, err := readNodeStatusConn(s.ipcPath("phone")); err == nil {
+			time.Sleep(20 * time.Millisecond)
+			c.Close()
+		}
+	}()
+	got := nodeStatuses(s, []Client{{Name: "phone"}})
+	if p, ok := got["phone"]; !ok || !p.Connected {
+		t.Errorf("status %+v (%v): a cut reading was not asked again", p, ok)
+	}
+}
+
+// readNodeStatusConn connects to a node's IPC socket like another reader.
+func readNodeStatusConn(path string) (net.Conn, error) { return net.Dial("unix", path) }
+
+// A node that gives no status is shown, but never alerted: a lost reading
+// would come back as "the node works again".
+func TestNoStatusIsNotAnAlert(t *testing.T) {
+	m := monitor{confirm: 1}
+	ok := finding{Key: "node:phone", Level: levelOK, Msg: "node.ok", Sig: levelOK.String()}
+	d := &doctor{}
+	d.add(levelWarn, "node:phone", levelOK.String(), "node.nostatus", "phone")
+	quiet := d.findings[0]
+	m.update([]finding{ok}, langRU)
+	for _, fs := range [][]finding{{quiet}, {ok}, {quiet}, {ok}} {
+		if news := m.update(fs, langRU); len(news) != 0 {
+			t.Errorf("alerts %+v", news)
 		}
 	}
 }

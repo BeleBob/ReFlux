@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +15,13 @@ import (
 // ipcSocket is where a node's core serves its IPC bridge (IPCSocket in
 // node.conf): inside the node's state directory, which the host sees too.
 const ipcSocket = "/state/ipc.sock"
+
+// statusRetry is about how long to wait before asking a node again.
+var statusRetry = 400 * time.Millisecond
+
+// errStatusCut: connected, but no status came — another reader took the
+// socket, or the node is busy.
+var errStatusCut = errors.New("no status on the connection")
 
 func (s Store) ipcPath(name string) string {
 	return filepath.Join(s.stateDir(name), filepath.Base(ipcSocket))
@@ -42,7 +51,7 @@ func readNodeStatus(path string, timeout time.Duration) (ipc.StatusPayload, erro
 	for {
 		typ, payload, err := ipc.ReadFrame(conn)
 		if err != nil {
-			return st, err
+			return st, fmt.Errorf("%w: %w", errStatusCut, err)
 		}
 		if typ != ipc.MsgStatus {
 			continue // a captcha report or a log line
@@ -67,6 +76,14 @@ func nodeStatuses(s Store, clients []Client) map[string]ipc.StatusPayload {
 	for _, c := range clients {
 		go func(name string) {
 			st, err := readNodeStatus(s.ipcPath(name), 3*time.Second)
+			if errors.Is(err, errStatusCut) {
+				// The core serves one IPC client at a time, and a new one
+				// cuts the last: the panel and the bot reading at once (both
+				// restart together on a deploy) lose a reading. Once more,
+				// a moment later.
+				time.Sleep(statusRetry + time.Duration(rand.Int64N(int64(statusRetry))))
+				st, err = readNodeStatus(s.ipcPath(name), 3*time.Second)
+			}
 			ch <- result{name, st, err}
 		}(c.Name)
 	}
