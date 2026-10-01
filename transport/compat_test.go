@@ -220,7 +220,10 @@ func TestContextFallback(t *testing.T) {
 		cl := oldClassic(t, a, CodecBatched, "rooms", false)
 		ex := newClassic(t, b, CodecBatched, ContextPlaceholder, []string{"rooms"}, true)
 		d := roundTrip(t, cl, ex, 5*time.Second)
-		if d > 2*time.Second {
+		// Before a client would move to its next context (4 s): about 1.4 s
+		// here, 2.2-2.5 s on a loaded CI runner under -race, where the
+		// exit's scrypt over its candidate contexts is slow.
+		if d > 3500*time.Millisecond {
 			t.Fatalf("exit took %v to answer under the client's context", d)
 		}
 	})
