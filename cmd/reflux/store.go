@@ -40,6 +40,11 @@ type Client struct {
 	Expires time.Time `json:"expires,omitzero"`
 	// Telegram is the account the client belongs to, when linked.
 	Telegram *TGAccount `json:"telegram,omitempty"`
+	// Backups are further documents of the channel, after Transport and
+	// URL; Context is the encryption context once it is no longer URL
+	// (docs.go).
+	Backups []Doc  `json:"backups,omitempty"`
+	Context string `json:"context,omitempty"`
 }
 
 // TGAccount is a Telegram account a client is linked to.
@@ -123,7 +128,7 @@ func (s Store) Add(name, transport, url string) (Client, error) {
 	if !transports[transport] {
 		return Client{}, fmt.Errorf("unsupported transport %q (supported: %s)", transport, strings.Join(supportedTransports(), ", "))
 	}
-	if err := validURL(url); err != nil {
+	if err := s.checkDoc(Doc{Transport: transport, URL: url}); err != nil {
 		return Client{}, err
 	}
 	if err := s.Init(); err != nil {

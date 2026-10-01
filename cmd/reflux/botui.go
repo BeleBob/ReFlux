@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "web", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "docs", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "web", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -99,6 +99,8 @@ func (b *bot) message(text string) screen {
 			return b.rename(q.name, f[0])
 		case "expire":
 			return b.expireTo(q.name, f[0])
+		case "doc":
+			return b.addDoc(q.name, &Doc{Transport: transportOf(f[0]), URL: f[0]})
 		}
 		return b.home()
 	}
@@ -129,6 +131,8 @@ func (b *bot) message(text string) screen {
 		return b.add(args)
 	case "/show":
 		return one(func(n string) screen { b.show(n); return screen{} })
+	case "/docs":
+		return one(b.docsScreen)
 	case "/pause":
 		return one(func(n string) screen { return b.setPaused(n, true) })
 	case "/resume":
@@ -290,6 +294,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 			return b.gatewayScreen(), b.tr("ui.expired.button")
 		}
 		return b.setCarrier(mode), ""
+	case "dc", "dp", "du", "dr", "dr!":
+		return b.docsPress(action, arg), ""
 	case "rnk":
 		c, err := b.s.Get(arg)
 		if err != nil || c.Telegram == nil || nick(*c.Telegram) == "" {
@@ -330,6 +336,7 @@ type statusView struct {
 	online    bool
 	up        time.Duration
 	down, upB uint64
+	doc       int // the document the traffic goes over, -1 unknown (docs.go)
 }
 
 func (b *bot) clientViews(clients []Client) []clientView { return viewClients(b.s, clients) }
@@ -344,7 +351,8 @@ func viewClients(s Store, clients []Client) []clientView {
 	for _, c := range clients {
 		v := clientView{c: c, active: c.Active(now), running: states["reflux-node-"+c.Name] != ""}
 		if st, ok := live[c.Name]; ok {
-			v.status = &statusView{online: st.Connected, up: time.Duration(st.UptimeMs) * time.Millisecond, down: st.BytesOut, upB: st.BytesIn}
+			v.status = &statusView{online: st.Connected, up: time.Duration(st.UptimeMs) * time.Millisecond,
+				down: st.BytesOut, upB: st.BytesIn, doc: c.docIndex(st.Active)}
 		}
 		out = append(out, v)
 	}
@@ -455,6 +463,12 @@ func (b *bot) clientScreen(name string) screen {
 		}
 		t.WriteString(b.tr("ui.client.client", online) + "\n")
 		t.WriteString(b.tr("ui.client.traffic", humanBytes(v.status.down), humanBytes(v.status.upB)) + "\n")
+		if v.status.online && v.status.doc > 0 {
+			t.WriteString(b.tr("ui.client.onbackup", v.status.doc+1) + "\n")
+		}
+	}
+	if c.session() {
+		t.WriteString(b.tr("ui.client.docs", len(c.Docs())) + "\n")
 	}
 	tg := b.tr("ui.tg.none")
 	if c.Telegram != nil {
@@ -469,6 +483,7 @@ func (b *bot) clientScreen(name string) screen {
 	return screen{t.String(), keyboard{
 		{b.btn("b.qr", "qr:"+c.Name), toggle},
 		{b.btn("b.access", "acc:"+c.Name), b.btn("b.telegram", "tg:"+c.Name)},
+		{b.btn("b.docs", "dc:"+c.Name, len(c.Docs()))},
 		{b.btn("b.rename", "ren:"+c.Name), b.btn("b.logs", "lg:"+c.Name)},
 		{b.btn("b.restartnode", "rsn:"+c.Name), b.btn("b.revoke", "rv:"+c.Name)},
 		{b.btn("b.clients", "cls"), b.btn("b.home", "home")},
@@ -891,8 +906,15 @@ func (b *bot) show(name string) {
 		return
 	}
 	p := accessPhrase(c, time.Now())
-	text, err := b.t.send(b.chat, b.tr("ui.show.text", e(c.Name), mins, b.tr(p.id, p.args...),
-		e(c.Transport), e(c.URL), e(key), e(link)))
+	msg := b.tr("ui.show.text", e(c.Name), mins, b.tr(p.id, p.args...), e(c.Transport), e(c.URL), e(key), e(link))
+	if c.session() {
+		var docs strings.Builder
+		for i, d := range c.Docs() {
+			docs.WriteString(b.tr("ui.show.doc", i+1, e(d.Transport), docPriority(i), e(d.URL)) + "\n")
+		}
+		msg = b.tr("ui.show.session", e(c.Name), mins, b.tr(p.id, p.args...), docs.String(), e(c.context()), e(key), e(link))
+	}
+	text, err := b.t.send(b.chat, msg)
 	if err != nil {
 		log.Printf("bot: show: %v", err)
 	}

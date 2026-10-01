@@ -81,6 +81,13 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `restore` backs up the current state first, swaps the contents in place (the
   directory and its `.lock` stay) and recreates every container. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
+  Several documents per client (`docs.go`, `botdocs.go`): `client.json` keeps
+  the main one in `transport`/`url` and backups in `backups`; with backups the
+  node is a **Session exit** (`[Transport]` sections, priorities 100, 90, …;
+  Session apps only) and the link carries every document. The context stays
+  the client's first document (`context` once the main one is removed). Free
+  documents come from `docs-pool.txt`; the doctor warns when a client is on a
+  backup (IPC status `Active`).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**

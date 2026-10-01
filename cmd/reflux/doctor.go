@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"openflux/transport/ipc"
@@ -336,6 +337,37 @@ func (d *doctor) nodes(s Store) {
 		d.ok("node:"+c.Name, "node.ok", c.Name,
 			durationPhrase(time.Duration(st.UptimeMs)*time.Millisecond), onlinePhrase(st),
 			humanBytes(st.BytesOut), humanBytes(st.BytesIn))
+		d.docInUse(c, st)
+	}
+}
+
+// docSeen remembers which document each Session client was last seen on:
+// while the client is away (a phone asleep), the check keeps saying it,
+// so an alert is not resolved and raised again with every nap.
+var docSeen = struct {
+	sync.Mutex
+	m map[string]int
+}{m: map[string]int{}}
+
+// docInUse checks which document a Session client's traffic goes over: a
+// backup means the main document does not reach the client.
+func (d *doctor) docInUse(c Client, st ipc.StatusPayload) {
+	if !c.session() {
+		return
+	}
+	docSeen.Lock()
+	defer docSeen.Unlock()
+	i, known := docSeen.m[c.Name]
+	if at := c.docIndex(st.Active); st.Connected && at >= 0 {
+		i, known = at, true
+		docSeen.m[c.Name] = at
+	}
+	switch {
+	case !known:
+	case i > 0:
+		d.warn("docs:"+c.Name, "node.onbackup", c.Name, i+1, c.Name)
+	default:
+		d.ok("docs:"+c.Name, "node.onmain", c.Name, len(c.Docs()))
 	}
 }
 

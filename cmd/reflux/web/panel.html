@@ -389,7 +389,26 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 </div>
 </div>
 {{end}}
+{{template "docs" .}}
 {{template "foot" .}}{{end}}
+
+{{define "docs"}}{{with .Body}}
+<div class="card" style="margin-top:12px">
+<h2>{{t "web.docs"}}</h2>
+<div class="scroll"><table>
+<thead><tr><th>#</th><th>{{t "web.transport"}}</th><th>{{t "web.col.role"}}</th><th>{{t "web.col.doc"}}</th><th></th></tr></thead>
+<tbody>{{range .Docs}}<tr><td>{{.N}}</td><td>{{.Transport}}</td><td>{{if .Main}}{{t "ui.docs.main"}}{{else}}{{t "ui.docs.backup"}}{{end}}{{if $.Body.Session}} · {{.Priority}}{{end}}{{if .Traffic}} <span class="pill ok">{{t "ui.docs.traffic"}}</span>{{end}}</td><td><code>{{.URL}}</code></td>
+<td class="num">{{if gt (len $.Body.Docs) 1}}<form method="post" action="/c/{{$.Body.Row.Name}}/docrm"><input type="hidden" name="i" value="{{.I}}"><button class="danger">{{t "web.docs.remove"}}</button></form>{{end}}</td></tr>
+{{end}}</tbody>
+</table></div>
+<p class="mute">{{if .Session}}{{t "ui.docs.session" (len .Docs)}}{{else}}{{t "ui.docs.classic"}}{{end}}</p>
+{{if .CanAdd}}<div class="row">
+<form method="post" action="/c/{{.Row.Name}}/docadd" class="row"><input type="text" name="url" required placeholder="https://cloud.mail.ru/public/…"><button>{{t "web.docs.add"}}</button></form>
+{{if .FreeDocs}}<form method="post" action="/c/{{.Row.Name}}/docadd"><button class="primary">{{t "web.docs.pool" .FreeDocs}}</button></form>{{end}}
+</div>{{end}}
+<p class="mute">{{t "web.docs.hint"}}</p>
+</div>
+{{end}}{{end}}
 
 {{define "show"}}{{template "head" .}}
 {{with .Body}}
@@ -401,8 +420,11 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <div>
 <h2>{{t "web.manual"}}</h2>
 <dl>
-<dt>{{t "web.transport"}}</dt><dd><code>{{.Transport}}</code></dd>
-<dt>{{t "web.field.url"}}</dt><dd><code>{{.URL}}</code></dd>
+{{if .Session}}<dt>{{t "web.mode"}}</dt><dd>Session</dd>
+{{range .Docs}}<dt>{{.N}}. {{.Transport}} · {{.Priority}}</dt><dd><code>{{.URL}}</code></dd>
+{{end}}<dt>{{t "web.context"}}</dt><dd><code>{{.Context}}</code></dd>
+{{else}}<dt>{{t "web.transport"}}</dt><dd><code>{{.Transport}}</code></dd>
+<dt>{{t "web.field.url"}}</dt><dd><code>{{.URL}}</code></dd>{{end}}
 <dt>{{t "web.field.key"}}</dt><dd><code>{{.Key}}</code></dd>
 <dt>Legacy codec</dt><dd>{{t "web.off"}}</dd>
 </dl>

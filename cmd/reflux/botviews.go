@@ -88,6 +88,8 @@ func shortText(s Store, l lang, f finding) string {
 			return t("short.egress.ok")
 		}
 		return t("short.egress", str(0))
+	case "node.onmain":
+		return t("short.onmain", str(0), a[1])
 	case "world.up":
 		return t("short.world", strings.TrimSuffix(str(0), ".conf"), shortTime(str(1)))
 	case "russia.up":
