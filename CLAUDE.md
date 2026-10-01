@@ -69,7 +69,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   in the bot, `reflux web login`; token and session hashes in `web-*.json`),
   and takes POSTs from its own origin only. Its sampler (`webstats.go`) reads the
   host from /proc and /sys (`hostmetrics.go`, roots overridable in tests) every 5 s
-  for an hour of charts (server-rendered SVG, no scripts) and the nodes every 10 s
+  (an hour of samples, plus a day of minute averages in `metrics.json`,
+  `webhistory.go`) for the charts (`webcharts.go`: server-rendered SVG, no
+  scripts; the server page is `webdash.go`) and the nodes every 10 s
   into per-day traffic in `state/<name>/traffic.json` (survives node and panel
   restarts). The bot logs its alerts to `events.jsonl` in both languages. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
