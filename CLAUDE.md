@@ -92,6 +92,11 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `webrequests.go`, `reflux requests`): `requests/<telegram id>.json`, pending →
   approved (a client named after the account, a pool document, linked) /
   rejected / blocked; the client bot delivers approved ones and removes them.
+  The client bot (`clientbot.go`, token in `client-bot.json`, `reflux bot
+  client`) runs inside `reflux bot run` next to the owner bot, private chats
+  only: asking, the person's own channel, link and QR (deleted after
+  `showKeep`), reminders (`client-bot-state.json`), texts in the person's
+  language (`cb.*` messages).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**

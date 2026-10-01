@@ -46,6 +46,7 @@ type accessRequest struct {
 	State    string    `json:"state"`
 	Client   string    `json:"client,omitempty"`   // the channel made or extended
 	Notified bool      `json:"notified,omitempty"` // the owner heard of it
+	Told     bool      `json:"told,omitempty"`     // the person heard of a rejection
 	Decided  time.Time `json:"decided,omitzero"`
 }
 
