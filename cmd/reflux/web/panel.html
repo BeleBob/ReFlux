@@ -137,7 +137,7 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 .hbar .num { text-align:right; font-weight:600; }
 .hsub { padding-left:0; margin-top:2px; }
 .mini { width:70px; height:6px; border-radius:3px; background:var(--panel2); overflow:hidden; display:inline-block; vertical-align:middle; margin-right:8px; }
-.mini i { display:block; height:100%; background:var(--c1); }
+.mini i { display:block; height:100%; background:var(--c1); } .mini i.warn { background:var(--warn); } .mini i.FAIL { background:var(--bad); }
 @media (max-width:1100px) { .row2 { grid-template-columns:minmax(0, 1fr); } }
 @media (max-width:860px) {
   .side { position:sticky; bottom:auto; width:auto; flex-direction:row; align-items:center; padding:6px 10px; border-right:0; border-bottom:1px solid var(--line); overflow-x:auto; }
@@ -569,6 +569,19 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 {{range .Tunnels}}<tr><td>{{.Iface}}</td><td>{{ago .Handshake}}</td><td class="num">{{bytes .Rx}} / {{bytes .Tx}}</td></tr>{{end}}
 </table></div>{{else}}<p class="mute">{{t "ui.egress.none"}}</p>{{end}}
 </div>
+</div>
+<div class="card" style="margin-top:14px">
+<h2>{{t "web.uptime"}}</h2>
+{{if .UptimeChecked}}
+<p>{{t "web.uptime.total" .UptimeWorld .UptimeRussia}}</p>
+<div class="scroll"><table>
+<thead><tr><th>{{t "web.uptime.day"}}</th><th>🌍 {{t "web.world"}}</th><th>🇷🇺 {{t "web.gw.russia"}}</th></tr></thead>
+<tbody>{{range .Uptime}}<tr><td>{{.Day.Format "02.01"}}</td>
+<td><span class="mini"><i class="{{uplevel .World}}" style="width:{{pct .World}}%"></i></span>{{f1 .World}}%</td>
+<td><span class="mini"><i class="{{uplevel .Russia}}" style="width:{{pct .Russia}}%"></i></span>{{f1 .Russia}}%</td></tr>
+{{end}}</tbody>
+</table></div>
+{{else}}<p class="mute">{{t "web.uptime.none"}}</p>{{end}}
 </div>
 <div class="card" style="margin-top:14px">
 <h2>{{t "web.gw.world"}}</h2>

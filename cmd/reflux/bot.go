@@ -366,6 +366,9 @@ func (b *bot) check(first bool) []string {
 	var news []string
 	var evs []event
 	now := time.Now()
+	if err := b.s.recordUptime(fs, now); err != nil {
+		log.Printf("bot: availability: %v", err)
+	}
 	for _, a := range b.mon.update(fs, b.lang) {
 		evs = append(evs, a.event(now))
 		if !b.mute[category(a.key)] {

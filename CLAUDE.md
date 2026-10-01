@@ -73,7 +73,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `webhistory.go`) for the charts (`webcharts.go`: server-rendered SVG, no
   scripts; the server page is `webdash.go`) and the nodes every 10 s
   into per-day traffic in `state/<name>/traffic.json` (survives node and panel
-  restarts). The bot logs its alerts to `events.jsonl` in both languages.
+  restarts). The bot logs its alerts to `events.jsonl` in both languages, and
+  counts each minute whether the world and Russia worked into `uptime.json`
+  (`uptime.go`: the weekly report and the gateway page show the share).
   `reflux backup` (`backup.go`) archives the data directory (minus locks,
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on

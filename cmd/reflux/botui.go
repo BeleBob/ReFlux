@@ -482,6 +482,9 @@ func (b *bot) clientScreen(name string) screen {
 			t.WriteString(b.tr("ui.client.onbackup", v.status.doc+1) + "\n")
 		}
 	}
+	if today, month, ok := b.s.trafficNow(c.Name, now); ok {
+		t.WriteString(b.tr("ui.client.days", humanBytes(today.Down), humanBytes(today.Up), humanBytes(month.Down), humanBytes(month.Up)) + "\n")
+	}
 	if c.session() {
 		t.WriteString(b.tr("ui.client.docs", len(c.Docs())) + "\n")
 	}
