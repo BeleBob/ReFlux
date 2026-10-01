@@ -65,7 +65,7 @@ func TestApproveRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "dima-k" || c.URL != docB || c.Telegram == nil || c.Telegram.ID != 101 || c.Note != "bot: brother" ||
+	if c.Name != "dima-k" || c.URL != docB || c.Telegram == nil || c.Telegram.ID != 101 || c.Note != "brother" ||
 		r.State != reqApproved || r.Client != "dima-k" {
 		t.Errorf("approved %+v / %+v", c, r)
 	}
@@ -83,9 +83,12 @@ func TestApproveRequests(t *testing.T) {
 	if _, c, _ := s.approveRequest(102, "never", now); c.Name != "dima-k-2" || !c.Expires.IsZero() {
 		t.Errorf("second dima: %+v", c)
 	}
-	s.newRequest(tgUser{ID: 103, FirstName: "Иван"}, reqAccess, "", now)
-	if _, c, err := s.approveRequest(103, "+90", now); err != nil || c.Name != "tg103" || c.URL != docY {
-		t.Errorf("no username: %+v %v", c, err)
+	r103, _ := s.newRequest(tgUser{ID: 103, FirstName: "Иван"}, reqAccess, "", now)
+	if r103.Who() != "Иван (id 103)" {
+		t.Errorf("who %q", r103.Who())
+	}
+	if _, c, err := s.approveRequest(103, "+90", now); err != nil || c.Name != "tg103" || c.URL != docY || c.Note != "" {
+		t.Errorf("no username, no note: %+v %v", c, err)
 	}
 	// The pool used up: refused, no client made.
 	s.newRequest(tgUser{ID: 104, Username: "late"}, reqAccess, "", now)

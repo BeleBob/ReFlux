@@ -50,9 +50,14 @@ type accessRequest struct {
 	Decided  time.Time `json:"decided,omitzero"`
 }
 
-// Who is how the request names the person: @username, else the name.
+// Who is how the request names the person: the name and @username, or
+// with no username the name and the id (a name alone may say nothing).
 func (r accessRequest) Who() string {
-	return TGAccount{ID: r.ID, Username: r.Username, Name: r.Name}.String()
+	who := TGAccount{ID: r.ID, Username: r.Username, Name: r.Name}.String()
+	if r.Username == "" && r.Name != "" {
+		who += fmt.Sprintf(" (id %d)", r.ID)
+	}
+	return who
 }
 
 var (
@@ -237,7 +242,7 @@ func (s Store) approveRequest(id int64, how string, now time.Time) (accessReques
 		}
 		c.Expires = when
 		c.Telegram = &TGAccount{ID: r.ID, Username: r.Username, Name: r.Name}
-		c.Note = strings.TrimSpace("bot: " + r.Text)
+		c.Note = r.Text // what they wrote about themselves, if anything
 		if len([]rune(c.Note)) > maxNote {
 			c.Note = string([]rune(c.Note)[:maxNote-1]) + "…"
 		}
