@@ -32,6 +32,11 @@ USAGE
                            heal stops expired nodes
   reflux rename <name> <new-name>
                            the link and the key stay; the node restarts
+  reflux docs <name> [add <url|pool> | remove <n>]
+                           a client's documents: backups make its node a
+                           Session exit (the app imports the new link)
+  reflux pool [add <url>...]
+                           prepared documents (docs-pool.txt): free and taken
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, apply, remove old ReFlux images
@@ -197,6 +202,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
+	case "docs":
+		return cmdDocs(s, rest, stdout)
+	case "pool":
+		return cmdPool(s, rest, stdout)
 	case "heal":
 		return heal(s, stdout)
 	case "doctor":
@@ -219,6 +228,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
+	"docs": true, "pool": true,
 	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true,
 }
@@ -433,18 +443,23 @@ func printAccess(s Store, c Client, stdout io.Writer, pngPath string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, `
-Client %s — gives access to the channel, pass it to its owner only.
-
-Manual entry:
-  Transport       %s
-  Document URL    %s
-  Encryption key  %s
+	fmt.Fprintf(stdout, "\nClient %s — gives access to the channel, pass it to its owner only.\n\nManual entry:\n", c.Name)
+	if c.session() {
+		fmt.Fprintf(stdout, "  Mode            Session (several documents, in this order)\n")
+		names := carrierNames(c.Docs())
+		for i, d := range c.Docs() {
+			fmt.Fprintf(stdout, "  %-15s %s, priority %d: %s\n", names[i], d.Transport, docPriority(i), d.URL)
+		}
+		fmt.Fprintf(stdout, "  Context         %s\n", c.context())
+	} else {
+		fmt.Fprintf(stdout, "  Transport       %s\n  Document URL    %s\n", c.Transport, c.URL)
+	}
+	fmt.Fprintf(stdout, `  Encryption key  %s
   Legacy codec    off
 
 Link (OpenFlux apps: scan or paste):
 %s
-%s`, c.Name, c.Transport, c.URL, key, link, qr)
+%s`, key, link, qr)
 	if pngPath != "" {
 		img, err := share.PNG(link, 512)
 		if err != nil {

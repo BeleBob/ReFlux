@@ -269,6 +269,13 @@ func (w *webServer) render(rw http.ResponseWriter, status int, name string, data
 
 // ---- pages ----
 
+// docRow is a document on the client page.
+type docRow struct {
+	Doc
+	I, N, Priority int // I counts from 0, N from 1
+	Main, Traffic  bool
+}
+
 // clientRow is a client on the home page.
 type clientRow struct {
 	Name, Mark, Owner, State, Access string
@@ -354,6 +361,13 @@ type clientData struct {
 	// Shown only on the show page:
 	Link, Key, URL string
 	QR             template.URL // a data: URL of our own PNG
+	// Docs are the channel's documents, Session whether there are several,
+	// FreeDocs the pool's free ones (docs.go).
+	Docs     []docRow
+	Session  bool
+	FreeDocs int
+	Context  string
+	CanAdd   bool
 }
 
 func (w *webServer) clientData(name string) (clientData, error) {
@@ -391,6 +405,15 @@ func (w *webServer) clientData(name string) (clientData, error) {
 	default:
 		d.Node = tr(l, "ui.node.up", durationIn(l, v.status.up))
 	}
+	d.Session, d.FreeDocs, d.Context = c.session(), w.s.freeCount(), c.context()
+	doc := -1
+	if v.status != nil && v.status.online {
+		doc = v.status.doc
+	}
+	for i, x := range c.Docs() {
+		d.Docs = append(d.Docs, docRow{I: i, N: i + 1, Doc: x, Priority: docPriority(i), Main: i == 0, Traffic: i == doc})
+	}
+	d.CanAdd = len(d.Docs) < maxDocs
 	return d, nil
 }
 
@@ -478,6 +501,37 @@ func (w *webServer) clientAction(r *http.Request) (string, error) {
 				err = w.s.Save(c)
 			}
 			return err
+		})
+	case "docadd":
+		return back + "?ok=docadded", change(func() error {
+			c, err := w.s.Get(name)
+			if err != nil {
+				return err
+			}
+			d := Doc{URL: strings.TrimSpace(r.FormValue("url"))}
+			if d.URL == "" {
+				d, err = w.s.freeDoc(c)
+			} else {
+				d.Transport = transportOf(d.URL)
+			}
+			if err == nil {
+				_, err = w.s.AddDoc(name, d)
+			}
+			if err == nil {
+				err = apply(w.s, io.Discard)
+			}
+			return err
+		})
+	case "docrm":
+		i, err := strconv.Atoi(r.FormValue("i"))
+		if err != nil {
+			return "", err
+		}
+		return back + "?ok=docremoved", change(func() error {
+			if _, err := w.s.RemoveDoc(name, i); err != nil {
+				return err
+			}
+			return apply(w.s, io.Discard)
 		})
 	case "revoke":
 		if r.FormValue("confirm") != name {

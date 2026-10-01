@@ -285,7 +285,7 @@ func category(key string) string {
 	switch {
 	case key == "world", key == "russia", key == "egress", key == "egress-error", key == "kill-switch", key == "carrier":
 		return "tunnels"
-	case strings.HasPrefix(key, "node:"), strings.HasPrefix(key, "doc:"), key == "clients":
+	case strings.HasPrefix(key, "node:"), strings.HasPrefix(key, "doc:"), strings.HasPrefix(key, "docs:"), key == "clients":
 		return "nodes"
 	case strings.HasPrefix(key, "image:"):
 		return "updates"

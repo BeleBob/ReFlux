@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func TestAddWritesPrivateFilesAndAFreshKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != c {
+	if !reflect.DeepEqual(got, c) {
 		t.Errorf("Get = %+v, want %+v", got, c)
 	}
 
@@ -117,7 +118,7 @@ func TestAddRefusesDuplicatesAndBadInput(t *testing.T) {
 func TestListIsSortedByName(t *testing.T) {
 	s := Store{Root: t.TempDir()}
 	for _, n := range []string{"tablet", "laptop", "phone"} {
-		if _, err := s.Add(n, "mailru", testURL); err != nil {
+		if _, err := s.Add(n, "mailru", testURL+n); err != nil {
 			t.Fatal(err)
 		}
 	}
