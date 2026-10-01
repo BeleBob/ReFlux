@@ -151,6 +151,9 @@ func (b *bot) clientsScreen() screen {
 	now := time.Now()
 	for _, v := range b.clientViews(clients) {
 		fmt.Fprintf(&t, "\n%s <b>%s</b>%s\n", v.mark(), html.EscapeString(v.c.Name), owner(v.c))
+		if v.c.Note != "" {
+			t.WriteString("      <i>" + html.EscapeString(v.c.Note) + "</i>\n")
+		}
 		detail := b.state(v)
 		if v.active {
 			p := accessPhrase(v.c, now)
