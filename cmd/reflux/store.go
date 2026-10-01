@@ -45,6 +45,8 @@ type Client struct {
 	// (docs.go).
 	Backups []Doc  `json:"backups,omitempty"`
 	Context string `json:"context,omitempty"`
+	// Note says who or what the client is, for the owner.
+	Note string `json:"note,omitempty"`
 }
 
 // TGAccount is a Telegram account a client is linked to.

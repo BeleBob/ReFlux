@@ -279,6 +279,7 @@ type docRow struct {
 // clientRow is a client on the home page.
 type clientRow struct {
 	Name, Mark, Owner, State, Access string
+	Note                             string
 	Today                            dayTraffic
 	Down, Up                         float64 // bytes per second, lately
 }
@@ -335,7 +336,7 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 		p := accessPhrase(v.c, now)
 		ct := w.stats.clientTraffic(v.c.Name, now)
 		row := clientRow{Name: v.c.Name, Mark: v.mark(), Owner: owner, State: stateText(l, v),
-			Access: tr(l, p.id, p.args...), Today: ct.Today}
+			Access: tr(l, p.id, p.args...), Today: ct.Today, Note: v.c.Note}
 		// Keepalives are not traffic worth a figure: from 50 kbit/s on.
 		if n := len(ct.Rates); n > 0 && ct.Rates[n-1].Down+ct.Rates[n-1].Up >= 6250 {
 			row.Down, row.Up = ct.Rates[n-1].Down, ct.Rates[n-1].Up
@@ -382,7 +383,7 @@ func (w *webServer) clientData(name string) (clientData, error) {
 	v := viewClients(w.s, []Client{c})[0]
 	p := accessPhrase(c, time.Now())
 	d := clientData{
-		Row:       clientRow{Name: c.Name, Mark: v.mark(), State: stateText(l, v), Access: tr(l, p.id, p.args...)},
+		Row:       clientRow{Name: c.Name, Mark: v.mark(), State: stateText(l, v), Access: tr(l, p.id, p.args...), Note: c.Note},
 		Created:   c.Created.Local().Format(time.DateOnly),
 		Transport: c.Transport,
 		Paused:    c.Paused,
@@ -494,6 +495,8 @@ func (w *webServer) clientAction(r *http.Request) (string, error) {
 		return "/c/" + url.PathEscape(to) + "?ok=renamed", change(func() error { return cmdRename(w.s, name, to, io.Discard) })
 	case "restart":
 		return back + "?ok=restarted_node", change(func() error { return restartNode(w.s, name, io.Discard) })
+	case "note":
+		return back + "?ok=note", change(func() error { return setNote(w.s, name, r.FormValue("note"), w.lang()) })
 	case "unlink":
 		return back + "?ok=unlinked", change(func() error {
 			c, err := w.s.Get(name)
@@ -583,39 +586,6 @@ func (w *webServer) logs(r *http.Request) (string, pageData, error) {
 	err := runDocker(&out, "logs", "--tail", "200", container)
 	dockerStderr = old
 	return "logs", pageData{Title: name, Body: map[string]string{"Name": name, "Text": out.String()}}, err
-}
-
-func (w *webServer) addForm(r *http.Request) (string, pageData, error) {
-	return "add", pageData{Title: tr(w.lang(), "web.add.title"), Active: "add"}, nil
-}
-
-func (w *webServer) add(r *http.Request) (string, error) {
-	name := strings.TrimSpace(r.FormValue("name"))
-	docURL := strings.TrimSpace(r.FormValue("url"))
-	transport := transportOf(docURL)
-	when, err := parseExpiry(orDefault(strings.TrimSpace(r.FormValue("expires")), "never"), time.Now())
-	if err != nil {
-		return "", err
-	}
-	unlock, err := w.s.Lock(lockWait)
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
-	c, err := w.s.Add(name, transport, docURL)
-	if err != nil {
-		return "", err
-	}
-	if !when.IsZero() {
-		c.Expires = when
-		if err := w.s.Save(c); err != nil {
-			return "", err
-		}
-	}
-	if err := apply(w.s, io.Discard); err != nil {
-		return "", fmt.Errorf("%s: %w", tr(w.lang(), "ui.add.nostart", c.Name), err)
-	}
-	return "/c/" + url.PathEscape(c.Name) + "?ok=added", nil
 }
 
 func orDefault(s, def string) string {
