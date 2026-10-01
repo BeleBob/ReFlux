@@ -22,7 +22,7 @@ import (
 const usage = `reflux — manage ReFlux exit nodes (one per client) on this host.
 
 USAGE
-  reflux add <name> --transport <type> --url <document-url> [--expires <when>]
+  reflux add <name> --transport <type> --url <document-url> [--expires <when>] [--note <text>]
   reflux list
   reflux show <name> [--png <file>]
   reflux pause <name>      stop the node, keep the key and the document
@@ -337,6 +337,7 @@ func cmdAdd(s Store, args []string, stdout io.Writer) error {
 	url := fs.String("url", "", "document URL (a new document for every client)")
 	noApply := fs.Bool("no-apply", false, "do not start the node")
 	expires := fs.String("expires", "never", "when access ends: never, a date, 30d, 2w, 12h")
+	note := fs.String("note", "", "who or what the client is, for you")
 	name, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -349,8 +350,8 @@ func cmdAdd(s Store, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !when.IsZero() {
-		c.Expires = when
+	if !when.IsZero() || *note != "" {
+		c.Expires, c.Note = when, strings.Join(strings.Fields(*note), " ")
 		if err := s.Save(c); err != nil {
 			return err
 		}

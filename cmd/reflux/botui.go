@@ -449,6 +449,9 @@ func (b *bot) clientScreen(name string) screen {
 	p := accessPhrase(c, now)
 	var t strings.Builder
 	fmt.Fprintf(&t, "%s <b>%s</b>\n", v.mark(), html.EscapeString(c.Name))
+	if c.Note != "" {
+		t.WriteString(b.tr("ui.client.note", html.EscapeString(c.Note)) + "\n")
+	}
 	t.WriteString(b.tr("ui.client.access", b.tr(p.id, p.args...)) + "\n")
 	switch {
 	case !v.active:

@@ -59,6 +59,14 @@ input[type=text], input[type=date], textarea { font:inherit; padding:6px 9px; bo
 input:focus, textarea:focus { outline:none; border-color:var(--accent); }
 input[type=text] { min-width:220px; max-width:100%; } textarea { width:100%; font-size:13px; }
 input[type=radio], input[type=checkbox] { accent-color:var(--accent); }
+select { font:inherit; font-size:14px; padding:6px 9px; border-radius:6px; border:1px solid var(--line2); background:var(--bg); color:var(--fg); max-width:100%; }
+input.wide, select.wide { width:100%; min-width:0; } .row input.wide { flex:1; width:auto; }
+label.opt { display:inline-flex; align-items:center; gap:7px; cursor:pointer; }
+.choices { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:10px; }
+.choices label { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; border:1px solid var(--line2); border-radius:6px; cursor:pointer; background:var(--panel2); }
+.choices label:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 16%, transparent); }
+.choices input[type=radio] { margin:0; }
+.addform h2 { margin-bottom:12px; } .addform p { margin:0 0 12px; }
 pre { white-space:pre-wrap; word-break:break-all; font-size:12.5px; background:var(--bg); border:1px solid var(--line); padding:10px; border-radius:6px; max-height:70vh; overflow:auto; }
 code { word-break:break-all; background:var(--panel2); padding:1px 5px; border-radius:4px; }
 img.qr { width:260px; max-width:100%; background:#fff; padding:8px; border-radius:8px; }
@@ -240,7 +248,7 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <div class="scroll"><table>
 <tr><th></th><th>{{t "web.col.name"}}</th><th>{{t "web.col.state"}}</th><th>{{t "web.col.access"}}</th><th class="num">{{t "web.col.today"}}</th></tr>
 {{range .Clients}}
-<tr><td>{{.Mark}}</td><td><a href="/c/{{.Name}}">{{.Name}}</a>{{if .Owner}}<br><span class="mute">{{.Owner}}</span>{{end}}</td><td>{{.State}}{{if or .Down .Up}}<br><span class="mute">↓ {{mbit .Down}} · ↑ {{mbit .Up}}</span>{{end}}</td><td>{{.Access}}</td><td class="num">↓ {{bytes .Today.Down}}<br>↑ {{bytes .Today.Up}}</td></tr>
+<tr><td>{{.Mark}}</td><td><a href="/c/{{.Name}}">{{.Name}}</a>{{if .Note}}<br><span class="mute">{{.Note}}</span>{{end}}{{if .Owner}}<br><span class="mute">{{.Owner}}</span>{{end}}</td><td>{{.State}}{{if or .Down .Up}}<br><span class="mute">↓ {{mbit .Down}} · ↑ {{mbit .Up}}</span>{{end}}</td><td>{{.Access}}</td><td class="num">↓ {{bytes .Today.Down}}<br>↑ {{bytes .Today.Up}}</td></tr>
 {{end}}
 </table></div>
 <p class="mute">{{t "ui.clients.hint"}}</p>
@@ -320,6 +328,7 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <h1>{{.Row.Mark}} {{.Row.Name}}</h1>
 <dl>
 <dt>{{t "web.col.access"}}</dt><dd>{{.Row.Access}}</dd>
+{{if .Row.Note}}<dt>{{t "web.add.note"}}</dt><dd>{{.Row.Note}}</dd>{{end}}
 <dt>{{t "web.node"}}</dt><dd>{{.Node}}</dd>
 <dt>{{t "web.col.state"}}</dt><dd>{{.Row.State}}</dd>
 <dt>Telegram</dt><dd>{{if .Row.Owner}}{{.Row.Owner}}{{else}}{{t "ui.tg.none"}}{{end}}</dd>
@@ -379,6 +388,8 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 <button>{{t "b.rename"}}</button>
 </form>
 <p class="mute">{{t "web.rename.hint"}}</p>
+<h2 style="margin-top:16px">{{t "web.add.note"}}</h2>
+<form method="post" action="/c/{{.Row.Name}}/note" class="row"><input type="text" name="note" maxlength="100" value="{{.Row.Note}}" placeholder="{{t "web.add.note.example"}}"><button>{{t "web.set"}}</button></form>
 {{if .Row.Owner}}<form method="post" action="/c/{{.Row.Name}}/unlink" class="row"><button>{{t "b.tg.off"}}</button></form>{{end}}
 <h2 style="margin-top:16px">{{t "b.revoke"}}</h2>
 <form method="post" action="/c/{{.Row.Name}}/revoke" class="row">
@@ -448,14 +459,48 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 {{template "foot" .}}{{end}}
 
 {{define "add"}}{{template "head" .}}
-<div class="card">
-<form method="post" action="/add">
-<p><label>{{t "web.add.name"}}<br><input type="text" name="name" required pattern="[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?"></label><br><span class="mute">{{t "web.add.name.hint"}}</span></p>
-<p><label>{{t "web.add.url"}}<br><input type="text" name="url" required style="width:100%"></label><br><span class="mute">{{t "web.add.url.hint"}}</span></p>
-<p><label>{{t "web.add.expires"}}<br><input type="text" name="expires" placeholder="never"></label><br><span class="mute">{{t "web.add.expires.hint"}}</span></p>
-<p><button class="primary">{{t "b.add"}}</button></p>
-</form>
+{{with .Body}}
+<form method="post" action="/add" class="addform">
+<div class="grid2">
+<section class="card">
+<h2>{{t "web.add.who"}}</h2>
+<p><label>{{t "web.add.name"}}<br><input type="text" name="name" required pattern="[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?" placeholder="{{.Suggest}}"></label><br><span class="mute">{{t "web.add.name.hint"}}</span></p>
+<p><label>{{t "web.add.note"}}<br><input type="text" name="note" maxlength="100" class="wide" placeholder="{{t "web.add.note.example"}}"></label><br><span class="mute">{{t "web.add.note.hint"}}</span></p>
+{{if .Accounts}}<p><label>Telegram<br><select name="tg"><option value="">{{t "ui.tg.none"}}</option>{{range .Accounts}}<option value="{{.ID}}">{{.Label}}</option>{{end}}</select></label><br><span class="mute">{{t "web.add.tg.hint"}}</span></p>{{end}}
+</section>
+<section class="card">
+<h2>{{t "web.add.doc"}}</h2>
+{{if .Free}}<p><label class="opt"><input type="radio" name="src" value="pool" checked> {{t "web.add.frompool" (len .Free)}}</label></p>
+<p><select name="pooldoc" class="wide">{{range .Free}}<option value="{{.URL}}">{{.Label}}</option>{{end}}</select></p>
+<p><label class="opt"><input type="radio" name="src" value="url"> {{t "web.add.bylink"}}</label></p>
+{{else}}<input type="hidden" name="src" value="url"><p class="mute">{{t "web.add.poolempty" .Pool}}</p>{{end}}
+<p class="row"><input type="text" name="url" class="wide" placeholder="https://cloud.mail.ru/public/…">
+<select name="type"><option value="auto">{{t "web.add.type.auto"}}</option><option value="mailru">mail.ru</option><option value="yandex">{{t "web.add.type.yandex"}}</option><option value="boards">{{t "web.add.type.boards"}}</option></select></p>
+<p class="mute">{{t "web.add.url.hint"}}</p>
+{{if gt (len .Backups) 1}}<p><label>{{t "web.add.backups"}}<br><select name="backups">{{range .Backups}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><br><span class="mute">{{t "web.add.backups.hint"}}</span></p>{{end}}
+</section>
+<section class="card">
+<h2>{{t "web.add.access"}}</h2>
+<div class="choices">
+<label><input type="radio" name="how" value="never" checked><span>{{t "web.add.how.never"}}</span></label>
+<label><input type="radio" name="how" value="+1"><span>{{t "web.add.how.1"}}</span></label>
+<label><input type="radio" name="how" value="+7"><span>{{t "web.add.how.7"}}</span></label>
+<label><input type="radio" name="how" value="+30"><span>{{t "web.add.how.30"}}</span></label>
+<label><input type="radio" name="how" value="+90"><span>{{t "web.add.how.90"}}</span></label>
+<label><input type="radio" name="how" value="+365"><span>{{t "web.add.how.365"}}</span></label>
+<label><input type="radio" name="how" value="date"><span>{{t "web.add.how.date"}}</span></label>
+<input type="date" name="date">
 </div>
+<p><label class="opt"><input type="checkbox" name="start" value="1" checked> {{t "web.add.start"}}</label><br><span class="mute">{{t "web.add.start.hint"}}</span></p>
+</section>
+<section class="card">
+<h2>{{t "web.add.next"}}</h2>
+<p class="mute">{{t "web.add.next.text"}}</p>
+<p><button class="primary">{{t "b.add"}}</button></p>
+</section>
+</div>
+</form>
+{{end}}
 {{template "foot" .}}{{end}}
 
 {{define "doctor"}}{{template "head" .}}
