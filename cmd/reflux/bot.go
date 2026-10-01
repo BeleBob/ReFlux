@@ -26,7 +26,8 @@ const botUsage = `usage:
   reflux bot setup     link a Telegram bot (token from @BotFather) to your account
   reflux bot install   run the bot as a systemd user service (again after an update)
   reflux bot test      send a test message
-  reflux bot run       run in the foreground (what the service does)`
+  reflux bot run       run in the foreground (what the service does)
+  reflux bot client    link a second bot where people ask for access (off: unlink)`
 
 // botConfig is telegram.json in the data directory (0600): the token is a
 // secret, and chat is the only chat the bot talks to.
@@ -78,6 +79,9 @@ func (s Store) saveBotConfig(c botConfig) error {
 }
 
 func cmdBot(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) >= 1 && args[0] == "client" {
+		return clientBotSetup(s, args[1:], stdin, stdout)
+	}
 	if len(args) != 1 {
 		return errors.New(botUsage)
 	}
@@ -101,7 +105,17 @@ func cmdBot(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return newBot(s, c).run()
+		owner := newBot(s, c)
+		if cc, ok, err := s.loadClientBot(); err != nil {
+			log.Printf("client bot: %v", err)
+		} else if ok {
+			go func() {
+				if err := newClientBot(s, cc, owner).run(); err != nil {
+					log.Printf("client bot stopped: %v", err)
+				}
+			}()
+		}
+		return owner.run()
 	}
 	return errors.New(botUsage)
 }
