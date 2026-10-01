@@ -151,7 +151,12 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return mb(q.LanRx) })},
 		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return mb(q.LanTx) })},
 	}})
-	add("temp", tr(l, "web.chart.temp"), lineChart{Min: 20, Max: 100, Threshold: 85, Unit: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
+	// The band is where the bot warns (hostwatch.go).
+	tempWarn := 85.0
+	if len(h.Temps) > 0 {
+		tempWarn = w.s.hostLimits().tempWarnAt(h.Temps[0])
+	}
+	add("temp", tr(l, "web.chart.temp"), lineChart{Min: 20, Max: 100, Threshold: tempWarn, Unit: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
 		Series: []chartSeries{{Name: tr(l, "web.tile.temp"), Values: col(func(q hostPoint) float64 { return q.TempC }), Color: "k3"}}})
 	add("mem", tr(l, "web.chart.mem"), lineChart{Max: 100, Threshold: 90, Fill: true, Unit: pctUnit,
 		Series: []chartSeries{{Name: tr(l, "web.tile.mem"), Values: col(func(q hostPoint) float64 { return q.Mem }), Color: "k2"}}})

@@ -36,6 +36,10 @@ type botConfig struct {
 	Lang  string `json:"lang,omitempty"` // "ru" (default) or "en"
 	// Mute lists the alert categories the owner switched off.
 	Mute []string `json:"mute,omitempty"`
+	// TempWarn and CPUWarn are the server warnings' thresholds (hostwatch.go):
+	// °C, 0 for the sensor's own; percent busy for cpuBusyFor, 0 for 90.
+	TempWarn int `json:"temp_warn,omitempty"`
+	CPUWarn  int `json:"cpu_warn,omitempty"`
 }
 
 func (s Store) botConfigPath() string { return filepath.Join(s.Root, "telegram.json") }
@@ -325,6 +329,7 @@ func (b *bot) run() error {
 // watch runs the checks every minute and reports what changed.
 func (b *bot) watch() {
 	for first := true; ; first = false {
+		sampleCPU(time.Now(), b.s.hostLimits().CPUWarn)
 		b.mu.Lock()
 		news := b.check(first)
 		b.mu.Unlock()
