@@ -282,11 +282,13 @@ func newBot(s Store, c botConfig) *bot {
 }
 
 // alertCategories are the groups of alerts the owner can switch off.
-var alertCategories = []string{"tunnels", "nodes", "updates", "server"}
+var alertCategories = []string{"tunnels", "nodes", "updates", "server", "report"}
 
 // category is the group of a check's alerts.
 func category(key string) string {
 	switch {
+	case strings.HasPrefix(key, "expiry:"):
+		return "nodes"
 	case key == "world", key == "russia", key == "egress", key == "egress-error", key == "kill-switch", key == "carrier":
 		return "tunnels"
 	case strings.HasPrefix(key, "node:"), strings.HasPrefix(key, "doc:"), strings.HasPrefix(key, "docs:"), key == "clients":
@@ -334,6 +336,9 @@ func (b *bot) watch() {
 		news := b.check(first)
 		b.mu.Unlock()
 		b.deliver(news)
+		b.mu.Lock()
+		b.sendReport(time.Now())
+		b.mu.Unlock()
 		time.Sleep(checkEvery)
 	}
 }

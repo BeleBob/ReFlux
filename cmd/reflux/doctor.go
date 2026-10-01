@@ -294,6 +294,10 @@ func (d *doctor) egress() {
 // its document: logged at most once a minute each, while it retries.
 var docTroubleRe = regexp.MustCompile(`connection to the document dropped|cannot open the document|failed to start|still not up`)
 
+// expiryWarn is how long before a client's access ends the owner hears
+// of it.
+const expiryWarn = 3 * 24 * time.Hour
+
 func (d *doctor) nodes(s Store) {
 	clients, err := s.List()
 	if err != nil {
@@ -317,6 +321,9 @@ func (d *doctor) nodes(s Store) {
 				d.add(levelOK, "node:"+c.Name, accessText(c, now), "node.inactive", c.Name, accessPhrase(c, now))
 			}
 			continue
+		}
+		if left := c.Expires.Sub(now); !c.Expires.IsZero() && left < expiryWarn {
+			d.warn("expiry:"+c.Name, "node.expiring", c.Name, c.Expires.Local().Format("02.01 15:04"), durationPhrase(left), c.Name)
 		}
 		switch {
 		case !running:
