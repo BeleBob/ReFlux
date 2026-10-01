@@ -87,6 +87,11 @@ var messages = map[string][2]string{
 	"disk.warn":             {"disk %s %d%% full", "диск %s заполнен на %d%%"},
 	"disk.full":             {"disk %s %d%% full: free space (docker image prune)", "диск %s заполнен на %d%%: освободите место (docker image prune)"},
 	"disk.dffail":           {"disk: df failed: %v", "диск: df не сработал: %v"},
+	"backup.ok":             {"last backup %s ago, %d kept in %s", "последняя резервная копия %s назад, хранится %d в %s"},
+	"backup.off":            {"the data directory is not backed up: reflux backup install (a backup a day, kept on this server)", "резервные копии не делаются: reflux backup install (копия раз в день, остаётся на этом сервере)"},
+	"backup.none":           {"no backups in %s yet: reflux backup", "в %s пока нет резервных копий: reflux backup"},
+	"backup.old":            {"the last backup is %s old: systemctl --user status reflux-backup.timer", "последней резервной копии %s: systemctl --user status reflux-backup.timer"},
+	"backup.bad":            {"backups: %v", "резервные копии: %v"},
 
 	// speed test
 	"speed.russia": {"russia", "Россия"},
@@ -201,6 +206,7 @@ var messages = map[string][2]string{
 	"short.node":         {"%s: %s · %s · ↓%s ↑%s", "%s: %s · %s · ↓%s ↑%s"},
 	"short.cron":         {"Cron: heal every minute", "Cron: heal раз в минуту"},
 	"short.disk":         {"Disk %s: %d%% used", "Диск %s: занят на %d%%"},
+	"short.backup":       {"Backup: %s ago, %d kept", "Резервная копия: %s назад, хранится %d"},
 	"ui.gw.title":        {"🌐 <b>Gateway</b>", "🌐 <b>Шлюз</b>"},
 	"ui.gw.world":        {"🌍 World: %s", "🌍 Мир: %s"},
 	"ui.gw.choice":       {"Your choice: %s", "Ваш выбор: %s"},

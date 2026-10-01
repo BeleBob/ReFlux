@@ -49,6 +49,13 @@ USAGE
   reflux web <install|login|run>
                            web panel for the home network (same as the bot)
   reflux logs <name|egress> [--follow]
+  reflux backup [list]     back up the data directory now / list the backups
+  reflux backup install [--dir <dir>] [--keep <n>]
+                           a backup a day (default ~/reflux-backups, 14 kept);
+                           backups stay on this server
+  reflux restore <backup> [--yes]
+                           put a backup back (the current state is backed up
+                           first) and recreate egress and every node
 
 ENVIRONMENT
   REFLUX_HOME          data directory (default: ~/reflux)
@@ -209,6 +216,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdBot(s, rest, stdin, stdout)
 	case "web":
 		return cmdWeb(s, rest, stdout)
+	case "backup":
+		return cmdBackup(s, rest, stdout)
+	case "restore":
+		return cmdRestore(s, rest, stdin, stdout)
 	}
 	return fmt.Errorf("unknown command %q (see reflux --help)", cmd)
 }
@@ -220,7 +231,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
 	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
-	"apply": true, "update": true, "restart": true, "heal": true,
+	"apply": true, "update": true, "restart": true, "heal": true, "backup": true, "restore": true,
 }
 
 // lockWait is how long a command waits for another one to finish.

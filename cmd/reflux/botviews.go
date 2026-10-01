@@ -104,6 +104,8 @@ func shortText(s Store, l lang, f finding) string {
 		return t("short.cron")
 	case "disk.ok":
 		return t("short.disk", str(0), a[1])
+	case "backup.ok":
+		return t("short.backup", str(0), a[1])
 	}
 	return f.text(l)
 }

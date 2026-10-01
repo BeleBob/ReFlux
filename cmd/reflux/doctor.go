@@ -88,6 +88,7 @@ func runChecks(s Store) []finding {
 	}
 	d.cron()
 	d.disk(s)
+	d.backup(s)
 	return d.findings
 }
 

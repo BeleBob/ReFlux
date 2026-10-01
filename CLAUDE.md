@@ -50,7 +50,7 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 ## ReFlux components (all new files; no upstream file is changed)
 
 - `cmd/reflux` — host CLI (`add/list/show/pause/resume/expire/revoke/apply/update/
-  restart/status/logs/heal/doctor/bot`). Nodes serve the core's IPC bridge
+  restart/status/logs/heal/doctor/bot/web/backup/restore`). Nodes serve the core's IPC bridge
   (`IPCSocket = /state/ipc.sock`); `list`/`status`/`doctor` read who is online and
   traffic from it. `render` re-syncs `node.conf` from `client.json`; `apply`
   recreates nodes started before their `node.conf` changed. `reflux bot` is a
@@ -71,7 +71,13 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   host from /proc and /sys (`hostmetrics.go`, roots overridable in tests) every 5 s
   for an hour of charts (server-rendered SVG, no scripts) and the nodes every 10 s
   into per-day traffic in `state/<name>/traffic.json` (survives node and panel
-  restarts). The bot logs its alerts to `events.jsonl` in both languages. Commands that change clients or containers hold the flock
+  restarts). The bot logs its alerts to `events.jsonl` in both languages.
+  `reflux backup` (`backup.go`) archives the data directory (minus locks,
+  sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
+  (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on
+  the server by the owner's decision, never sent through the bot or the panel.
+  `restore` backs up the current state first, swaps the contents in place (the
+  directory and its `.lock` stay) and recreates every container. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders

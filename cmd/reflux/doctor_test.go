@@ -21,6 +21,7 @@ type hostState struct {
 	dfUsed     string
 	docDrops   int
 	nodeStatus *ipc.StatusPayload
+	backupAge  time.Duration // the newest backup's (0: backups not installed)
 }
 
 // runDoctor sets up a data directory with one client and fakes the host
@@ -46,6 +47,13 @@ func fakeHost(t *testing.T, st hostState) Store {
 	s := Store{Root: home}
 	os.WriteFile(filepath.Join(home, "egress", "world-1.conf"), []byte("x"), 0o600)
 	os.WriteFile(filepath.Join(home, "egress", "ru-direct"), nil, 0o600)
+	if st.backupAge > 0 {
+		dir := filepath.Join(t.TempDir(), "backups")
+		writeJSON(s.backupConfigPath(), backupConfig{Dir: dir, Keep: 14})
+		os.MkdirAll(dir, 0o700)
+		name := backupPrefix + time.Now().Add(-st.backupAge).Format(backupLayout) + backupSuffix
+		os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600)
+	}
 
 	oldModule, oldCmd := amneziawgModule, runCmd
 	t.Cleanup(func() { amneziawgModule, runCmd = oldModule, oldCmd })
@@ -111,6 +119,7 @@ func TestDoctorOnAHealthyHost(t *testing.T) {
 		module: true, worldUp: true, nodeStart: "2026-09-29T17:00:05Z",
 		cron: "* * * * * $HOME/.local/bin/reflux heal >> $HOME/reflux/heal.log 2>&1\n", dfUsed: "86",
 		nodeStatus: &ipc.StatusPayload{Running: true, Connected: true, UptimeMs: 16 * 3600 * 1000, BytesOut: 1_400_000_000},
+		backupAge:  3 * time.Hour,
 	})
 	if err != nil || strings.Contains(out, "FAIL  ") || strings.Contains(out, "warn  ") {
 		t.Fatalf("err=%v\n%s", err, out)
@@ -122,6 +131,7 @@ func TestDoctorOnAHealthyHost(t *testing.T) {
 		"ok    world up via world-1.conf",
 		"ok    node phone: up 16h, client online, 1.4 GB down",
 		"ok    cron runs reflux heal",
+		"ok    last backup 3h ago, 1 kept in",
 		"ok    mail.ru channel direct: 2 addresses out of the uplink",
 		"ok    disk / 86% used",
 		"0 problem(s), 0 warning(s)",
