@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // EgressSubnet is the Docker network the egress container lives on. The

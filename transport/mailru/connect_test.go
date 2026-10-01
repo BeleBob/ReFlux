@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // Mail.ru's document server checks the Socket.IO connect token

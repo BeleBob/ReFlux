@@ -9,7 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // A stopped transport must leave the document the way the editor does:

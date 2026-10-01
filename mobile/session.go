@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"openflux/transport"
-	"openflux/transport/manager"
-	"openflux/utils"
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // sessionSpec is one transport of a Session profile, as the app sends it.

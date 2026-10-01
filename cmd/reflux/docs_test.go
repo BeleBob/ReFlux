@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"openflux/share"
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/share"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 const (

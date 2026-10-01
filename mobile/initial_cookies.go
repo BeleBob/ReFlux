@@ -3,7 +3,7 @@ package mobile
 import (
 	"sync"
 
-	"openflux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 )
 
 // initialCookies are cookies the app got before starting (a check passed

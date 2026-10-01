@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // The client bot: the public bot people use to ask for a channel and to

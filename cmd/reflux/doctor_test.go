@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport/ipc"
+	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 )
 
 type hostState struct {

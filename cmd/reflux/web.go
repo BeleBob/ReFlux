@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // The web panel: the bot's screens as pages, for the home network. It

@@ -8,8 +8,8 @@ package main
 import "C"
 
 import (
+	"github.com/p1neappleXpress/OpenFlux/share"
 	mobile "openflux-mobile"
-	"openflux/share"
 )
 
 // Links are read and made by the core only: the app hands the string (or

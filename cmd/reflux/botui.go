@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // The bot's screens live in one message each: a button press edits the

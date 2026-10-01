@@ -16,7 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"openflux/share"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 const usage = `reflux — manage ReFlux exit nodes (one per client) on this host.

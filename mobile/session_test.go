@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"openflux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 const testSecret = "mobile session test secret"
