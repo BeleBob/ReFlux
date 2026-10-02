@@ -6,10 +6,13 @@ import (
 	"time"
 )
 
+// fastKeepalive pings every 20 ms and lets a carrier be silent for 300 ms
+// (15 pings) before it is down: with 100 ms a goroutine stalled under
+// -race on a busy CI runner made a live carrier look dead.
 func fastKeepalive(sessions ...*Session) {
 	for _, s := range sessions {
 		s.keepaliveInterval = 20 * time.Millisecond
-		s.linkTimeout = 100 * time.Millisecond
+		s.linkTimeout = 300 * time.Millisecond
 	}
 }
 
@@ -103,7 +106,7 @@ func TestSessionToleratesPeerWithoutKeepalive(t *testing.T) {
 	exit.Receive(func([]byte) { got.Add(1) })
 	startPair(t, client, exit)
 
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(3 * client.linkTimeout) // well past when a pinged carrier would be down
 	if !client.IsConnected() {
 		t.Fatal("carrier aged out against a peer without keepalive")
 	}
