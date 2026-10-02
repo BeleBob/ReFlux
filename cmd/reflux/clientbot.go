@@ -239,10 +239,8 @@ func (cb *clientBot) home(u *tgUser) screen {
 		state := tr(l, "cb.state.down")
 		if c.Active(now) {
 			if st, ok := nodeStatuses(cb.s, []Client{c})[c.Name]; ok {
-				state = tr(l, "offline")
-				if st.Connected {
-					state = tr(l, "online")
-				}
+				v := clientView{c: c, status: &statusView{online: st.Connected}, seen: cb.s.lastSeen()[c.Name]}
+				state = v.onlineText(l)
 			}
 		}
 		text := tr(l, "cb.channel", e(c.Name), tr(l, p.id, p.args...), state)

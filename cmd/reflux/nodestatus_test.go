@@ -178,3 +178,83 @@ func TestNoStatusIsNotAnAlert(t *testing.T) {
 		}
 	}
 }
+
+// resetSeen forgets what this process saw, before and after a test.
+func resetSeen(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		seenCache.Lock()
+		seenCache.m, seenCache.savedAt = map[string]time.Time{}, time.Time{}
+		seenCache.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+func TestLastSeen(t *testing.T) {
+	resetSeen(t)
+	s := Store{Root: t.TempDir()}
+	t0 := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	s.markSeen([]string{"phone"}, t0)
+	if got := s.readSeen()["phone"]; !got.Equal(t0) {
+		t.Fatalf("first mark not written: %v", got)
+	}
+	// Within a minute: remembered, not written.
+	s.markSeen([]string{"phone"}, t0.Add(10*time.Second))
+	if got := s.readSeen()["phone"]; !got.Equal(t0) {
+		t.Errorf("written within a minute: %v", got)
+	}
+	if got := s.lastSeen()["phone"]; !got.Equal(t0.Add(10 * time.Second)) {
+		t.Errorf("last seen %v", got)
+	}
+	// Another process wrote a later time for another client: both stay.
+	m := s.readSeen()
+	m["tablet"] = t0.Add(30 * time.Second)
+	writeJSON(s.seenPath(), m)
+	s.markSeen([]string{"phone"}, t0.Add(2*time.Minute))
+	got := s.readSeen()
+	if !got["phone"].Equal(t0.Add(2*time.Minute)) || !got["tablet"].Equal(t0.Add(30*time.Second)) {
+		t.Errorf("merged %v", got)
+	}
+}
+
+// Reading a node marks its connected client, and the pages say when an
+// offline one was last there.
+func TestLastSeenShown(t *testing.T) {
+	resetSeen(t)
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	s := Store{Root: home}
+	run([]string{"add", "phone", "--url", testURL, "--no-apply"}, nil, io.Discard)
+	srv := ipc.NewServer(s.ipcPath("phone"), nil)
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { srv.Close() })
+	st := ipc.StatusPayload{Running: true, Connected: true}
+	go func() {
+		for range time.Tick(50 * time.Millisecond) {
+			srv.SendStatus(&st)
+		}
+	}()
+	c, _ := s.Get("phone")
+	nodeStatuses(s, []Client{c})
+	if s.readSeen()["phone"].IsZero() {
+		t.Fatal("a connected client not marked")
+	}
+	// Two hours later, offline.
+	before := time.Now().Add(-2 * time.Hour)
+	seenCache.Lock()
+	seenCache.m["phone"] = before
+	seenCache.Unlock()
+	writeJSON(s.seenPath(), map[string]time.Time{"phone": before})
+	v := clientView{c: c, active: true, running: true, status: &statusView{}, seen: s.lastSeen()["phone"]}
+	if got := stateText(langRU, v); !strings.HasPrefix(got, "не в сети, был 2 ч назад") {
+		t.Errorf("state %q", got)
+	}
+	v.seen = time.Time{}
+	if got := stateText(langRU, v); !strings.HasPrefix(got, "не в сети ·") {
+		t.Errorf("never seen: %q", got)
+	}
+}

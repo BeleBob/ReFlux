@@ -108,6 +108,7 @@ var messages = map[string][2]string{
 	// states
 	"online":         {"online", "в сети"},
 	"offline":        {"offline", "не в сети"},
+	"offline.seen":   {"offline, last seen %s ago", "не в сети, был %s назад"},
 	"access.active":  {"active", "бессрочно"},
 	"access.paused":  {"paused", "на паузе"},
 	"access.expired": {"expired", "истёк"},

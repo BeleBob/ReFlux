@@ -88,12 +88,17 @@ func nodeStatuses(s Store, clients []Client) map[string]ipc.StatusPayload {
 		}(c.Name)
 	}
 	out := map[string]ipc.StatusPayload{}
+	var online []string
 	for range clients {
 		r := <-ch
 		if r.err == nil {
 			out[r.name] = r.st
+			if r.st.Connected {
+				online = append(online, r.name)
+			}
 		}
 	}
+	s.markSeen(online, time.Now())
 	return out
 }
 

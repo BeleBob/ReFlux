@@ -76,6 +76,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   restarts). The bot logs its alerts to `events.jsonl` in both languages, and
   counts each minute whether the world and Russia worked into `uptime.json`
   (`uptime.go`: the weekly report and the gateway page show the share).
+  Whoever reads the nodes (`nodeStatuses`) marks connected clients in
+  `seen.json` (`seen.go`, written at most once a minute per process): "offline,
+  last seen … ago" in the bots, the panel and `reflux list`.
   `reflux backup` (`backup.go`) archives the data directory (minus locks,
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on

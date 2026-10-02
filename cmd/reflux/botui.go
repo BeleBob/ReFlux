@@ -338,6 +338,7 @@ type clientView struct {
 	active  bool
 	running bool
 	status  *statusView
+	seen    time.Time // last connected (seen.go); zero when unknown
 }
 
 type statusView struct {
@@ -355,9 +356,10 @@ func viewClients(s Store, clients []Client) []clientView {
 	now := time.Now()
 	states := containerStates()
 	live := nodeStatuses(s, activeClients(clients, now))
+	seen := s.lastSeen()
 	var out []clientView
 	for _, c := range clients {
-		v := clientView{c: c, active: c.Active(now), running: states["reflux-node-"+c.Name] != ""}
+		v := clientView{c: c, active: c.Active(now), running: states["reflux-node-"+c.Name] != "", seen: seen[c.Name]}
 		if st, ok := live[c.Name]; ok {
 			v.status = &statusView{online: st.Connected, up: time.Duration(st.UptimeMs) * time.Millisecond,
 				down: st.BytesOut, upB: st.BytesIn, doc: c.docIndex(st.Active)}
@@ -384,6 +386,17 @@ func (v clientView) mark() string {
 	return "⚪"
 }
 
+// onlineText says whether the client is connected, and when it last was.
+func (v clientView) onlineText(l lang) string {
+	switch {
+	case v.status != nil && v.status.online:
+		return tr(l, "online")
+	case !v.seen.IsZero():
+		return tr(l, "offline.seen", durationIn(l, time.Since(v.seen)))
+	}
+	return tr(l, "offline")
+}
+
 // state is a client's state in words.
 func (b *bot) state(v clientView) string { return stateText(b.lang, v) }
 
@@ -399,11 +412,7 @@ func stateText(l lang, v clientView) string {
 	case v.status == nil:
 		return tr(l, "ui.nostatus")
 	}
-	s := tr(l, "offline")
-	if v.status.online {
-		s = tr(l, "online")
-	}
-	return s + " · ↓" + humanBytes(v.status.down) + " ↑" + humanBytes(v.status.upB)
+	return v.onlineText(l) + " · ↓" + humanBytes(v.status.down) + " ↑" + humanBytes(v.status.upB)
 }
 
 func (b *bot) home() screen {
@@ -472,11 +481,7 @@ func (b *bot) clientScreen(name string) screen {
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.nostatus")) + "\n")
 	default:
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.up", durationIn(b.lang, v.status.up))) + "\n")
-		online := b.tr("offline")
-		if v.status.online {
-			online = b.tr("online")
-		}
-		t.WriteString(b.tr("ui.client.client", online) + "\n")
+		t.WriteString(b.tr("ui.client.client", v.onlineText(b.lang)) + "\n")
 		t.WriteString(b.tr("ui.client.traffic", humanBytes(v.status.down), humanBytes(v.status.upB)) + "\n")
 		if v.status.online && v.status.doc > 0 {
 			t.WriteString(b.tr("ui.client.onbackup", v.status.doc+1) + "\n")
