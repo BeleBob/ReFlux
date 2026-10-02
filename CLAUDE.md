@@ -105,6 +105,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   only: asking, the person's own channel, link and QR (deleted after
   `showKeep`), reminders (`client-bot-state.json`), texts in the person's
   language (`cb.*` messages).
+  Image updates (`imageupdates.go`): the bot asks ghcr.io anonymously for the
+  images' digests every 6 h (`updates.json`), offers an update once per new set,
+  runs `updateImages` (= `reflux update`) on the button or, with `auto_update`,
+  between 4 and 5 at night, and keeps the restart's alerts quiet for 5 minutes.
   Data in `~/reflux` (`REFLUX_HOME`): `clients/<name>/{client.json,key,node.conf}`,
   `state/<name>/`, `egress/{ru-1.conf,world-N.conf}`, `revoked/`; renders
   `compose.yml` (JSON, valid YAML). Each node is a **classic exit with a key**

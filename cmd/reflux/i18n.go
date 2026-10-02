@@ -641,6 +641,22 @@ var messages = map[string][2]string{
 	"cb.remind":   {"⏳ Access to <b>%s</b> ends %s (in %s).", "⏳ Доступ к каналу <b>%s</b> заканчивается %s (через %s)."},
 	"cb.ended":    {"⌛ Access to <b>%s</b> has ended.", "⌛ Доступ к каналу <b>%s</b> закончился."},
 
+	// image updates (imageupdates.go)
+	"b.upd.now":           {"⬆️ Update now", "⬆️ Обновить сейчас"},
+	"b.upd.screen":        {"⬆️ Updates", "⬆️ Обновления"},
+	"b.upd.check":         {"🔍 Check now", "🔍 Проверить сейчас"},
+	"b.upd.auto":          {"🌙 Night updates: on/off", "🌙 Автообновление ночью: вкл/выкл"},
+	"ui.upd.offer":        {"⬆️ <b>ReFlux update available</b>: new node or egress images. Updating restarts egress and the nodes: the channels drop for about a minute.", "⬆️ <b>Доступно обновление ReFlux</b>: новые образы ноды или egress. Обновление перезапустит egress и ноды — каналы пропадут примерно на минуту."},
+	"ui.upd.title":        {"⬆️ <b>Image updates</b> (checked every 6 hours)", "⬆️ <b>Обновления образов</b> (проверка раз в 6 часов)"},
+	"ui.upd.unknown":      {"not checked", "не проверено"},
+	"ui.upd.newer":        {"⬆️ a new one is out", "⬆️ есть новый"},
+	"ui.upd.current":      {"✅ current", "✅ актуален"},
+	"ui.upd.auto.on":      {"🌙 Night updates are on: new images go in between 4 and 5 at night.", "🌙 Автообновление включено: новые образы ставятся ночью с 4 до 5."},
+	"ui.upd.auto.off":     {"🌙 Night updates are off: the bot offers an update with a button.", "🌙 Автообновление выключено: бот предлагает обновление кнопкой."},
+	"ui.upd.done":         {"✅ Updated: egress and the nodes restarted.", "✅ Обновлено: egress и ноды перезапущены."},
+	"ui.upd.night.done":   {"🌙 ReFlux updated at night: egress and the nodes restarted.", "🌙 ReFlux обновлён ночью: egress и ноды перезапущены."},
+	"ui.upd.night.failed": {"🌙 The night update failed: %s", "🌙 Ночное обновление не удалось: %s"},
+
 	// bot: server screen
 	"b.server":           {"📊 Server", "📊 Сервер"},
 	"b.restartnode":      {"🔁 Restart the node", "🔁 Перезапустить ноду"},

@@ -156,31 +156,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		}
 		return apply(s, stdout)
 	case "update":
-		if err := s.Init(); err != nil {
-			return err
-		}
-		if err := render(s); err != nil {
-			return err
-		}
-		// compose pull only pulls the services in compose.yml: with no
-		// clients yet the node image was never pulled, and the next add
-		// started a node from a stale cached image. Pull both by name.
-		o := options()
-		if err := runDocker(stdout, "pull", "--quiet", o.NodeImage); err != nil {
-			return err
-		}
-		if err := runDocker(stdout, "pull", "--quiet", o.EgressImage); err != nil {
-			return err
-		}
-		if err := apply(s, stdout); err != nil {
-			return err
-		}
-		// Every pull of :main leaves the previous image dangling, 40 MB a
-		// time. Remove those of ReFlux only; other images stay.
-		if err := runDocker(io.Discard, "image", "prune", "--force", "--filter", "label="+imageSourceLabel); err != nil {
-			fmt.Fprintln(stdout, "warning: removing old ReFlux images failed:", err)
-		}
-		return nil
+		return updateImages(s, stdout)
 	case "status":
 		states := containerStates()
 		egress := states["reflux-egress"]
