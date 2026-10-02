@@ -33,7 +33,8 @@ const (
 )
 
 type clientBotConfig struct {
-	Token string `json:"token"`
+	Token    string `json:"token"`
+	Username string `json:"username,omitempty"` // for invite links
 }
 
 func (s Store) clientBotPath() string      { return filepath.Join(s.Root, "client-bot.json") }
@@ -185,7 +186,12 @@ func (cb *clientBot) message(u *tgUser, text string) screen {
 			return cb.ask(u, text)
 		}
 	}
-	switch strings.SplitN(text, "@", 2)[0] {
+	cmd, arg, _ := strings.Cut(text, " ")
+	cmd = strings.SplitN(cmd, "@", 2)[0]
+	if cmd == "/start" && strings.TrimSpace(arg) != "" {
+		return cb.redeem(u, strings.TrimSpace(arg))
+	}
+	switch cmd {
 	case "/qr":
 		return cb.access(u)
 	case "/help":
@@ -486,9 +492,53 @@ func clientBotSetup(s Store, args []string, stdin io.Reader, stdout io.Writer) e
 	if err != nil {
 		return fmt.Errorf("the token does not work: %w", err)
 	}
-	if err := writeJSON(s.clientBotPath(), clientBotConfig{Token: token}); err != nil {
+	if err := writeJSON(s.clientBotPath(), clientBotConfig{Token: token, Username: me.Username}); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Linked @%s. Give people https://t.me/%s; restart the bot to start it: reflux bot install\n", me.Username, me.Username)
 	return nil
+}
+
+// redeem spends an invite (invites.go) from /start <code>: the channel at
+// once, the owner told. The caller holds cb.mu.
+func (cb *clientBot) redeem(u *tgUser, code string) screen {
+	l := langOf(u.LanguageCode)
+	now := time.Now()
+	unlock, err := cb.s.Lock(lockWait)
+	if err != nil {
+		log.Printf("client bot: invite: %v", err)
+		return screen{tr(l, "cb.invite.later"), keyboard{{cb.btn(l, "b.refresh", "home")}}}
+	}
+	r, c, inv, err := cb.s.useInvite(code, *u, now)
+	if err == nil {
+		if aerr := apply(cb.s, io.Discard); aerr != nil {
+			log.Printf("client bot: starting %s: %v", c.Name, aerr)
+		}
+	}
+	unlock()
+	switch {
+	case errors.Is(err, errNoInvite):
+		return screen{tr(l, "cb.invite.bad"), keyboard{{cb.btn(l, "b.cb.ask", "ask")}, {cb.btn(l, "b.cb.help", "help")}}}
+	case err != nil && r.State == reqPending:
+		// Approving failed (no free document): the owner decides.
+		cb.tellOwner()
+		return screen{tr(l, "cb.sent"), keyboard{{cb.btn(l, "b.refresh", "home")}}}
+	case err != nil:
+		return cb.home(u) // blocked, a channel or a request already
+	}
+	p := accessPhrase(c, now)
+	who, note := r.Who(), inv.Note
+	ev := event{At: now, Level: "ok", RU: tr(langRU, "ev.invite", who, c.Name), EN: tr(langEN, "ev.invite", who, c.Name)}
+	cb.s.logEvents([]event{ev})
+	if o := cb.owner; o != nil {
+		o.mu.Lock()
+		text := o.tr("ui.invite.used", html.EscapeString(who), html.EscapeString(c.Name), o.tr(p.id, p.args...))
+		if note != "" {
+			text += "\n«" + html.EscapeString(note) + "»"
+		}
+		o.t.sendKeyboard(o.chat, text, keyboard{{o.btn("b.client", "c:"+c.Name, c.Name)}})
+		o.mu.Unlock()
+	}
+	cb.deliver(now) // the welcome, the link and the QR
+	return screen{}
 }

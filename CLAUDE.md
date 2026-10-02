@@ -94,6 +94,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `webrequests.go`, `reflux requests`): `requests/<telegram id>.json`, pending →
   approved (a client named after the account, a pool document, linked) /
   rejected / blocked; the client bot delivers approved ones and removes them.
+  Invites (`invites.go`, `invites/<code>.json`, `reflux invite`): a one-time
+  `t.me/<client bot>?start=<code>` link (7 days) that makes and approves the
+  request at once when the client bot gets `/start <code>`.
   The client bot (`clientbot.go`, token in `client-bot.json`, `reflux bot
   client`) runs inside `reflux bot run` next to the owner bot, private chats
   only: asking, the person's own channel, link and QR (deleted after

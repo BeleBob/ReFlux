@@ -80,7 +80,7 @@ func (b *bot) requestsScreen() screen {
 	if len(pending) == 0 {
 		t.WriteString("\n" + b.tr("ui.rq.none"))
 	}
-	return screen{t.String(), append(kb, []tgButton{b.btn("b.home", "home")})}
+	return screen{t.String(), append(kb, []tgButton{b.btn("b.invite", "inv"), b.btn("b.home", "home")})}
 }
 
 // requestPress handles rq1:<id> (one request) and rq:<id>:<decision>.
@@ -134,4 +134,50 @@ func (b *bot) requestPress(action, arg string) screen {
 		kb = keyboard{{b.btn("b.client", "c:"+c.Name, c.Name), b.btn("b.rq", "rqs", len(b.s.pendingRequests()))}}
 	}
 	return screen{b.requestText(r) + "\n\n" + note, kb}
+}
+
+// invitesScreen offers a new invite and lists the ones that still work.
+func (b *bot) invitesScreen(note string) screen {
+	invs := b.s.listInvites(time.Now())
+	var t strings.Builder
+	if note != "" {
+		t.WriteString(note + "\n\n")
+	}
+	t.WriteString(b.tr("ui.invite.title", len(invs)))
+	var kb keyboard
+	for _, inv := range invs {
+		fmt.Fprintf(&t, "\n\n🎟 %s · %s\n<code>%s</code>", html.EscapeString(b.tr("rq.how."+howKey(inv.How))),
+			inv.Expires.Local().Format("02.01 15:04"), html.EscapeString(b.s.inviteLink(inv.Code)))
+		if inv.Note != "" {
+			t.WriteString("\n«" + html.EscapeString(inv.Note) + "»")
+		}
+		kb = append(kb, []tgButton{b.btn("b.invite.revoke", "inv-:"+inv.Code, inv.Code[:4])})
+	}
+	kb = append(keyboard{{b.btn("b.invite.30", "inv:+30"), b.btn("b.invite.90", "inv:+90"), b.btn("b.invite.never", "inv:never")}}, kb...)
+	return screen{t.String(), append(kb, []tgButton{b.btn("b.rq", "rqs", len(b.s.pendingRequests())), b.btn("b.home", "home")})}
+}
+
+// howKey names an invite's access for its message id: 30, 90 or never.
+func howKey(how string) string { return strings.TrimPrefix(how, "+") }
+
+// invitePress handles inv (the screen), inv:<how> (a new one) and
+// inv-:<code> (revoke).
+func (b *bot) invitePress(action, arg string) screen {
+	switch action {
+	case "inv":
+		if arg == "" {
+			return b.invitesScreen("")
+		}
+		inv, err := b.s.newInvite(arg, "", time.Now())
+		if err != nil {
+			return b.failed(err, b.btn("b.back", "inv"))
+		}
+		return b.invitesScreen(b.tr("ui.invite.made", html.EscapeString(b.s.inviteLink(inv.Code))))
+	case "inv-":
+		if err := b.s.revokeInvite(arg); err != nil {
+			return b.invitesScreen(html.EscapeString(err.Error()))
+		}
+		return b.invitesScreen(b.tr("ui.invite.revoked"))
+	}
+	return b.home()
 }

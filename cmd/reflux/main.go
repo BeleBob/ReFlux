@@ -37,6 +37,8 @@ USAGE
                            Session exit (the app imports the new link)
   reflux requests [approve|reject|block|forget <id|@user>] [--expires +30|never]
                            access requests from the client bot
+  reflux invite [--expires +30|+90|never] [--note <who>] | list | revoke <code>
+                           a one-time client bot link that gives access at once
   reflux pool [add <url>...]
                            prepared documents (docs-pool.txt): free and taken
   reflux revoke <name> [--yes]
@@ -213,6 +215,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdLogs(rest, stdout)
 	case "requests":
 		return cmdRequests(s, rest, stdout)
+	case "invite":
+		return cmdInvite(s, rest, stdout)
 	case "docs":
 		return cmdDocs(s, rest, stdout)
 	case "pool":
