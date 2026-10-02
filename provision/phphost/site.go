@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -42,7 +44,12 @@ func (s *Site) client() *http.Client {
 		return s.Client
 	}
 	jar, _ := cookiejar.New(nil)
-	s.Client = &http.Client{Jar: jar, Timeout: 30 * time.Second}
+	// Free and cheap hosts often serve a generic certificate on a shared IP (one that is valid, just not for this
+	// account's own domain), or a self-signed one on a custom domain the user pointed here: the node behind it can
+	// be perfectly fine. Checking the certificate would refuse a working site over a paperwork mismatch we cannot
+	// fix anyway - the token in the URL is what actually proves this is the user's own node, not the TLS chain.
+	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	s.Client = &http.Client{Jar: jar, Timeout: 30 * time.Second, Transport: tr}
 	return s.Client
 }
 
@@ -135,6 +142,53 @@ func (s *Site) get(ctx context.Context, raw string) (int, []byte, error) {
 	return 0, nil, fail(CodeAntiBot, "", "phphost: the host's browser check did not let the request through", nil)
 }
 
+// altScheme is raw with http<->https swapped.
+func altScheme(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme == "https" {
+		u.Scheme = "http"
+	} else {
+		u.Scheme = "https"
+	}
+	return u.String(), nil
+}
+
+// getEither is get, but when the connection itself fails (not a bad status from a server that did answer) it also
+// tries the other scheme before giving up. A free host is often plain HTTP only, or redirects https oddly, or the
+// address the user typed just has the wrong scheme for it - any of those looks exactly like "unreachable" until
+// something actually tries the other one. Not used for a=run: that request IS the node, and firing it twice would
+// start two.
+func (s *Site) getEither(ctx context.Context, raw string) (int, []byte, error) {
+	code, body, err := s.get(ctx, raw)
+	var e *Error
+	if err == nil || !errors.As(err, &e) || e.Code != CodeSiteUnreachable {
+		return code, body, err
+	}
+	alt, aerr := altScheme(raw)
+	if aerr != nil {
+		return code, body, err
+	}
+	code2, body2, err2 := s.get(ctx, alt)
+	if err2 != nil {
+		// Both schemes failed: say so with both reasons, not just the first one.
+		return 0, nil, fail(CodeSiteUnreachable, e.Param, fmt.Sprintf("phphost: the site did not answer on either scheme (%s; then %s)", err, err2), nil)
+	}
+	return code2, body2, nil
+}
+
+// snippet is body, trimmed and flattened to one line, for a log a person can actually read.
+func snippet(body []byte) string {
+	s := strings.Join(strings.Fields(string(body)), " ")
+	const max = 200
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
+}
+
 // Status is what the node's ping says about the host.
 type Status struct {
 	Version  string          `json:"phpbox"`
@@ -152,19 +206,22 @@ func (s *Site) Check(ctx context.Context) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, body, err := s.get(ctx, raw)
+	code, body, err := s.getEither(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
-	if code == http.StatusNotFound && strings.TrimSpace(string(body)) == "no" {
-		return nil, fail(CodeTokenRefused, "", "phphost: the node refused the token", nil)
+	// Every action needs the right token first (lib/node.php checks it before looking at "a"), and refuses with
+	// exactly this - whatever the status code a host's own front end wraps it in.
+	if strings.TrimSpace(string(body)) == "no" {
+		return nil, fail(CodeTokenRefused, "", fmt.Sprintf("phphost: the node refused the token (http %d)", code), nil)
 	}
 	var st Status
 	if code != http.StatusOK || json.Unmarshal(body, &st) != nil || st.Version == "" {
 		if challengePage(body) {
 			return nil, fail(CodeAntiBot, "", "phphost: a browser check stands in front of the site", nil)
 		}
-		return nil, fail(CodeNotPhpbox, "", "phphost: the site does not answer as a phpbox node", nil)
+		return nil, fail(CodeNotPhpbox, "",
+			fmt.Sprintf("phphost: the site does not answer as a phpbox node (http %d, body: %s)", code, snippet(body)), nil)
 	}
 	if len(st.Missing) > 0 {
 		return &st, fail(CodePHPMissing, strings.Join(st.Missing, ","), "phphost: the host lacks what the node needs", nil)
@@ -192,13 +249,13 @@ func (s *Site) Node(ctx context.Context, target string) (*NodeState, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, body, err := s.get(ctx, raw)
+	code, body, err := s.getEither(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
 	var ns NodeState
 	if code != http.StatusOK || json.Unmarshal(body, &ns) != nil {
-		return nil, fail(CodeNotPhpbox, "", "phphost: unreadable status", nil)
+		return nil, fail(CodeNotPhpbox, "", fmt.Sprintf("phphost: unreadable status (http %d, body: %s)", code, snippet(body)), nil)
 	}
 	return &ns, nil
 }
@@ -236,12 +293,18 @@ func (s *Site) Start(ctx context.Context, target string, o StartOptions, wait ti
 		return nil, err
 	}
 	deadline := time.Now().Add(wait)
+	var lastErr error
+	polls := 0
 	for {
-		if ns, err := s.Node(ctx, target); err == nil && ns.Running {
+		ns, nerr := s.Node(ctx, target)
+		if nerr == nil && ns.Running {
 			return ns, nil
 		}
+		polls++
+		lastErr = nerr
 		if time.Now().After(deadline) || ctx.Err() != nil {
-			return nil, fail(CodeNodeNotStarted, "", "phphost: the node did not report running", nil)
+			return nil, fail(CodeNodeNotStarted, "",
+				fmt.Sprintf("phphost: the node did not report running after %d poll(s); last: %v", polls, lastErr), nil)
 		}
 		select {
 		case <-time.After(1500 * time.Millisecond):
@@ -257,6 +320,6 @@ func (s *Site) Stop(ctx context.Context, target string) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = s.get(ctx, raw)
+	_, _, err = s.getEither(ctx, raw)
 	return err
 }
