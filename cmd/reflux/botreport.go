@@ -125,6 +125,32 @@ func (s Store) trafficNow(name string, now time.Time) (today, month dayTraffic, 
 	return today, month, true
 }
 
+// idleAfter is how long without traffic makes a channel worth a line.
+const idleAfter = 14 * 24 * time.Hour
+
+// lastUsed is the last day a client's channel carried traffic (zero:
+// never); counted is false when the panel keeps no traffic for it.
+func (s Store) lastUsed(name string) (last time.Time, counted bool) {
+	b, err := os.ReadFile(s.trafficPath(name))
+	if err != nil {
+		return last, false
+	}
+	var tf trafficFile
+	if json.Unmarshal(b, &tf) != nil {
+		return last, false
+	}
+	for d, t := range tf.Days {
+		// A megabyte a day: keepalives alone are not use.
+		if t.Down+t.Up < 1e6 {
+			continue
+		}
+		if at, err := time.ParseInLocation(time.DateOnly, d, time.Local); err == nil && at.After(last) {
+			last = at
+		}
+	}
+	return last, true
+}
+
 // weeklyReport is the report on [from, to); title names the span.
 func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string {
 	t := func(id string, a ...any) string { return tr(l, id, a...) }
@@ -179,6 +205,26 @@ func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string
 		b.WriteString("\n" + t("rep.events.none") + "\n")
 	} else {
 		b.WriteString("\n" + t("rep.events", fails, warns, oks) + "\n")
+	}
+
+	// Channels not used for a while: a client who left, or one whose
+	// channel stopped working for them; either way the owner should know.
+	var idle []string
+	for _, c := range clients {
+		if !c.Active(now) || now.Sub(c.Created) < idleAfter {
+			continue
+		}
+		last, counted := s.lastUsed(c.Name)
+		switch {
+		case !counted:
+		case last.IsZero():
+			idle = append(idle, t("rep.unused.never", e(c.Name)))
+		case now.Sub(last) >= idleAfter:
+			idle = append(idle, t("rep.unused.one", e(c.Name), last.Format("02.01"), durationIn(l, now.Sub(last))))
+		}
+	}
+	if len(idle) > 0 {
+		b.WriteString("\n" + t("rep.unused") + "\n" + strings.Join(idle, "\n") + "\n")
 	}
 
 	// Access ending soon.

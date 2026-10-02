@@ -167,3 +167,43 @@ func TestExpiryWarning(t *testing.T) {
 		t.Errorf("still warned after extending:\n%s", out.String())
 	}
 }
+
+// Channels unused for two weeks are listed: the client left, or their
+// channel stopped working for them.
+func TestReportListsUnusedChannels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("REFLUX_HOME", home)
+	fakeDocker(t, "")
+	s := Store{Root: home}
+	now := time.Now()
+	add := func(name string, created time.Time, traffic string) {
+		c, err := s.Add(name, "mailru", testURL+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Created = created
+		s.Save(c)
+		if traffic != "" {
+			os.MkdirAll(s.stateDir(name), 0o700)
+			writeFile(t, s.trafficPath(name), traffic)
+		}
+	}
+	month := now.AddDate(0, 0, -30)
+	day := func(d time.Time) string { return d.Format(time.DateOnly) }
+	add("gone", month, `{"days":{"`+day(now.AddDate(0, 0, -20))+`":{"down":5000000,"up":1},"`+day(now.AddDate(0, 0, -2))+`":{"down":900,"up":900}}}`)
+	add("never", month, `{"days":{}}`)
+	add("active", month, `{"days":{"`+day(now)+`":{"down":5000000,"up":1}}}`)
+	add("fresh", now.AddDate(0, 0, -1), `{"days":{}}`)
+	add("uncounted", month, "")
+	got := weeklyReport(s, langRU, "x", now.AddDate(0, 0, -7), now, now)
+	for _, want := range []string{"<b>Не пользуются две недели и дольше</b>", "• gone: последний раз " + now.AddDate(0, 0, -20).Format("02.01"), "• never: ни разу"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+	for _, not := range []string{"• active:", "• fresh:", "• uncounted:"} {
+		if strings.Contains(got, not) {
+			t.Errorf("report lists %q:\n%s", not, got)
+		}
+	}
+}
