@@ -99,6 +99,8 @@ func (b *bot) message(text string) screen {
 			return b.rename(q.name, f[0])
 		case "expire":
 			return b.expireTo(q.name, f[0])
+		case "broadcast":
+			return b.broadcastConfirm(text)
 		case "doc":
 			return b.addDoc(q.name, &Doc{Transport: transportOf(f[0]), URL: f[0]})
 		}
@@ -302,6 +304,10 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setCarrier(mode), ""
 	case "upd", "upd?", "updauto", "upd!":
 		return b.updatePress(action, arg)
+	case "bc":
+		return b.broadcastAsk(), ""
+	case "bc!":
+		return b.broadcastSend(arg), ""
 	case "rqs":
 		return b.requestsScreen(), ""
 	case "inv", "inv-":
