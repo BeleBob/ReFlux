@@ -347,5 +347,5 @@ func (b *bot) serverScreen() screen {
 			fmt.Fprintf(&t, "%s — %.0f%%\n", html.EscapeString(pu.Name), pu.Percent)
 		}
 	}
-	return screen{t.String(), keyboard{{b.btn("b.refresh", "srv"), b.btn("b.home", "home")}}}
+	return screen{t.String(), keyboard{{b.btn("b.refresh", "srv"), b.btn("b.upd.screen", "upd")}, {b.btn("b.home", "home")}}}
 }

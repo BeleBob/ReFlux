@@ -298,6 +298,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 			return b.gatewayScreen(), b.tr("ui.expired.button")
 		}
 		return b.setCarrier(mode), ""
+	case "upd", "upd?", "updauto", "upd!":
+		return b.updatePress(action, arg)
 	case "rqs":
 		return b.requestsScreen(), ""
 	case "rq", "rq1":

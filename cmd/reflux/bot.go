@@ -41,6 +41,8 @@ type botConfig struct {
 	// °C, 0 for the sensor's own; percent busy for cpuBusyFor, 0 for 90.
 	TempWarn int `json:"temp_warn,omitempty"`
 	CPUWarn  int `json:"cpu_warn,omitempty"`
+	// AutoUpdate: new images are put in at night (imageupdates.go).
+	AutoUpdate bool `json:"auto_update,omitempty"`
 }
 
 func (s Store) botConfigPath() string { return filepath.Join(s.Root, "telegram.json") }
@@ -273,6 +275,9 @@ type bot struct {
 	linkTo *tgUser         // who pressed "link to me"
 	mon    monitor
 	outbox []string // alerts not delivered yet
+	// quietUntil: an update the bot ran restarts egress and the nodes;
+	// what that breaks for a minute is logged, not sent (imageupdates.go).
+	quietUntil time.Time
 }
 
 // awaiting is a question the bot asked: the owner's next plain message
@@ -353,6 +358,9 @@ func (b *bot) watch() {
 		b.mu.Lock()
 		b.sendReport(time.Now())
 		b.notifyRequests()
+		if c, err := b.s.loadBotConfig(); err == nil {
+			b.checkUpdates(time.Now(), c.AutoUpdate)
+		}
 		b.mu.Unlock()
 		time.Sleep(checkEvery)
 	}
@@ -374,6 +382,9 @@ func (b *bot) check(first bool) []string {
 		if !b.mute[category(a.key)] {
 			news = append(news, a.text(b.lang))
 		}
+	}
+	if now.Before(b.quietUntil) {
+		news = nil
 	}
 	if first {
 		warns, fails := count(fs)

@@ -76,6 +76,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   restarts). The bot logs its alerts to `events.jsonl` in both languages, and
   counts each minute whether the world and Russia worked into `uptime.json`
   (`uptime.go`: the weekly report and the gateway page show the share).
+  Image updates (`imageupdates.go`): the bot asks ghcr.io anonymously for the
+  images' digests every 6 h (`updates.json`), offers an update once per new set,
+  runs `updateImages` (= `reflux update`) on the button or, with `auto_update`,
+  between 4 and 5 at night, and keeps the restart's alerts quiet for 5 minutes.
   `reflux backup` (`backup.go`) archives the data directory (minus locks,
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on
