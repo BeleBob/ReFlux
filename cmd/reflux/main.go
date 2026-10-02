@@ -390,6 +390,7 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 		return nil
 	}
 	live := nodeStatuses(s, clients)
+	seen := s.lastSeen()
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tTRANSPORT\tACCESS\tNODE\tCLIENT\tDOWN\tUP\tNOTE")
 	now := time.Now()
@@ -401,6 +402,9 @@ func printClients(s Store, stdout io.Writer, states map[string]string) error {
 		client, down, up := "-", "-", "-"
 		if st, ok := live[c.Name]; ok {
 			client = "offline"
+			if t := seen[c.Name]; !t.IsZero() {
+				client = "offline, " + durationIn(langEN, now.Sub(t)) + " ago"
+			}
 			if st.Connected {
 				client = "online"
 			}
