@@ -49,8 +49,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 
 ## ReFlux components (all new files; no upstream file is changed)
 
-- `cmd/reflux` — host CLI (`add/list/show/pause/resume/expire/revoke/apply/update/
-  restart/status/logs/heal/doctor/bot/web/backup/restore`). Nodes serve the core's IPC bridge
+- `cmd/reflux` — host CLI (`setup/add/list/show/pause/resume/expire/revoke/apply/update/
+  restart/status/logs/heal/doctor/bot/web/backup/restore`). `reflux setup`
+  (`setup.go`) installs a server as a rerunnable wizard: each step checks first,
+  asks before sudo, stops when the owner must act (re-login, kernel module);
+  `--check` changes nothing. Its route unit text must match
+  `deploy/reflux/host/reflux-egress-route.service` (test). Nodes serve the core's IPC bridge
   (`IPCSocket = /state/ipc.sock`); `list`/`status`/`doctor` read who is online and
   traffic from it. `render` re-syncs `node.conf` from `client.json`; `apply`
   recreates nodes started before their `node.conf` changed. `reflux bot` is a
@@ -130,11 +134,17 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   return; after a restart it starts with the owner's choice, else the last world
   server that held `rememberAfter` (`world-last` in the `egress-state` volume). Never exits on errors: nodes share its netns; after an egress
   restart `reflux heal` (cron) recreates the stranded nodes.
-- `deploy/reflux/egress/Dockerfile` (build from repo root),
+- `deploy/reflux/install.sh` (release asset: downloads `reflux`, checks
+  SHA256SUMS, runs `reflux setup`; `TestInstallScript` runs it),
+  `deploy/reflux/egress/Dockerfile` (build from repo root),
   `deploy/reflux/host/reflux-egress-route.service` (host `ip rule`, tied to awg0),
   `docs/reflux/SERVER.ru.md` (operator guide).
-- Workflows: `reflux-images.yml` (reflux-node + reflux-egress → GHCR),
-  `reflux-release.yml` (`reflux-v*` tag → reflux binaries).
+- Workflows: `reflux-images.yml` (reflux-node + reflux-egress → GHCR; `main`,
+  and `<version>` + `latest` for a `reflux-v*` tag), `reflux-release.yml`
+  (`reflux-v*` tag → reflux binaries built with `-X main.releaseVersion=<v>
+  -X main.imageTag=latest`, the installer, SHA256SUMS, notes from the version's
+  section of `docs/reflux/CHANGELOG.md`, which `TestChangelog` checks). Add
+  user-facing changes under «Не выпущено» there.
 - Mail.ru carrier = OnlyOffice co-authoring over Socket.IO. When a second
   editor joins, the server locks the document for the first one
   (`connectState` with `waitAuth: true`); it must answer `unLockDocument`
