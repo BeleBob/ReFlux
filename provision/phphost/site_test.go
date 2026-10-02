@@ -1,6 +1,7 @@
 package phphost
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
@@ -248,4 +249,61 @@ func freePort(t *testing.T) int {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// Seen live: one domain, two servers. The device's DNS pointed at a stranger's nginx (404 for everything), the public
+// resolvers at the real host. Whatever answered first must not decide: an answer that is not the node's sends the
+// request on to the other addresses, and the one that is the node's is remembered.
+func TestCheckFindsTheRealServerWhenTheFirstAddressIsAStrangers(t *testing.T) {
+	stranger := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "<html><center><h1>404 Not Found</h1></center><hr><center>nginx</center></html>", http.StatusNotFound)
+	}))
+	t.Cleanup(stranger.Close)
+	real := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"phpbox":"0.4","carrier":"cupsonline","php":"8.2","missing":[],"state_dir":true,"parser":true}`)
+	}))
+	t.Cleanup(real.Close)
+
+	old := lookupHost
+	lookupHost = func(ctx context.Context, server, host string) []string {
+		if server == "" {
+			return []string{"192.0.2.1"} // the device's own DNS: the stranger
+		}
+		return []string{"192.0.2.2"} // public resolvers: the real one
+	}
+	t.Cleanup(func() { lookupHost = old })
+
+	addrs := map[string]string{"192.0.2.1": stranger.Listener.Addr().String(), "192.0.2.2": real.Listener.Addr().String()}
+	var asked []string
+	s := &Site{URL: "http://node.example", Token: "t", Carrier: "cupsonline"}
+	s.dialHook = func(ctx context.Context, network, ip, port string) (net.Conn, error) {
+		asked = append(asked, ip)
+		return (&net.Dialer{}).DialContext(ctx, network, addrs[ip])
+	}
+	st, err := s.Check(ctx(t))
+	if err != nil || st == nil || st.Version != "0.4" {
+		t.Fatalf("Check: %+v %v (addresses tried: %v)", st, err, asked)
+	}
+	if len(asked) == 0 || asked[0] != "192.0.2.2" {
+		t.Errorf("public resolvers' answer should be tried first, tried %v", asked)
+	}
+
+	// Public resolvers saying nothing and the device's DNS giving the stranger first, then the real one:
+	// the content decides, and the winner is remembered.
+	lookupHost = func(ctx context.Context, server, host string) []string {
+		if server == "" {
+			return []string{"192.0.2.1", "192.0.2.2"}
+		}
+		return nil
+	}
+	s2 := &Site{URL: "http://node.example", Token: "t", Carrier: "cupsonline"}
+	s2.dialHook = func(ctx context.Context, network, ip, port string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addrs[ip])
+	}
+	if st, err := s2.Check(ctx(t)); err != nil || st == nil {
+		t.Fatalf("Check with the stranger first: %+v %v", st, err)
+	}
+	if s2.pin != "192.0.2.2" {
+		t.Errorf("the address that answered as the node should be remembered, pin = %q", s2.pin)
+	}
 }

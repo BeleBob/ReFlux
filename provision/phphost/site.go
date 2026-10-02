@@ -1,6 +1,7 @@
 package phphost
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -10,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +33,12 @@ type Site struct {
 	Token   string
 	Carrier string // "cupsonline" or "mailru": which exit file to talk to
 	Client  *http.Client
+
+	mu        sync.Mutex
+	ownClient bool                                                                  // Client was made here (not handed in), so it may be paired with pinned ones
+	pin       string                                                                // the address that last answered as the node: asked first from then on
+	ips       map[string][]string                                                   // host -> candidate addresses (resolve.go)
+	dialHook  func(ctx context.Context, network, ip, port string) (net.Conn, error) // tests only
 }
 
 func exitFile(carrier string) string {
@@ -48,9 +57,18 @@ func (s *Site) client() *http.Client {
 	// account's own domain), or a self-signed one on a custom domain the user pointed here: the node behind it can
 	// be perfectly fine. Checking the certificate would refuse a working site over a paperwork mismatch we cannot
 	// fix anyway - the token in the URL is what actually proves this is the user's own node, not the TLS chain.
-	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, DialContext: s.dialContext}
 	s.Client = &http.Client{Jar: jar, Timeout: 30 * time.Second, Transport: tr}
+	s.ownClient = true
 	return s.Client
+}
+
+// pinnedClient is client() but always connecting to ip, sharing its cookies (the host's browser check is per
+// address too, so an answer from another address may need it solved there).
+func (s *Site) pinnedClient(ip string) *http.Client {
+	base := s.client()
+	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, DialContext: s.dialFixed(ip)}
+	return &http.Client{Jar: base.Jar, Timeout: 15 * time.Second, Transport: tr}
 }
 
 func (s *Site) endpoint(q url.Values) (string, error) {
@@ -114,7 +132,11 @@ func challengePage(body []byte) bool {
 
 // get fetches one URL, passing the host's browser check when it can.
 func (s *Site) get(ctx context.Context, raw string) (int, []byte, error) {
-	cl := s.client()
+	return s.getWith(ctx, s.client(), raw)
+}
+
+// getWith is get over a given client.
+func (s *Site) getWith(ctx context.Context, cl *http.Client, raw string) (int, []byte, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
@@ -156,27 +178,80 @@ func altScheme(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// getEither is get, but when the connection itself fails (not a bad status from a server that did answer) it also
-// tries the other scheme before giving up. A free host is often plain HTTP only, or redirects https oddly, or the
-// address the user typed just has the wrong scheme for it - any of those looks exactly like "unreachable" until
-// something actually tries the other one. Not used for a=run: that request IS the node, and firing it twice would
-// start two.
-func (s *Site) getEither(ctx context.Context, raw string) (int, []byte, error) {
-	code, body, err := s.get(ctx, raw)
-	var e *Error
-	if err == nil || !errors.As(err, &e) || e.Code != CodeSiteUnreachable {
-		return code, body, err
+// ours reports whether an answer came from a phpbox node at all: its own refusal ("no", when the token is wrong) or
+// a JSON object. Anything else - a host's 404 page, some other site, a parking page - is someone else answering.
+func ours(code int, body []byte) bool {
+	t := bytes.TrimSpace(body)
+	return string(t) == "no" || (len(t) > 0 && t[0] == '{' && json.Valid(t))
+}
+
+// getValid is get, but it does not take the first answer at face value. If the answer is not the node's (see ours),
+// or the connection fails, it goes on: the other scheme (a free host is often plain HTTP only, or the user typed the
+// wrong one), and every other address the site resolves to (resolve.go: a device's DNS can point at a server that
+// is not the site's). The first answer that is the node's wins, and its address is remembered for this Site's later
+// requests; when none is, the first answer given is returned as it was, so the caller can say what it saw.
+// Not used for a=run: that request IS the node, and sending it to several addresses would start several.
+func (s *Site) getValid(ctx context.Context, raw string) (int, []byte, error) {
+	var (
+		haveResp  bool
+		firstCode int
+		firstBody []byte
+		errs      []string
+		firstErr  error
+	)
+	note := func(code int, body []byte, err error) {
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			errs = append(errs, err.Error())
+			return
+		}
+		if !haveResp {
+			haveResp, firstCode, firstBody = true, code, body
+		}
 	}
-	alt, aerr := altScheme(raw)
-	if aerr != nil {
-		return code, body, err
+	urls := []string{raw}
+	if alt, err := altScheme(raw); err == nil {
+		urls = append(urls, alt)
 	}
-	code2, body2, err2 := s.get(ctx, alt)
-	if err2 != nil {
-		// Both schemes failed: say so with both reasons, not just the first one.
-		return 0, nil, fail(CodeSiteUnreachable, e.Param, fmt.Sprintf("phphost: the site did not answer on either scheme (%s; then %s)", err, err2), nil)
+	for _, u := range urls {
+		code, body, err := s.getWith(ctx, s.client(), u)
+		if err == nil && ours(code, body) {
+			return code, body, nil
+		}
+		note(code, body, err)
+		if !s.ownClient { // a client handed in is used as it is
+			continue
+		}
+		pu, perr := url.Parse(u)
+		if perr != nil {
+			continue
+		}
+		ips := s.ordered(ctx, pu.Hostname())
+		for i, ip := range ips {
+			if i == 0 {
+				continue // the default client has just asked this one first
+			}
+			code, body, err := s.getWith(ctx, s.pinnedClient(ip), u)
+			if err == nil && ours(code, body) {
+				s.setPin(ip)
+				return code, body, nil
+			}
+			note(code, body, err)
+		}
 	}
-	return code2, body2, nil
+	if haveResp {
+		return firstCode, firstBody, nil
+	}
+	if len(errs) > 1 {
+		host := ""
+		if pu, err := url.Parse(raw); err == nil {
+			host = pu.Host
+		}
+		return 0, nil, fail(CodeSiteUnreachable, host, fmt.Sprintf("phphost: the site did not answer on any scheme or address tried (%s)", strings.Join(errs, "; ")), nil)
+	}
+	return 0, nil, firstErr
 }
 
 // snippet is body, trimmed and flattened to one line, for a log a person can actually read.
@@ -206,7 +281,7 @@ func (s *Site) Check(ctx context.Context) (*Status, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, body, err := s.getEither(ctx, raw)
+	code, body, err := s.getValid(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +324,7 @@ func (s *Site) Node(ctx context.Context, target string) (*NodeState, error) {
 	if err != nil {
 		return nil, err
 	}
-	code, body, err := s.getEither(ctx, raw)
+	code, body, err := s.getValid(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +395,6 @@ func (s *Site) Stop(ctx context.Context, target string) error {
 	if err != nil {
 		return err
 	}
-	_, _, err = s.getEither(ctx, raw)
+	_, _, err = s.getValid(ctx, raw)
 	return err
 }
