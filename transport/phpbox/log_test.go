@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,13 +15,35 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
+// lockedBuffer is a bytes.Buffer safe for the goroutines fn leaves
+// logging while the test reads what they wrote.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
 // captureLog runs fn at the given debug level and returns what was logged.
 func captureLog(t *testing.T, level int, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	utils.SetOutput(&buf)
 	utils.SetLevel(level)
-	t.Cleanup(func() { utils.SetLevel(0) })
+	t.Cleanup(func() {
+		utils.SetLevel(0)
+		utils.SetOutput(os.Stderr)
+	})
 	fn()
 	return buf.String()
 }
