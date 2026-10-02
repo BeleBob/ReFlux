@@ -171,6 +171,9 @@ func (b *bot) clientsScreen() screen {
 	if len(clients) > 0 {
 		t.WriteString("\n<i>" + b.tr("ui.clients.hint") + "</i>")
 	}
+	if b.clientBot != nil {
+		kb = append(kb, []tgButton{b.btn("b.bc", "bc")})
+	}
 	kb = append(kb, []tgButton{b.btn("b.add", "add"), b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }

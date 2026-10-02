@@ -68,12 +68,17 @@ type clientBot struct {
 	// last got the link.
 	asking map[int64]time.Time
 	qrAt   map[int64]time.Time
-	st     clientBotState
+	// reporting: people writing what does not work; sosAt: when each last
+	// told the owner (clientmsg.go).
+	reporting map[int64]time.Time
+	sosAt     map[int64]time.Time
+	st        clientBotState
 }
 
 func newClientBot(s Store, c clientBotConfig, owner *bot) *clientBot {
 	cb := &clientBot{s: s, t: newTelegram(c.Token), owner: owner,
-		asking: map[int64]time.Time{}, qrAt: map[int64]time.Time{}}
+		asking: map[int64]time.Time{}, qrAt: map[int64]time.Time{},
+		reporting: map[int64]time.Time{}, sosAt: map[int64]time.Time{}}
 	if b, err := os.ReadFile(s.clientBotStatePath()); err == nil {
 		json.Unmarshal(b, &cb.st)
 	}
@@ -179,6 +184,12 @@ func (cb *clientBot) seen(u *tgUser) {
 
 func (cb *clientBot) message(u *tgUser, text string) screen {
 	l := langOf(u.LanguageCode)
+	if at, ok := cb.reporting[u.ID]; ok && !strings.HasPrefix(text, "/") {
+		delete(cb.reporting, u.ID)
+		if time.Since(at) < clientAskFor {
+			return cb.sos(u, text)
+		}
+	}
 	if at, ok := cb.asking[u.ID]; ok && !strings.HasPrefix(text, "/") {
 		delete(cb.asking, u.ID)
 		if time.Since(at) < clientAskFor {
@@ -199,6 +210,7 @@ func (cb *clientBot) press(u *tgUser, data string) screen {
 	switch data {
 	case "home":
 		delete(cb.asking, u.ID)
+		delete(cb.reporting, u.ID)
 		return cb.home(u)
 	case "ask":
 		cb.asking[u.ID] = time.Now()
@@ -221,6 +233,10 @@ func (cb *clientBot) press(u *tgUser, data string) screen {
 		return cb.help(l)
 	case "ext":
 		return cb.extend(u)
+	case "sos":
+		return cb.sosAsk(u)
+	case "sos!":
+		return cb.sos(u, "")
 	}
 	return cb.home(u)
 }
@@ -249,7 +265,7 @@ func (cb *clientBot) home(u *tgUser) screen {
 		if _, month, ok := cb.s.trafficNow(c.Name, now); ok {
 			text += "\n" + tr(l, "cb.traffic", humanBytes(month.Down), humanBytes(month.Up))
 		}
-		kb := keyboard{{cb.btn(l, "b.cb.qr", "qr"), cb.btn(l, "b.cb.help", "help")}}
+		kb := keyboard{{cb.btn(l, "b.cb.qr", "qr"), cb.btn(l, "b.cb.help", "help")}, {cb.btn(l, "b.cb.sos", "sos")}}
 		switch {
 		case rerr == nil && r.State == reqPending:
 			text += "\n\n" + tr(l, "cb.extend.waiting")

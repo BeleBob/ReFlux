@@ -111,8 +111,10 @@ func cmdBot(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
 		if cc, ok, err := s.loadClientBot(); err != nil {
 			log.Printf("client bot: %v", err)
 		} else if ok {
+			cb := newClientBot(s, cc, owner)
+			owner.clientBot = cb
 			go func() {
-				if err := newClientBot(s, cc, owner).run(); err != nil {
+				if err := cb.run(); err != nil {
 					log.Printf("client bot stopped: %v", err)
 				}
 			}()
@@ -278,6 +280,10 @@ type bot struct {
 	// quietUntil: an update the bot ran restarts egress and the nodes;
 	// what that breaks for a minute is logged, not sent (imageupdates.go).
 	quietUntil time.Time
+	// clientBot sends the owner's messages to the clients; broadcastText
+	// waits for the owner's yes (clientmsg.go).
+	clientBot     *clientBot
+	broadcastText string
 }
 
 // awaiting is a question the bot asked: the owner's next plain message
