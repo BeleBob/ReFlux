@@ -42,7 +42,7 @@ func (b *bot) btn(id, data string, args ...any) tgButton {
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
-var botCommands = []string{"start", "doctor", "clients", "add", "show", "docs", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "report", "requests", "web", "settings", "help"}
+var botCommands = []string{"start", "doctor", "clients", "add", "show", "docs", "pause", "resume", "expire", "rename", "revoke", "restart", "logs", "server", "speedtest", "gateway", "report", "requests", "invite", "web", "settings", "help"}
 
 // setMenu fills the command menu in the bot's language. The caller holds
 // b.mu.
@@ -126,6 +126,8 @@ func (b *bot) message(text string) screen {
 		return b.reportScreen()
 	case "/requests":
 		return b.requestsScreen()
+	case "/invite":
+		return b.invitesScreen("")
 	case "/settings", "/lang":
 		return b.settingsScreen()
 	case "/add":
@@ -300,6 +302,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setCarrier(mode), ""
 	case "rqs":
 		return b.requestsScreen(), ""
+	case "inv", "inv-":
+		return b.invitePress(action, arg), ""
 	case "rq", "rq1":
 		return b.requestPress(action, arg), ""
 	case "dc", "dp", "du", "dr", "dr!":

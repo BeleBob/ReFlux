@@ -480,6 +480,22 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 {{if not $any}}<p class="mute">{{t "ui.rq.none"}}</p>{{end}}
 <p class="mute">{{t "web.rq.hint" .Free}}</p>
 </div>
+<div class="card" id="invites">
+<h2>{{t "web.invite.title"}}</h2>
+<p class="mute">{{t "web.invite.hint"}}</p>
+<form method="post" action="/invites/new" class="row">
+<div class="choices" style="margin:0">
+<label><input type="radio" name="how" value="+30" checked><span>{{t "rq.how.30"}}</span></label>
+<label><input type="radio" name="how" value="+90"><span>{{t "rq.how.90"}}</span></label>
+<label><input type="radio" name="how" value="never"><span>{{t "rq.how.never"}}</span></label>
+</div>
+<input type="text" name="note" maxlength="100" placeholder="{{t "web.add.note.example"}}">
+<button class="primary">{{t "b.invite"}}</button>
+</form>
+{{range .Invites}}<div class="rq"><p>🎟 <b>{{.How}}</b> · <span class="mute">{{t "web.invite.until" .Until}}</span>{{if .Note}} · «{{.Note}}»{{end}}</p>
+<div class="row"><code>{{.Link}}</code><form method="post" action="/invites/{{.Code}}"><button class="danger">{{t "web.invite.revoke"}}</button></form></div></div>
+{{end}}
+</div>
 <div class="card">
 <h2>{{t "web.rq.decided"}}</h2>
 <div class="scroll"><table>
