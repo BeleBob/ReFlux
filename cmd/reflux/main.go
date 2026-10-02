@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,6 +23,7 @@ import (
 const usage = `reflux — manage ReFlux exit nodes (one per client) on this host.
 
 USAGE
+  reflux version           the release, the commit and the images in use
   reflux add <name> --transport <type> --url <document-url> [--expires <when>] [--note <text>]
   reflux list
   reflux show <name> [--png <file>]
@@ -68,8 +70,10 @@ USAGE
 
 ENVIRONMENT
   REFLUX_HOME          data directory (default: ~/reflux)
-  REFLUX_NODE_IMAGE    exit node image (default: ghcr.io/belebob/reflux-node:main)
-  REFLUX_EGRESS_IMAGE  egress image (default: ghcr.io/belebob/reflux-egress:main)
+  REFLUX_NODE_IMAGE    exit node image (default: ghcr.io/belebob/reflux-node:main,
+                       :latest for a release build)
+  REFLUX_EGRESS_IMAGE  egress image (default: ghcr.io/belebob/reflux-egress:main,
+                       :latest for a release build)
 
 Transports: %s. The link and the key printed by add/show give access to
 the channel: pass them to its client only.
@@ -94,6 +98,12 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) == 1 && (args[0] == "version" || args[0] == "--version") {
+		o := options()
+		fmt.Fprintf(stdout, "reflux %s (commit %s, %s)\nnode image   %s\negress image %s\n",
+			version(), commit(), runtime.Version(), o.NodeImage, o.EgressImage)
+		return nil
+	}
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprintf(stdout, usage, strings.Join(supportedTransports(), ", "))
 		return nil
@@ -282,10 +292,15 @@ func env(key, def string) string {
 	return def
 }
 
+// imageTag is the images' tag: main for a build of the main branch,
+// latest (the newest release's images) for a release build
+// (reflux-release.yml sets it with -ldflags).
+var imageTag = "main"
+
 func options() Options {
 	return Options{
-		NodeImage:   env("REFLUX_NODE_IMAGE", "ghcr.io/belebob/reflux-node:main"),
-		EgressImage: env("REFLUX_EGRESS_IMAGE", "ghcr.io/belebob/reflux-egress:main"),
+		NodeImage:   env("REFLUX_NODE_IMAGE", "ghcr.io/belebob/reflux-node:"+imageTag),
+		EgressImage: env("REFLUX_EGRESS_IMAGE", "ghcr.io/belebob/reflux-egress:"+imageTag),
 		UID:         os.Getuid(),
 		GID:         os.Getgid(),
 	}

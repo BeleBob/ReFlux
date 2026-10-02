@@ -84,8 +84,21 @@ func readTunnels() []tunnel {
 	return out
 }
 
-// version is the commit reflux was built from.
+// releaseVersion is set at build time for a release (-ldflags
+// "-X main.releaseVersion=1.2.3"; reflux-release.yml).
+var releaseVersion string
+
+// version is the release reflux was built as, else its commit.
 func version() string {
+	if releaseVersion != "" {
+		return "v" + releaseVersion
+	}
+	return commit()
+}
+
+// commit is the commit reflux was built from ("dev" when unknown, a "+"
+// for uncommitted changes).
+func commit() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "dev"

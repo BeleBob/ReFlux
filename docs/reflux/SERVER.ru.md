@@ -66,6 +66,25 @@ AmneziaWG-туннели и никогда не уходит с адреса с�
    ```
    В выводе `status` обе строки `world` и `russia` должны быть `up`.
 
+## Версии и релизы
+
+`reflux version` показывает версию утилиты, коммит и образы, которые она
+использует. Релизы публикуются на GitHub как `reflux-vX.Y.Z`: в них
+`reflux-linux-amd64`, `reflux-linux-arm64`, установщик и `SHA256SUMS`, а
+описание — из [CHANGELOG](CHANGELOG.md). Утилита из релиза по умолчанию
+берёт образы `:latest` (образы последнего релиза), сборка из ветки `main` —
+образы `:main`; переопределить можно `REFLUX_NODE_IMAGE` и
+`REFLUX_EGRESS_IMAGE`.
+
+Выпуск релиза: перенесите в `docs/reflux/CHANGELOG.md` всё из «Не выпущено» в
+раздел `## [X.Y.Z] - дата`, слейте в `main` и поставьте тег:
+
+```sh
+git tag reflux-vX.Y.Z && git push origin reflux-vX.Y.Z
+```
+
+GitHub соберёт утилиту и образы (`X.Y.Z` и `latest`) и опубликует релиз.
+
 ## Клиенты
 
 ```sh
