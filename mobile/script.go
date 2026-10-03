@@ -12,25 +12,17 @@ package mobile
 // Picking a real script transport in a profile is a later step.
 
 import (
-	"crypto/sha256"
 	"embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/script"
 )
-
-// officialScriptKey is the OpenFlux project's own ed25519 signing key (hex).
-// A script signed by it is shown as a first-party transport; every other key
-// is an unknown author the user pins on trust (TOFU).
-const officialScriptKey = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756a289ae91354"
 
 // InspectTransport reads a downloaded transport before it is trusted or run
 // and returns a JSON report for the trust dialog, WITHOUT running open() or
@@ -41,93 +33,23 @@ const officialScriptKey = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756
 //
 // Fields: ok, name, version, params[{key,label,type,required}],
 // signature ("valid"|"invalid"|"unverified"), fingerprint (SHA-256 of the
-// key), official (bool), author, error.
+// key), official (bool), author, error. See script.InspectTrust, which this
+// wraps for gomobile (whose bindings only cross basic scalar types).
 func InspectTransport(data []byte, sig []byte, pubkeyHex string) string {
-	res := map[string]interface{}{"ok": false, "signature": "unverified"}
-	emit := func() string { b, _ := json.Marshal(res); return string(b) }
-	fail := func(stage string, err error) string {
-		res["error"] = stage + ": " + err.Error()
-		return emit()
-	}
-
-	pubkeyHex = strings.ReplaceAll(strings.TrimSpace(pubkeyHex), " ", "")
-	var pub []byte
-	if pubkeyHex != "" {
-		p, err := script.DecodePublicKeyHex(pubkeyHex)
-		if err != nil {
-			return fail("ключ автора", err)
-		}
-		pub = p
-		sum := sha256.Sum256(pub)
-		res["fingerprint"] = hex.EncodeToString(sum[:])
-		if strings.EqualFold(pubkeyHex, officialScriptKey) {
-			res["official"] = true
-			res["author"] = "OpenFlux"
-		} else {
-			res["official"] = false
-		}
-	}
-
-	var scriptSrc []byte
-	if len(data) >= 2 && data[0] == 'P' && data[1] == 'K' { // .flux (zip)
-		pkg, err := script.ReadPackage(data)
-		if err != nil {
-			return fail("пакет .flux", err)
-		}
-		scriptSrc = pkg.Script
-		if pkg.Manifest.Author != "" {
-			res["packageAuthor"] = pkg.Manifest.Author
-		}
-		if pub != nil {
-			if pkg.Verify(pub) == nil {
-				res["signature"] = "valid"
-			} else {
-				res["signature"] = "invalid"
-			}
-		}
-	} else { // bare .js
-		scriptSrc = data
-		if pub != nil && len(sig) > 0 {
-			if script.VerifyScript(scriptSrc, sig, pub) == nil {
-				res["signature"] = "valid"
-			} else {
-				res["signature"] = "invalid"
-			}
-		}
-	}
-
-	info, err := script.Inspect(scriptSrc)
-	if err != nil {
-		return fail("чтение манифеста", err)
-	}
-	res["name"] = info.Name
-	res["version"] = info.Version
-	params := make([]map[string]interface{}, 0, len(info.Params))
-	for _, p := range info.Params {
-		params = append(params, map[string]interface{}{
-			"key": p.Key, "label": p.Label, "type": p.Type, "required": p.Required,
-		})
-	}
-	res["params"] = params
-	res["ok"] = true
-	return emit()
+	b, _ := json.Marshal(script.InspectTrust(data, sig, pubkeyHex, script.OfficialKeyHex))
+	return string(b)
 }
 
 // ScriptFingerprint returns the SHA-256 (hex) of an author public key, the
 // stable id the UI shows and the user compares out of band. "" if the key
 // can't be decoded.
 func ScriptFingerprint(pubkeyHex string) string {
-	pub, err := script.DecodePublicKeyHex(strings.ReplaceAll(strings.TrimSpace(pubkeyHex), " ", ""))
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(pub)
-	return hex.EncodeToString(sum[:])
+	return script.Fingerprint(pubkeyHex)
 }
 
 // OfficialScriptKey is the first-party signing key (hex), so the app can pin
 // bundled/official transports without hardcoding it in Kotlin too.
-func OfficialScriptKey() string { return officialScriptKey }
+func OfficialScriptKey() string { return script.OfficialKeyHex }
 
 //go:embed scriptassets/echo.js scriptassets/echo.js.sig
 var scriptAssets embed.FS

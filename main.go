@@ -182,6 +182,12 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == "--make-link" {
 		os.Exit(runMakeLink(os.Args[2], os.Stdin, os.Stdout))
 	}
+	// A downloaded script transport's trust report, for an app (desktop) that
+	// cannot call transport/script in-process the way the mobile gomobile
+	// bindings do: --inspect-script --data=<path> [--sig=<path>] [--pubkey=<hex>]
+	if len(os.Args) >= 2 && os.Args[1] == "--inspect-script" {
+		os.Exit(runInspectScript(os.Args[2:], os.Stdout))
+	}
 	fmt.Print("written by p1neappleXpress\n")
 
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
@@ -219,6 +225,9 @@ func main() {
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
+	scriptPath := flag.String("script-path", "", "Path to the script transport's <name>.flux or <name>.js (needs <name>.js.sig beside a bare .js)")
+	scriptPubkey := flag.String("script-pubkey", "", "Hex-encoded ed25519 public key the script transport's signature is checked against")
+	scriptName := flag.String("script-name", "", "Carrier name for the script transport (default: the name in its own info())")
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -272,6 +281,8 @@ TRANSPORT  (single-transport mode)
   -t, --transport=cupsonline   Cups.online interview rooms.
   -t, --transport=mailru       Mail.ru Docs over WebSocket.
   -t, --transport=direct       Plain TCP to a self-hosted exit.
+  -t, --transport=script       A signed JS (goja) transport. Session only
+                               (needs --encryption-key-file): see --script-*.
   -u, --url=<URL>              Document URL.
 
 TRANSPORTS  (multi-transport session; requires --encryption-key-file)
@@ -293,6 +304,12 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --oneme-uid=<uid>        MAX user id for the oneme transport.
       --direct-dial=<addr>     DirectTransport: exit host:port (client).
       --direct-listen=<addr>   DirectTransport: listen addr on exit.
+      --script-path=<path>     Script transport: path to <name>.flux or
+                               <name>.js (needs <name>.js.sig beside a bare
+                               .js). Also used with --transport=script.
+      --script-pubkey=<hex>    Script transport: author's ed25519 public key.
+      --script-name=<name>     Script transport: carrier name (default: the
+                               name the script's own info() reports).
 
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
@@ -439,6 +456,13 @@ DEPRECATED (removed in v2)
 					"token": t.Values["Token"],
 					"uid":   t.Values["UID"],
 					"exit":  isExit,
+				}
+			}
+			if spec.Type == "script" {
+				spec.Params = map[string]interface{}{
+					"path":   t.Values["Path"],
+					"pubkey": t.Values["Pubkey"],
+					"name":   t.Values["Name"],
 				}
 			}
 			confTransports = append(confTransports, spec)
@@ -656,6 +680,7 @@ DEPRECATED (removed in v2)
 				"listen":  *directListen,
 				"is_exit": isExit,
 			},
+			"script": {"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName},
 		}
 		specs = buildTransportSpecs(parsed, urls, extra)
 	} else {
@@ -675,6 +700,11 @@ DEPRECATED (removed in v2)
 		if *transportType == "direct" {
 			specs[0].Params = map[string]interface{}{
 				"dial": *directDial, "listen": *directListen, "is_exit": isExit,
+			}
+		}
+		if *transportType == "script" {
+			specs[0].Params = map[string]interface{}{
+				"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName,
 			}
 		}
 	}

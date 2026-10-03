@@ -10,6 +10,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
@@ -58,6 +59,30 @@ func transportFactory(baseCfg transport.TransportConfig, isExit bool) manager.Fa
 			uid, _ := strconv.ParseInt(uidStr, 10, 64)
 			exit, _ := cfg.Params["exit"].(bool)
 			return oneme.NewOneMeTransport(exit, token, uid, baseCfg), nil
+		case "script":
+			// A JS (goja) script transport. cfg.Params carries the on-disk
+			// script ("path" to <name>.flux or <name>.js, its .sig verified
+			// against the pinned "pubkey") plus whatever the script's own
+			// info().params asked the operator for. script.New verifies the
+			// signature before the script is ever evaluated, so a swapped
+			// file on disk fails closed here, not at connect.
+			str := func(key string) string {
+				v, _ := cfg.Params[key].(string)
+				return v
+			}
+			scriptPath := str("path")
+			if scriptPath == "" {
+				return nil, fmt.Errorf("script: не указан путь к скрипту")
+			}
+			pub, err := script.DecodePublicKeyHex(str("pubkey"))
+			if err != nil {
+				return nil, fmt.Errorf("script: ключ автора: %w", err)
+			}
+			name := str("name")
+			if name == "" {
+				name = "script"
+			}
+			return script.New(name, scriptPath, pub, cfg.URL, cfg.Params, baseCfg)
 		case "direct":
 			dcfg := transport.DefaultDirectConfig()
 			if v, ok := cfg.Params["listen"].(string); ok {
