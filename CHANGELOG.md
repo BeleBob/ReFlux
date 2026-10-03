@@ -5,6 +5,23 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- Script transports can now ask for a setup/login page the same way the
+  native Yandex/mailru transports ask for a captcha: `raise("needsSetup"/
+  "captchaRequired", {url|html, reason})` reaches `ErrorNotifier` with an
+  `html` field alongside `url` (`transport/error_notifier.go`,
+  `transport/manager`, `transport/ipc`, `transport/control`) for a page
+  the script built itself, not just a real site.
+- `httpserver.listen(handler, port?)` - a loopback-only HTTP server a
+  script can run for its own setup mini-app (`transport/script/
+  host_httpserver.go`); handler may be sync or async.
+- `--inspect-script` CLI subcommand and `transport/script.InspectTrust` -
+  one shared signature-verification path for the CLI, gomobile, and the
+  desktop app (`JvmPlatformServices`), replacing duplicated logic.
+- Nightly CLI prerelease channel (`.github/workflows/nightly.yml`),
+  matching the Android/Desktop apps' existing nightly channels.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added
