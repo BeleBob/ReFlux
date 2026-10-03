@@ -1,0 +1,154 @@
+# Scripted (JS) transports
+
+`transport/script` hosts JS-defined transports inside a per-transport
+[goja](https://github.com/dop251/goja) runtime. A script transport is one
+signed `.js` file (or a signed `.flux` package) that implements an entire
+transport - auth flow, wire framing, reconnect/keepalive policy - on top of
+a small host API the Go side injects. The Go side only does real I/O (HTTP,
+WebSocket, UDP, timers) and pumps callbacks into the script's own event
+loop; everything else is JavaScript. The full contract lives in
+[`transport/script/js/template.js`](../transport/script/js/template.js) -
+read that before writing one.
+
+Use `--transport=script` (session only, needs
+`--encryption-key-file`) with `--script-path=<name>.flux|.js`,
+`--script-pubkey=<hex>` and optionally `--script-name=<name>`. See
+[sessions.md](sessions.md) for how a script transport joins a session like
+any other.
+
+## What ships today
+
+`transport/script/js/` has the shipped scripts: `yandex.js`, `vyandex.js`,
+`boards.js`, `mailru.js`, `cupsonline.js`, `oneme-webrtc.js` and
+`oneme-iceinject.js` (each with a detached `.sig`) - scripted ports of the
+native transports, used as the real test bed for the engine. `js/src/` holds
+their shared, un-bundled sources (see `cmd/scriptbundle` below).
+
+## The host API
+
+Everything injected into a script's runtime is deliberately unrestricted -
+no capability scoping, no allowlisted hosts. The only gate a script passes
+through is the signature check (see "Trust model" below), done once before
+any of this ever runs:
+
+- `http.fetch(opts)` / `http.newSession()` - HTTP requests with redirects
+  followed or manual, and an isolated cookie jar per logical session (for a
+  transport that juggles several independent sessions on one domain, e.g.
+  several cups.online rooms).
+- `ws.open(url, headers?, opts?)` - a WebSocket `Socket` with
+  `send`/`close`/`onmessage`/`onclose`, dispatched onto the script's own
+  event loop so JS never blocks on I/O. `opts.readTimeoutMs` fires `onclose`
+  on a silent connection instead of hanging forever.
+- `udp.open(addr, opts?)` - a dialed (fixed-remote) UDP datagram socket,
+  same shape as `ws.open`'s socket.
+- `httpserver.listen(handler, port?)` - **a script's own setup/mini-app
+  page**: when a static HTML blob (`raise()`, below) isn't enough - a
+  script that needs its own routes, a form that posts back to itself, a
+  real origin for its own `fetch()` calls - it serves one over a real
+  HTTP server instead. Always binds `127.0.0.1` only (a listening socket is
+  the one host primitive that can reach *other* local processes, so it
+  never takes a host argument). The app opens a WebView/browser at the
+  returned `addr`, exactly like it does for a real site's login page.
+- `cookieJar.get()` / `.set(values, domain?)` - the transport's own cookie
+  jar, scoped to `info().cookieDomain` (or its parent domain, if
+  `scopeCookiesToParentDomain` is set - needed when a captcha/login solve
+  on one subdomain must reach a sibling subdomain).
+- `base64`, `text` (encode/decode), `url.parse`, `gzip`, `lz4.decompressBlock`,
+  `crypto.sha256` - generic codecs so a script's own wire format doesn't
+  need a hand-rolled JS implementation.
+- `crypto.solvePow(prefixHex, complexity)` - the one hot loop that stays
+  native: Yandex SmartCaptcha's proof-of-work needs millions of SHA-256
+  attempts, and a Go<->JS call per attempt would dwarf the cost of the hash
+  itself. Everything *around* the PoW (fetching the challenge, building the
+  fingerprint, posting the answer) still lives in the script.
+- `concurrency.pool(n)` - bounded fan-out (`pool.run(fn)` gates at most `n`
+  concurrent in-flight calls through a Go semaphore) for a Volga-style
+  transport that needs real worker-pool concurrency, which goja's
+  single-threaded runtime can't provide on its own.
+- `emit(bytes)` - deliver one received application packet up to the core.
+- `setState(state, err?)` - `"connecting" | "connected" | "reconnecting" |
+  "degraded" | "dead"`. This is the **only** way `IsConnected()` on the Go
+  side ever flips true; the core has no other way to know a script's link
+  health.
+- `raise(kind, payload)` / `onEvent(kind, payload)` - out-of-band signaling,
+  in both directions:
+  - `raise(kind, payload)` (JS -> Go) carries an event upward - any `kind`
+    reaches whatever the host registered via `SetEventHandler`;
+    `"captchaRequired"` and `"needsSetup"` additionally reach
+    `SetErrorNotifier`, the same path the native yandex/mailru transports'
+    captcha signal takes, carrying `payload.url` (a real site),
+    `payload.html` (the script's own page) and `payload.reason`.
+  - `onEvent(kind, payload)` (Go -> JS) is the script's optional export for
+    the reverse direction - an inject the host wants to push down (for
+    example applying externally-supplied cookies after the app solved a
+    captcha). A script that doesn't define `onEvent` silently ignores it.
+
+## Transport.info()
+
+`info()` is called once, synchronously, right after the script is
+evaluated - before `open()`. All fields are optional except `name`. It
+declares:
+
+- `name`, `version`, `cookieDomain`, `scopeCookiesToParentDomain`.
+- `mtu`, `reliable`, `ordered`, `halfDuplex`, `minIntervalMs` - advisory
+  only; the core never fragments, reorders or rate-limits on a script's
+  behalf unless it opts in. The default is plain passthrough.
+- `httpMaxConnsPerHost` / `httpMaxIdleConns` / `httpIdleConnTimeoutMs` - HTTP
+  connection-pool tuning, for a transport that fans out many concurrent
+  requests via `concurrency.pool`.
+- `params` - `[{key, label, type: "url"|"text"|"secret", required}]`, the
+  operator inputs the manager/CLI/UI must collect before `open()` can work.
+  `open(cfg)` receives them back as `cfg.params`.
+
+## Signing and trust (`trust.go`)
+
+Every script transport must pass a signature check before its bytes are
+ever handed to goja - there is no unsigned-but-trusted path
+(`VerifyScript`, ed25519). Freedom inside the runtime (the unrestricted host
+API above) is traded for a hard gate at the door.
+
+- A bare `.js` ships alongside a detached `<name>.js.sig`.
+- A `.flux` package (a zip: `manifest.json` + `main.js` + an optional icon +
+  `package.sig`) carries its own signature over all of those bytes,
+  length-prefixed in a fixed order (`PackagePayload`), so a legitimate
+  transport's name/author/description can't be swapped without
+  invalidating the signature. Built and signed with `cmd/scriptsign`'s
+  `pack` command.
+- `OfficialKeyHex` (in `trust.go`) is the project's own signing key; a
+  script signed by it is shown as first-party, every other key is an
+  unknown author pinned on trust (TOFU - the key arrives with the share
+  link, not inside the package).
+- `InspectTrust(data, sig, pubkeyHex, officialKeyHex)` reads a downloaded
+  transport **without ever running `open()` or touching the network** and
+  returns a `TrustReport` (name, version, params, signature
+  `valid|invalid|unverified`, fingerprint, official/author) - what an app
+  shows in its "trust this transport?" dialog, and what it stores alongside
+  the file afterwards.
+- `--inspect-script --data=<path> [--sig=<path>] [--pubkey=<hex>]` is the
+  desktop app's way into `InspectTrust`: the desktop app only ever has the
+  compiled core binary (unlike the mobile apps, which link the engine
+  in-process via gomobile), so it shells out to this subcommand and gets a
+  JSON `TrustReport` on stdout. Always exits 0 and prints a report even when
+  the script fails verification - "untrusted" is a report field, not a
+  process failure.
+
+## Dev tools (`transport/script/cmd/`)
+
+- **`scriptsign`** - `genkey`, `sign` (writes a detached `.sig`), `verify`
+  (a bare script or a `.flux`), `pack` (build and sign a `.flux` from a
+  manifest + script + optional icon).
+- **`scripttest`** - a manual, live-network smoke test: loads a signed
+  `.js` exactly as the real factory does, starts it against a real URL, and
+  prints every state/event transition and received packet until the
+  deadline. `-cookies-file` lets an out-of-band-solved captcha unblock a
+  yandex-family script. `-burst`/`-burst-size` measure real submission
+  throughput.
+- **`scriptbundle`** - inlines a script's local `require("./...")` modules
+  into one self-contained file (a plain regex scan, not a real JS parser;
+  fine for this project's own sources, not meant for arbitrary third-party
+  JS). Sign the *output* of this tool, not the pre-bundled sources - see
+  `js/src/` for the un-bundled shared code (e.g. the SmartCaptcha solver
+  shared by `yandex.js`/`vyandex.js`/`boards.js`).
+
+These three tools are also cross-compiled and published by the nightly
+channel - see [building-and-releases.md](building-and-releases.md).
