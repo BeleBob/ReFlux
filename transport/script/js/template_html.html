@@ -8,26 +8,34 @@
   contract for Transport.{info,open,write,close,onEvent}; this one is the
   contract for the page itself.
 
-  STATUS: this is the page-side half of a mechanism that is NOT WIRED yet.
-  ScriptTransport does not implement transport.ErrorNotifier, so
-  raise("needsSetup"/"captchaRequired", {html: "..."}) currently has
-  nowhere to go - see transport/script/transport.go's hostRaise and
-  transport/manager/manager.go:117. Once that lands, the flow is:
+  STATUS: the core side is wired. ScriptTransport implements
+  transport.ErrorNotifier (transport/script/transport.go); hostRaise routes
+  raise("needsSetup"/"captchaRequired", {html|url, reason}) to it exactly
+  like the native yandex/mailru captcha signal, so manager.go's existing
+  automatic wiring (Add(), matching on the interface - no script-specific
+  code there at all) picks it up. The flow:
 
     1. The script calls raise("needsSetup", { html: "<this file's content
        with its own values filled in>" }) - or {url: "..."} for a page it
-       doesn't control, exactly like the existing yandex/mailru captcha
-       flow (see transport/control/cookies.go's AuthRequiredPayload).
-    2. The core forwards it to the app (IPC on a client; the Session
-       control channel on an exit), which shows the page in its existing
-       browser surface (BrowserPage - JCEF on desktop, WebView on
-       Android), loading HTML directly (loadDataWithBaseURL-style), not
-       over a listening socket the script would have to run itself.
-    3. The page calls window.openfluxSubmit(data) when the operator is
-       done. The app's WebView wrapper intercepts that call (it does not
-       reach the network) and delivers data to the script as
-       onEvent("configured", data) - see ../template.js's onEvent.
-    4. The script stores whatever it needs from data and opens for real.
+       doesn't control (a real site) or one the script serves ITSELF over
+       httpserver.listen() for anything this static page can't do (own
+       routes, fetch() with a real origin - see host_httpserver.go).
+    2. The core forwards it to the app: IPC on a client
+       (ipc.CookiesRequestPayload.HTML), the Session control channel on an
+       exit (control.AuthRequiredPayload.HTML, via the existing
+       remote-auth-proxy if it was a URL instead).
+    3. STILL TO DO (app side, not this package): the app's existing
+       browser surface (BrowserPage - JCEF on desktop, WebView on Android)
+       needs to load HTML directly (loadDataWithBaseURL-style) when HTML
+       is set instead of a URL, and inject window.openfluxSubmit so this
+       page's "Готово" button can hand data back.
+    4. That data is delivered to the script the same way a solved
+       captcha's cookies always have been: ApplyCookies (ScriptTransport
+       already implements it) writes it into the jar and fires
+       onEvent("cookiesApplied") - the script reads it back via
+       cookieJar.get() in that handler (see ../template.js). Nothing about
+       ApplyCookies cares whether the values are real browser cookies or
+       a script's own config.
 
   window.openfluxSubmit is injected by the app; it is undefined when this
   file is opened in an ordinary browser (e.g. while designing the page),

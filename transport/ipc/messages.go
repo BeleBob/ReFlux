@@ -34,7 +34,11 @@ const MaxFrameBytes = 1 << 20
 type CookiesRequestPayload struct {
 	Transport string `json:"transport"`
 	URL       string `json:"url"`
-	Reason    string `json:"reason"`
+	// HTML is a script transport's own setup/login page (see
+	// transport/script/js/template_html.html), sent instead of URL when
+	// the transport raised one; "" for every native transport.
+	HTML   string `json:"html,omitempty"`
+	Reason string `json:"reason"`
 	// Remote marks a check the exit node needs: it must be passed from the
 	// exit's address, and the answering offer must set Remote too.
 	Remote bool `json:"remote,omitempty"`

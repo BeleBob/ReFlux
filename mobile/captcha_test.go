@@ -11,11 +11,11 @@ import (
 
 type fakeCaptchaTransport struct {
 	transport.Transport
-	notify  func(err error, name, url, reason string)
+	notify  func(err error, name, url, html, reason string)
 	applied chan map[string]string
 }
 
-func (f *fakeCaptchaTransport) SetErrorNotifier(fn func(err error, name, url, reason string)) {
+func (f *fakeCaptchaTransport) SetErrorNotifier(fn func(err error, name, url, html, reason string)) {
 	f.notify = fn
 }
 func (f *fakeCaptchaTransport) FetchCookies() (map[string]string, error) { return nil, nil }
@@ -32,7 +32,7 @@ func TestCaptchaFlow(t *testing.T) {
 	raw := &fakeCaptchaTransport{applied: make(chan map[string]string, 1)}
 	attachCaptcha("yandex", "https://docs.example/d", raw)
 
-	raw.notify(errors.New("captcha"), "yandex", "https://docs.example/d", "smartcaptcha")
+	raw.notify(errors.New("captcha"), "yandex", "https://docs.example/d", "", "smartcaptcha")
 	if PendingCaptchaURL() != "https://docs.example/d" || PendingCaptchaReason() != "smartcaptcha" {
 		t.Fatalf("pending = %q/%q", PendingCaptchaURL(), PendingCaptchaReason())
 	}

@@ -195,7 +195,7 @@ type YandexDocsTransport struct {
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
-	errNotifier func(err error, transportName, url, reason string)
+	errNotifier func(err error, transportName, url, html, reason string)
 
 	// cookiesApplied wakes a scheduleReconnectNoCaptcha wait early. Unbuffered
 	// on purpose: a send only succeeds while such a wait is in progress.
@@ -298,7 +298,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 					reason = "login"
 				}
 				if t.errNotifier != nil {
-					t.errNotifier(err, "yandex", t.url, reason)
+					t.errNotifier(err, "yandex", t.url, "", reason)
 				}
 				t.scheduleReconnectNoCaptcha(attempt)
 				return
@@ -597,7 +597,7 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 
 // SetErrorNotifier installs a callback for out-of-band errors such as
 // ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
-func (t *YandexDocsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (t *YandexDocsTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
 

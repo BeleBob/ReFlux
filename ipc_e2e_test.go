@@ -21,7 +21,7 @@ type e2eTransport struct {
 	cb        func([]byte)
 
 	notifyMu sync.Mutex
-	notify   func(error, string, string, string)
+	notify   func(error, string, string, string, string)
 
 	jarMu sync.Mutex
 	jar   map[string]string
@@ -36,7 +36,7 @@ func (t *e2eTransport) Stats() transport.TransportStats {
 	return transport.TransportStats{Connected: t.connected}
 }
 
-func (t *e2eTransport) SetErrorNotifier(fn func(error, string, string, string)) {
+func (t *e2eTransport) SetErrorNotifier(fn func(error, string, string, string, string)) {
 	t.notifyMu.Lock()
 	t.notify = fn
 	t.notifyMu.Unlock()
@@ -47,7 +47,7 @@ func (t *e2eTransport) FireCaptcha(reason string) {
 	fn := t.notify
 	t.notifyMu.Unlock()
 	if fn != nil {
-		fn(errors.New("captcha"), "yandex", "https://x", reason)
+		fn(errors.New("captcha"), "yandex", "https://x", "", reason)
 	}
 }
 
@@ -109,10 +109,11 @@ func TestCaptchaOverIPC(t *testing.T) {
 	defer srv.Close()
 
 	// Wire the captcha notifier exactly the way main.go does.
-	m.SetCaptchaNotifier(func(_name, url, reason string) {
+	m.SetCaptchaNotifier(func(_name, url, html, reason string) {
 		_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
 			Transport: "yandex",
 			URL:       url,
+			HTML:      html,
 			Reason:    reason,
 		})
 	})

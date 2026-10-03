@@ -846,21 +846,21 @@ DEPRECATED (removed in v2)
 
 			// Checks for local transports go to the app as-is; checks the
 			// exit reports are marked Remote, to be passed from its address.
-			managerInst.SetCaptchaNotifier(func(name, url, reason string) {
+			managerInst.SetCaptchaNotifier(func(name, url, html, reason string) {
 				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-					Transport: name, URL: url, Reason: reason,
+					Transport: name, URL: url, HTML: html, Reason: reason,
 				})
 			})
 			if *role == roleClient {
 				demux = transport.NewPortDemux(managerInst, authProxyPortLo, authProxyPortHi)
 				authProxy := &remoteAuthProxy{demux: demux}
-				managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
+				managerInst.SetRemoteAuthNotifier(func(name, url, html, reason string) {
 					proxy, err := authProxy.Addr()
 					if err != nil {
 						log.Printf("remote auth proxy: %v", err)
 					}
 					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-						Transport: name, URL: url, Reason: reason, Remote: true, Proxy: proxy,
+						Transport: name, URL: url, HTML: html, Reason: reason, Remote: true, Proxy: proxy,
 					})
 				})
 			}

@@ -53,6 +53,13 @@ type ScriptTransport struct {
 	lastState string
 	lastErr   string
 	onEvent   EventHandler
+	errNotifier func(err error, transportName, url, html, reason string)
+
+	// httpServers are this transport's own httpserver.listen() servers
+	// (its setup/login mini-app - see host_httpserver.go), closed in Stop
+	// so none outlives the transport.
+	httpServersMu sync.Mutex
+	httpServers   []*http.Server
 }
 
 // New builds a script transport from a signed JS file at scriptPath. pubKey
@@ -146,6 +153,23 @@ func (t *ScriptTransport) eventHandler() EventHandler {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.onEvent
+}
+
+// SetErrorNotifier implements transport.ErrorNotifier: raise("captchaRequired",
+// {url|html, reason}) (see js/template.js) reaches it through hostRaise,
+// the same path every native transport's own captcha/login signal already
+// takes - manager.go picks this up automatically, no script-specific
+// wiring needed anywhere above this package.
+func (t *ScriptTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
+	t.mu.Lock()
+	t.errNotifier = fn
+	t.mu.Unlock()
+}
+
+func (t *ScriptTransport) errorNotifier() func(err error, transportName, url, html, reason string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.errNotifier
 }
 
 func (t *ScriptTransport) setLastState(state, err string) {
@@ -302,6 +326,7 @@ func (t *ScriptTransport) Stop() error {
 	if err := t.BaseTransport.Stop(); err != nil {
 		return err
 	}
+	t.closeHTTPServers()
 	if t.loop != nil {
 		// Terminate (not Stop): also clears the script's keepalive/reconnect
 		// timers, so nothing fires after this call returns.

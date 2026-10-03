@@ -1161,7 +1161,7 @@ type YandexVolgaTransport struct {
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
-	errNotifier func(err error, transportName, url, reason string)
+	errNotifier func(err error, transportName, url, html, reason string)
 
 	keepAliveStop chan struct{}
 }
@@ -1186,7 +1186,7 @@ func NewYandexVolgaTransportWithConfig(docURL string, cfg transport.TransportCon
 
 // SetErrorNotifier installs a callback for out-of-band errors such as
 // ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
-func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
 
@@ -1204,7 +1204,7 @@ func (t *YandexVolgaTransport) Start() error {
 				reason = "login"
 			}
 			if t.errNotifier != nil {
-				t.errNotifier(err, "vyandex", t.docURL, reason)
+				t.errNotifier(err, "vyandex", t.docURL, "", reason)
 			}
 		}
 		return fmt.Errorf("auth: %w", err)

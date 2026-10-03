@@ -117,7 +117,7 @@ type BoardsTransport struct {
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
-	errNotifier func(err error, transportName, url, reason string)
+	errNotifier func(err error, transportName, url, html, reason string)
 }
 
 func NewBoardsTransport(rawURL string, config transport.TransportConfig) *BoardsTransport {
@@ -135,7 +135,7 @@ func NewBoardsTransport(rawURL string, config transport.TransportConfig) *Boards
 // fetchDocInfo (its captcha path is the old showcaptchafast, which the
 // internal PoW solver handles), but the hook is wired for parity with the
 // other transports.
-func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (t *BoardsTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
 

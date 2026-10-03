@@ -195,6 +195,22 @@ var Transport = {
 //   ICE/DTLS/SCTP are native (pion/webrtc) - genuinely can't be JS. Everything
 //   ABOVE this (signaling, when to offer/answer, retry policy) is yours.
 //
+// -- HTTP server (a setup/login mini-app) --
+//
+// httpserver.listen(handler, port?) -> Server { port, addr, close() }
+//   A real HTTP server, 127.0.0.1 only - there is no host argument, by
+//   design: everything else here dials out, this is the one primitive
+//   that can be reached by another local process, not just sites this
+//   script talks to. port 0/omitted picks a free one.
+//   handler(req) -> response | Promise<response>, req = {method, path,
+//   query: {...}, headers: {...}, body (ArrayBuffer)}, response =
+//   {status, headers: {...}, body (string or ArrayBuffer)}. Returning a
+//   Promise (an async handler) works exactly like a sync return - use it
+//   for a route that itself calls http.fetch before answering.
+//   Point the operator at it with raise("needsSetup", {url: "http://" +
+//   srv.addr + "/"}) - see js/template_html.html for the simpler static
+//   alternative (no server) when a single page is all a script needs.
+//
 // -- Cookies --
 //
 // cookieJar.get() -> {name: value, ...}      (against info().cookieDomain)
@@ -244,3 +260,13 @@ var Transport = {
 //                                "degraded"|"dead"
 // raise(kind, payload)        - upward OOB event, e.g.
 //                                raise("captchaRequired", {url: "..."})
+//                                "captchaRequired" and "needsSetup" also
+//                                reach the app's browser surface with
+//                                payload.url or payload.html (see
+//                                js/template_html.html) and payload.reason
+//                                - raised reactively mid-session or
+//                                proactively from open() ("nothing is
+//                                configured yet"), the two read differently
+//                                but do exactly the same thing. Every other
+//                                kind only reaches onEvent's caller (the
+//                                app's own event log, scripttest, ...).

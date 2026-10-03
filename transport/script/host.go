@@ -44,6 +44,7 @@ func registerHostAPI(vm *goja.Runtime, t *ScriptTransport) {
 	registerConcurrency(vm, t)
 	registerUDP(vm, t)
 	registerWebRTC(vm, t)
+	registerHTTPServer(vm, t)
 
 	vm.Set("emit", hostEmit(vm, t))
 	vm.Set("setState", hostSetState(t))
@@ -672,10 +673,22 @@ func hostSetState(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 	}
 }
 
-// hostRaise carries out-of-band events upward (captcha/auth/cookie
-// requests) to whatever registered via SetEventHandler - mirrors the
-// existing CookieExchanger pattern used by the native yandex/mailru
-// transports, just generalized to any event kind.
+// captchaRaiseKinds are the raise() kinds that also reach SetErrorNotifier,
+// in addition to the generic EventHandler every kind reaches: a reactive
+// mid-session check (captchaRequired, matching the native yandex/mailru
+// transports' own wording) and a proactive "nothing is configured yet"
+// signal (needsSetup) a script can raise right from open() before it even
+// tries to connect - manager.go treats both identically, so the choice is
+// purely which reads better in the script's own code.
+var captchaRaiseKinds = map[string]bool{"captchaRequired": true, "needsSetup": true}
+
+// hostRaise carries out-of-band events upward. Every kind reaches whatever
+// registered via SetEventHandler (mirrors the existing CookieExchanger
+// pattern used by the native yandex/mailru transports, generalized to any
+// kind); captchaRaiseKinds additionally reach SetErrorNotifier - the same
+// path those native transports' own captcha/login signal takes - carrying
+// payload.url (a real site) or payload.html (the script's own page, see
+// js/template_html.html) and payload.reason.
 func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 	return func(call goja.FunctionCall) goja.Value {
 		kind := call.Argument(0).String()
@@ -687,6 +700,12 @@ func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 		}
 		if h := t.eventHandler(); h != nil {
 			h(kind, payload)
+		}
+		if captchaRaiseKinds[kind] {
+			if en := t.errorNotifier(); en != nil {
+				str := func(key string) string { s, _ := payload[key].(string); return s }
+				en(fmt.Errorf("script: %s", kind), t.name, str("url"), str("html"), str("reason"))
+			}
 		}
 		return goja.Undefined()
 	}
