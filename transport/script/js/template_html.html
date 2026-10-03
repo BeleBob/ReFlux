@@ -8,7 +8,7 @@
   contract for Transport.{info,open,write,close,onEvent}; this one is the
   contract for the page itself.
 
-  STATUS: the core side is wired. ScriptTransport implements
+  STATUS: wired end to end, core and app. ScriptTransport implements
   transport.ErrorNotifier (transport/script/transport.go); hostRaise routes
   raise("needsSetup"/"captchaRequired", {html|url, reason}) to it exactly
   like the native yandex/mailru captcha signal, so manager.go's existing
@@ -24,11 +24,13 @@
        (ipc.CookiesRequestPayload.HTML), the Session control channel on an
        exit (control.AuthRequiredPayload.HTML, via the existing
        remote-auth-proxy if it was a URL instead).
-    3. STILL TO DO (app side, not this package): the app's existing
-       browser surface (BrowserPage - JCEF on desktop, WebView on Android)
-       needs to load HTML directly (loadDataWithBaseURL-style) when HTML
-       is set instead of a URL, and inject window.openfluxSubmit so this
-       page's "Готово" button can hand data back.
+    3. The app's browser surface (BrowserPage - JCEF on desktop via
+       BuiltInBrowser.openHtml, WebView on Android via WebPage's html
+       constructor param) loads HTML directly instead of a URL, and injects
+       window.openfluxSubmit so this page's "Готово" button can hand data
+       back. Submitting is this page's job, not the surrounding dialog's -
+       there is no separate "Готово" button in the app's own chrome for a
+       setup page, unlike a real captcha check.
     4. That data is delivered to the script the same way a solved
        captcha's cookies always have been: ApplyCookies (ScriptTransport
        already implements it) writes it into the jar and fires
@@ -36,6 +38,12 @@
        cookieJar.get() in that handler (see ../template.js). Nothing about
        ApplyCookies cares whether the values are real browser cookies or
        a script's own config.
+
+  payload may be flat ({key: value, ...}) or scoped ({client: {...}, node:
+  {...}} - see the node-config-scope design); only the client half reaches
+  the script today on both apps - node-scoped delivery during a node deploy
+  is separate, unbuilt work, so don't rely on payload.node reaching anyone
+  yet.
 
   window.openfluxSubmit is injected by the app; it is undefined when this
   file is opened in an ordinary browser (e.g. while designing the page),
