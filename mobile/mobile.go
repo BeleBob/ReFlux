@@ -16,6 +16,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -250,6 +251,26 @@ func newRawTransport(typ, url string, params map[string]interface{}, config tran
 	case "oneme":
 		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
 		return oneme.NewOneMeTransport(exit, str("token"), uid, config), nil
+	case "script":
+		// A JS (goja) script transport. Params carry the on-disk script
+		// (path to <name>.flux or <name>.js, its .sig verified against the
+		// pinned author key) plus whatever the script's own info().params
+		// asked the user for. script.New verifies the signature before the
+		// script is ever evaluated - an unsigned or tampered script never
+		// runs, so a swapped file on disk fails closed here, not at connect.
+		scriptPath := str("path")
+		if scriptPath == "" {
+			return nil, fmt.Errorf("script: не указан путь к скрипту")
+		}
+		pub, err := script.DecodePublicKeyHex(str("pubkey"))
+		if err != nil {
+			return nil, fmt.Errorf("script: ключ автора: %w", err)
+		}
+		name := str("name")
+		if name == "" {
+			name = "script"
+		}
+		return script.New(name, scriptPath, pub, url, params, config)
 	case "direct":
 		dcfg := transport.DefaultDirectConfig()
 		if exit {
