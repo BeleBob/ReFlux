@@ -76,8 +76,11 @@ any of this ever runs:
     reaches whatever the host registered via `SetEventHandler`;
     `"captchaRequired"` and `"needsSetup"` additionally reach
     `SetErrorNotifier`, the same path the native yandex/mailru transports'
-    captcha signal takes, carrying `payload.url` (a real site),
-    `payload.html` (the script's own page) and `payload.reason`.
+    captcha signal takes, carrying `payload.url` (a real site, or the
+    script's own loopback server), `payload.html` (the script's own page)
+    and `payload.reason`. For those two kinds the payload is checked first
+    (`setuppage.go`) and a bad one throws a `TypeError` into the script - see
+    "Settings and setup pages" below.
   - `onEvent(kind, payload)` (Go -> JS) is the script's optional export for
     the reverse direction - an inject the host wants to push down (for
     example applying externally-supplied cookies after the app solved a
@@ -96,9 +99,9 @@ declares:
 - `httpMaxConnsPerHost` / `httpMaxIdleConns` / `httpIdleConnTimeoutMs` - HTTP
   connection-pool tuning, for a transport that fans out many concurrent
   requests via `concurrency.pool`.
-- `params` - `[{key, label, type: "url"|"text"|"secret", required}]`, the
-  operator inputs the manager/CLI/UI must collect before `open()` can work.
-  `open(cfg)` receives them back as `cfg.params`.
+- `params` - what the script asks the user for and lets them tune, see
+  "Settings and setup pages" below. `open(cfg)` gets the first one as `cfg.url`
+  and the rest as `cfg.params` (always strings, declared defaults filled in).
 
 ## Signing and trust (`trust.go`)
 
@@ -132,6 +135,54 @@ API above) is traded for a hard gate at the door.
   the script fails verification - "untrusted" is a report field, not a
   process failure.
 
+## Settings and setup pages
+
+Two ways a script talks to the user besides its URL; both end as a page in the
+app's built-in browser and hand data back with `window.openfluxSubmit`. The
+author's guide is the SDK's
+[07-settings-and-setup-pages.md](https://github.com/p1neappleXpress/OpenFluxSDK/blob/main/docs/07-settings-and-setup-pages.md);
+this is the engine's side of it.
+
+**Settings (declarative).** `info().params` entries carry `key, label, type
+(text|url|secret|number|boolean|select|textarea), required, scope, default,
+description, placeholder, options, min, max, pattern, group, advanced`
+(`manifest.go`, `Param`). The first param is the profile's one input (`cfg.url`)
+unless `scope` says otherwise; the rest are settings (`params.go`: `scopes`,
+`SettingParams`). `SettingsPage` (`settingspage.go`) generates one
+self-contained wizard page from them; a script may bring its own with
+`Transport.settings(values)` (`InspectSettings`: run like `Inspect`, no I/O,
+3 s, sync). `BuildSettings` is the apps' entry point: it verifies the script
+against the pinned key first, then returns the page, the settings params and the
+values with defaults filled in as a `SettingsReport` (CLI `--script-settings`,
+gomobile `ScriptSettings`). The app keeps what the page submits with the
+script; at start it reaches the core as `Params = <base64url JSON>` in the
+`.conf` (a `.conf` value is cut at `#`/`;`; `EncodeSettings`/`DecodeSettings`)
+or as `params.settings` in a mobile session spec; `registry` flattens it into
+`cfg.params` (never over `path`/`pubkey`/`name`/`exit`/`settings`) and
+`WithDefaults` fills what was never set. `NormalizeSettings` is the one place
+that says what a valid value is (the generated page mirrors it in JS);
+`Info.CheckParams` lists a declaration's mistakes for its author
+(`--inspect-script` reports them as `paramProblems`).
+
+**Setup pages (run time).** `raise("needsSetup" | "captchaRequired", {html |
+url, reason})`. `checkSetupPayload` (`setuppage.go`) lets through an `https`
+site, an inline page (<= 512 KiB), or an `http` loopback address whose port is
+an `httpserver.listen()` this transport started and has not closed; anything
+else (another `http` host, a foreign loopback port, `file:`/`javascript:`/`data:`,
+`html` with `url`) throws a `TypeError` into the script. `IsOwnPage` marks the
+page the script's own (inline, or its loopback server): the IPC request and the
+mobile bridge carry it (`CookiesRequestPayload.Own`, `PendingCaptchaOwn`), so no
+app guesses from the URL, and the app gives such a page `window.openfluxSubmit`,
+collects no cookies, and shows `reason` as the dialog title. A check an exit
+node reports whose address is on loopback is dropped by the client's core
+(`AcceptRemoteCheck`). What a page submits is read by `FlattenSubmission` (flat
+or `{client: {...}}`; strings, numbers, booleans) and delivered through
+`ApplyCookies` as `onEvent("cookiesApplied")`.
+
+**`devhost`** (`transport/script/devhost`) plays the app for a script under
+development; `scripttest` uses it (`-settings`, `-open`, `-submit`). It is the
+reference for the contract above.
+
 ## Dev tools (`transport/script/cmd/`)
 
 - **`scriptsign`** - `genkey`, `sign` (writes a detached `.sig`), `verify`
@@ -142,7 +193,10 @@ API above) is traded for a hard gate at the door.
   prints every state/event transition and received packet until the
   deadline. `-cookies-file` lets an out-of-band-solved captcha unblock a
   yandex-family script. `-burst`/`-burst-size` measure real submission
-  throughput.
+  throughput. `-settings` opens the script's settings wizard and prints what a
+  Save would hand to the script (`-param` prefills, `-lang ru|en`); a setup page
+  the script raises is served on `127.0.0.1` with `window.openfluxSubmit` in it
+  (`-open` shows it in your browser, `-submit '<json>'` answers it unattended).
 - **`scriptbundle`** - inlines a script's local `require("./...")` modules
   into one self-contained file (a plain regex scan, not a real JS parser;
   fine for this project's own sources, not meant for arbitrary third-party

@@ -5,6 +5,32 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- Script transports: **settings the script declares**. `info().params` grows
+  the fields a form needs (`type` number/boolean/select/textarea, `default`,
+  `description`, `placeholder`, `options`, `min`, `max`, `pattern`, `group`,
+  `advanced`, `scope`); an old script means what it always did. The apps open a
+  wizard page generated from the declaration (`--script-settings`,
+  `mobile.ScriptSettings`; a script may bring its own with
+  `Transport.settings(values)`), keep what it submits with the script, and the
+  script gets it as `cfg.params` (declared defaults filled in; the `.conf` carries
+  it as one `Params = <base64url JSON>` line). `--inspect-script` reports each
+  param's resolved scope, `settingsPage` and `paramProblems`.
+- Script transports: **setup pages**. `raise("needsSetup" | "captchaRequired")`
+  is checked in the core and throws a `TypeError` into the script for anything
+  but an `https` site, an inline page, or the loopback address of the script's
+  own `httpserver.listen()`; the IPC request and the mobile bridge say which
+  pages are the script's own (`Own`, `PendingCaptchaOwn`,
+  `PendingCaptchaTransport`) instead of the apps guessing from the URL. A check
+  an exit reports at a loopback address is no longer forwarded to the client.
+  `SubmitCaptchaData` reads the payload with the core's rules
+  (`script.FlattenSubmission`).
+- `scripttest`: `-settings`, `-open`, `-submit`, `-lang`; a raised setup page is
+  served on `127.0.0.1` with `window.openfluxSubmit` (`transport/script/devhost`).
+  The templates and `docs/scripted-transports.md` describe it; the SDK has the
+  author's guide.
+
 ### Fixed (JS transports brought in step with the native ones)
 
 - The seven bundled JS transports are now 1.1.0 and follow the natives: the
