@@ -50,11 +50,14 @@ type TrustReport struct {
 	// ParamProblems are what is wrong with the declaration (Info.CheckParams):
 	// for the author, never a reason to refuse the script.
 	ParamProblems []string `json:"paramProblems,omitempty"`
-	Signature     string   `json:"signature"` // "valid" | "invalid" | "unverified"
-	Fingerprint   string   `json:"fingerprint,omitempty"`
-	Official      bool     `json:"official,omitempty"`
-	Author        string   `json:"author,omitempty"`
-	PackageAuthor string   `json:"packageAuthor,omitempty"`
+	// SettingsPage: the script brings a settings page of its own, so it has
+	// settings to open even with no setting params declared.
+	SettingsPage  bool   `json:"settingsPage,omitempty"`
+	Signature     string `json:"signature"` // "valid" | "invalid" | "unverified"
+	Fingerprint   string `json:"fingerprint,omitempty"`
+	Official      bool   `json:"official,omitempty"`
+	Author        string `json:"author,omitempty"`
+	PackageAuthor string `json:"packageAuthor,omitempty"`
 	// From a .flux package's manifest; the app stores them with the install so
 	// updates can be found and judged later (see CheckUpdate).
 	ID     string   `json:"id,omitempty"`
@@ -136,8 +139,9 @@ func InspectTrust(data, sig []byte, pubkeyHex, officialKeyHex string) TrustRepor
 	}
 	report.Name = info.Name
 	report.Version = info.Version
-	report.Params = info.Params
+	report.Params = info.ResolvedParams()
 	report.ParamProblems = info.CheckParams()
+	report.SettingsPage = info.CustomSettings
 	report.OK = true
 	return report
 }

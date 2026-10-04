@@ -131,6 +131,10 @@ type Info struct {
 	HalfDuplex   bool
 	MinInterval  time.Duration
 	Params       []Param
+	// CustomSettings: the script defines Transport.settings(values), a
+	// settings page of its own (see InspectSettings). Set by Inspect, not by
+	// info().
+	CustomSettings bool
 
 	// ScopeCookiesToParentDomain: when ApplyCookies (the generic Go-side
 	// CookieExchanger - see transport.go) applies externally-supplied

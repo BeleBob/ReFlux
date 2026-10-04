@@ -166,6 +166,12 @@ var Transport = {
   open: function () {}
 };`
 	data, sig, key := signedFile(t, custom)
+	if tr := InspectTrust(data, sig, key, ""); !tr.OK || !tr.SettingsPage {
+		t.Errorf("the trust report must say the script has a settings page of its own: %+v", tr)
+	}
+	if tr := InspectTrust([]byte(settingsScript), nil, "", ""); !tr.OK || tr.SettingsPage {
+		t.Errorf("a script without Transport.settings: %+v", tr)
+	}
 	rep := BuildSettings(data, sig, key, map[string]string{"k": "v"}, "ru")
 	if !rep.OK || !rep.Custom || rep.HTML != "<!doctype html><p>mine v</p>" {
 		t.Fatalf("custom page: %+v", rep)

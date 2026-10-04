@@ -176,3 +176,14 @@ func TestSettingsSurviveTheConfLine(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvedParamsCarryTheirScope(t *testing.T) {
+	info := Info{Params: parseParams(t, `[{"key":"a"},{"key":"b"},{"key":"c","scope":"settings"}]`)}
+	got := info.ResolvedParams()
+	if got[0].Scope != "profile" || got[1].Scope != "settings" || got[2].Scope != "settings" {
+		t.Errorf("scopes = %q %q %q", got[0].Scope, got[1].Scope, got[2].Scope)
+	}
+	if info.Params[0].Scope != "" {
+		t.Error("ResolvedParams must not change the declaration it was made from")
+	}
+}

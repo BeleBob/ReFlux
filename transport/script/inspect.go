@@ -73,5 +73,10 @@ func Inspect(src []byte) (Info, error) {
 	if err != nil {
 		return Info{}, fmt.Errorf("Transport.info(): %w", err)
 	}
-	return parseInfo(infoVal)
+	info, err := parseInfo(infoVal)
+	if err != nil {
+		return Info{}, err
+	}
+	_, info.CustomSettings = goja.AssertFunction(obj.Get("settings"))
+	return info, nil
 }

@@ -43,6 +43,17 @@ func (i Info) scopes() []string {
 	return out
 }
 
+// ResolvedParams is Params with every Scope filled in ("profile" or
+// "settings") by the rule above, so an app reads the answer instead of
+// repeating the rule.
+func (i Info) ResolvedParams() []Param {
+	out := append([]Param(nil), i.Params...)
+	for k, sc := range i.scopes() {
+		out[k].Scope = sc
+	}
+	return out
+}
+
 // ProfileParam is the param the profile editor's value field stands for
 // (cfg.url), nil if the script has none.
 func (i Info) ProfileParam() *Param {
