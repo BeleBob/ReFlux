@@ -81,6 +81,16 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ### Fixed
 
+- Yandex Boards moves packets as `modify-objects` text objects (the payload as
+  base64 in the object's value) and deletes what it has received with
+  `drop-objects`, instead of `notify-position`, which the board no longer
+  relays; the handshake and the heartbeat are unchanged (`transport/yandex/boards.go`).
+- Mail.ru Docs and Yandex Docs send the web client's `saveChanges` message at a
+  random 0.5-5 s interval, built from the live session (the participant's own
+  user id and, for Yandex, the document type and a changing cursor sequence),
+  so the stream looks like a person editing (`transport/mailru/mailru.go`,
+  `transport/yandex/yandex.go`).
+
 - The hosting install no longer fails when the host cuts a transfer short.
   InfinityFree's Pure-FTPd aborted the 2 MB link parser part way through over a
   TLS data channel (`451 Transfer aborted`), which failed the whole install;
