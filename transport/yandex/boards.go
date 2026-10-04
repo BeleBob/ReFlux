@@ -743,16 +743,17 @@ func (t *BoardsTransport) writerLoop(sess *boardsSession) {
 // Payload передаём в _attributes_.value как base64. Сервер broadcast'ит
 // это как server-modify-objects, который peer'ы обрабатывают.
 func (t *BoardsTransport) sendNotifyPosition(sess *boardsSession, pkt []byte) error {
-	b64 := base64.StdEncoding.EncodeToString(pkt)
+	// Уникальный ID объекта и случайные координаты.
+	obj := buildModifyObjects(base64.StdEncoding.EncodeToString(pkt), randomHex(32),
+		mrand.Intn(2000), mrand.Intn(1200), *sess.creatorHash.Load(), *sess.participant.Load())
+	return sess.writeEventObj("dashboard", obj)
+}
 
-	// Генерируем уникальный ID объекта
-	objID := randomHex(32)
-
-	// Случайные координаты для объекта
-	x := mrand.Intn(2000)
-	y := mrand.Intn(1200)
-
-	obj := map[string]interface{}{
+// buildModifyObjects is the modify-objects event carrying one packet as a
+// text object whose value is the base64 payload. Pure, and exported through
+// BoardsModifyObjects so the JS port can be compared with it byte for byte.
+func buildModifyObjects(b64, objID string, x, y int, creator, participant string) map[string]interface{} {
+	return map[string]interface{}{
 		"action": "modify-objects",
 		"data": map[string]interface{}{
 			"objects": []map[string]interface{}{
@@ -763,7 +764,7 @@ func (t *BoardsTransport) sendNotifyPosition(sess *boardsSession, pkt []byte) er
 						"style":       "text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=1;",
 						"vertex":      "1",
 						"type":        "textbox",
-						"creatorHash": *sess.creatorHash.Load(),
+						"creatorHash": creator,
 						"parent":      "DASHBOARD",
 						"index":       "1",
 					},
@@ -785,9 +786,16 @@ func (t *BoardsTransport) sendNotifyPosition(sess *boardsSession, pkt []byte) er
 				objID: true,
 			},
 		},
-		"participant": *sess.participant.Load(),
+		"participant": participant,
 	}
-	return sess.writeEventObj("dashboard", obj)
+}
+
+// BoardsModifyObjects is the JSON of the dashboard event buildModifyObjects
+// makes: ["dashboard", {...}], as it goes on the wire after the "42<ack>"
+// prefix.
+func BoardsModifyObjects(b64, objID string, x, y int, creator, participant string) []byte {
+	body, _ := json.Marshal([]interface{}{"dashboard", buildModifyObjects(b64, objID, x, y, creator, participant)})
+	return body
 }
 
 // dropObjects отправляет drop-objects для удаления объектов с доски.
@@ -908,6 +916,33 @@ func (t *BoardsTransport) handleParticipantConnected(sess *boardsSession, raw js
 }
 
 func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw json.RawMessage, action string) {
+	payloads, toDelete := ModifyObjectsPayloads(raw, *sess.participant.Load(), sess.Info.userHash, sess.Info.name)
+
+	for _, decoded := range payloads {
+		utils.Debugf("[BOARDS<-] %s pktlen=%d", action, len(decoded))
+		t.RecordReceive(len(decoded))
+		t.onDataMu.RLock()
+		cb := t.onData
+		t.onDataMu.RUnlock()
+		if cb != nil {
+			cb(decoded)
+		}
+	}
+
+	// Удаляем принятые объекты
+	if len(toDelete) > 0 {
+		utils.SafeGo("boards.cleanup", func() {
+			time.Sleep(100 * time.Millisecond) // Небольшая задержка перед удалением
+			t.dropObjects(sess, toDelete)
+		})
+	}
+}
+
+// ModifyObjectsPayloads reads a (server-)modify-objects event: the packets
+// carried by objects that are not our own echo (decoded, in order), and the
+// drop-objects entries that delete exactly those objects from the board.
+// Pure, and exported so the JS port can be compared with it.
+func ModifyObjectsPayloads(raw json.RawMessage, myPart, myUser, myName string) (payloads [][]byte, toDelete []map[string]interface{}) {
 	var d struct {
 		Dashboard string `json:"dashboard"`
 		Name      string `json:"name"`
@@ -919,54 +954,27 @@ func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw jso
 		} `json:"objects"`
 	}
 	if err := json.Unmarshal(raw, &d); err != nil {
-		return
+		return nil, nil
 	}
-	if len(d.Objects) == 0 {
-		return
-	}
-
-	myPart := *sess.participant.Load()
-	myUser := sess.Info.userHash
-	myName := sess.Info.name
-
-	var toDelete []map[string]interface{}
-
 	for _, o := range d.Objects {
 		val, _ := o.Attributes["value"].(string)
 		if val == "" {
 			continue
 		}
-		id, _ := o.Attributes["id"].(string)
 		creator, _ := o.Attributes["creatorHash"].(string)
-		typ, _ := o.Attributes["type"].(string)
 
 		if creator != "" && (creator == myPart || creator == myUser) {
-			utils.Debugf("[BOARDS] %s: own echo (creator=%s), skip",
-				action, shortStr(creator, 8))
-			continue
+			continue // own echo
 		}
 		if d.Name != "" && d.Name == myName {
-			utils.Debugf("[BOARDS] %s: own echo (name=%q), skip", action, d.Name)
-			continue
+			continue // own echo
 		}
 
 		decoded, err := base64.StdEncoding.DecodeString(val)
 		if err != nil || len(decoded) == 0 {
-			utils.Debugf("[BOARDS] %s: non-base64 value id=%s type=%s, skip",
-				action, shortStr(id, 8), typ)
 			continue
 		}
-
-		utils.Debugf("[BOARDS<-] %s from=%q creator=%s id=%s pktlen=%d",
-			action, d.Name, shortStr(creator, 8), shortStr(id, 8), len(decoded))
-
-		t.RecordReceive(len(decoded))
-		t.onDataMu.RLock()
-		cb := t.onData
-		t.onDataMu.RUnlock()
-		if cb != nil {
-			cb(decoded)
-		}
+		payloads = append(payloads, decoded)
 
 		// Собираем объект для удаления
 		toDelete = append(toDelete, map[string]interface{}{
@@ -975,14 +983,7 @@ func (t *BoardsTransport) handleServerModifyObjects(sess *boardsSession, raw jso
 			"hash":         o.Hash,
 		})
 	}
-
-	// Удаляем принятые объекты
-	if len(toDelete) > 0 {
-		utils.SafeGo("boards.cleanup", func() {
-			time.Sleep(100 * time.Millisecond) // Небольшая задержка перед удалением
-			t.dropObjects(sess, toDelete)
-		})
-	}
+	return payloads, toDelete
 }
 
 func (t *BoardsTransport) handle431(sess *boardsSession, raw []byte) {

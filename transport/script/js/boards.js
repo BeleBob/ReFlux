@@ -137,9 +137,13 @@ module.exports = {
 // ./lib/captcha.js and shared with yandex.js/vyandex.js). Boards is a
 // different protocol from mailru/yandex: a real Socket.IO namespace with a
 // "dashboard" event channel, guest-token auth over two POST /api calls, and
-// TWO receive paths (notify-position object/array forms, and
-// server-modify-objects/modify-objects with an array of objects each
-// carrying a base64 payload).
+// the send path is modify-objects (a text object whose value is the base64
+// payload; the receiver deletes it again with drop-objects). The receive
+// side still also understands the old notify-position form, so a peer on an
+// older build keeps working.
+//
+// Kept in step with the native transport (parity is tested byte for byte in
+// transport/script/parity_test.go).
 // This is the SOURCE for the bundled, signed transport/script/js/boards.js -
 // build it with scriptbundle, then re-sign the output.
 
@@ -149,7 +153,7 @@ var BOARDS_BASE = "boards.yandex.ru";
 var UA = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36";
 var SOCKET_HOST_DEFAULT = "socket33.boards.yandex.ru";
-var PING_INTERVAL_MS = 20000;
+var HEARTBEAT_MS = 20000; // dashboard heartbeat; NO client engine.io "2" (see startHeartbeats)
 var READ_DEADLINE_MS = 90000;
 var HANDSHAKE_WAIT_MS = 15000;
 
@@ -167,8 +171,9 @@ var creatorHash = "";
 
 var sock = null;
 var kaTimer = null;
-var pingTimer = null;
 var ack = 0;
+var reconnectTimer = null; // at most one reconnect pending
+var connectGen = 0; // bumped by every connectOnce: a stale attempt closes what it opened
 
 function randHex(n) {
   var s = "";
@@ -342,33 +347,75 @@ function sendSubscribe() {
   writeEventObj("dashboard", { action: "subscribe-slide-dashboard", data: data, participant: participantHash });
 }
 
-function sendNotifyPosition(bytes) {
-  var b64 = base64.encode(bytes);
-  var data = {
-    position: { x: b64, y: 123.0 },
-    vpt: { translate: { x: 0, y: 0 }, scale: 1, whyrugay: 1 },
+// buildModifyObjects: the modify-objects dashboard event carrying one packet
+// as a text object whose value is the base64 payload. Same as
+// buildModifyObjects in boards.go; keys are written in sorted order because
+// Go marshals maps that way and the parity test compares the bytes.
+function buildModifyObjects(b64, objID, x, y, creator, participant) {
+  return {
+    action: "modify-objects",
+    data: {
+      objects: [
+        {
+          _attributes_: {
+            creatorHash: creator,
+            id: objID,
+            index: "1",
+            parent: "DASHBOARD",
+            style: "text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=1;",
+            type: "textbox",
+            value: b64,
+            vertex: "1",
+          },
+          hash: objID,
+          mxGeometry: [
+            { _attributes_: { as: "geometry", height: "1", width: "1", x: String(x), y: String(y) } },
+          ],
+        },
+      ],
+      valueChanges: (function () { var v = {}; v[objID] = true; return v; })(),
+    },
+    participant: participant,
   };
-  writeEventObj("dashboard", { action: "notify-position", data: data, participant: participantHash });
 }
 
+function sendNotifyPosition(bytes) {
+  var obj = buildModifyObjects(
+    base64.encode(bytes), randHex(32),
+    Math.floor(Math.random() * 2000), Math.floor(Math.random() * 1200),
+    creatorHash, participantHash
+  );
+  writeEventObj("dashboard", obj);
+}
+
+// dropObjects deletes objects we have already delivered from the board.
+function dropObjects(objects) {
+  if (!objects.length || !sock) return;
+  try {
+    writeEventObj("dashboard", { action: "drop-objects", data: { objects: objects }, participant: participantHash });
+  } catch (e) {}
+}
+
+// No client-side engine.io ping: in EIO=4 the server pings ("2") and the
+// client answers ("3", see handleMessage). A client "2" is an invalid
+// heartbeat direction to an engine.io v4 server, which then closes the
+// socket - the old ping dropped the board every 20 s. The dashboard
+// heartbeat keeps it busy.
 function startHeartbeats() {
   if (kaTimer) clearInterval(kaTimer);
-  if (pingTimer) clearInterval(pingTimer);
   kaTimer = setInterval(function () {
     if (!sock) return;
     try {
       writeEventObj("dashboard", { action: "heartbeat", data: {}, participant: participantHash });
-    } catch (e) { setState("degraded", String(e)); }
-  }, PING_INTERVAL_MS);
-  pingTimer = setInterval(function () {
-    if (!sock) return;
-    try { sock.send("2"); } catch (e) { setState("degraded", String(e)); }
-  }, PING_INTERVAL_MS);
+    } catch (e) {
+      // a heartbeat that cannot be written means a dead connection: drop it so it reconnects
+      try { sock.close(); } catch (e2) {}
+    }
+  }, HEARTBEAT_MS);
 }
 
 function stopHeartbeats() {
   if (kaTimer) { clearInterval(kaTimer); kaTimer = null; }
-  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
 }
 
 function handle431(msg) {
@@ -432,19 +479,42 @@ function handleNotifyPosition(data, envelopePart) {
   }
 }
 
-function handleServerModifyObjects(data) {
-  if (!data || !data.objects || data.objects.length === 0) return;
+// modifyObjectsPayloads: the packets carried by the objects of a
+// (server-)modify-objects event that are not our own echo (as ArrayBuffers,
+// in order), and the drop-objects entries that delete exactly those objects.
+// Same as ModifyObjectsPayloads in boards.go.
+function modifyObjectsPayloads(data, myPart, myUser, myName) {
+  var payloads = [];
+  var drop = [];
+  if (!data || !data.objects || data.objects.length === 0) return { payloads: payloads, drop: drop };
   for (var i = 0; i < data.objects.length; i++) {
-    var attrs = data.objects[i]._attributes_;
+    var o = data.objects[i];
+    var attrs = o._attributes_;
     if (!attrs) continue;
     var val = attrs.value;
-    if (!val) continue;
+    if (typeof val !== "string" || val === "") continue;
     var creator = attrs.creatorHash;
-    if (creator && (creator === participantHash || creator === userHash)) continue;
-    if (data.name && data.name === name) continue;
+    if (creator && (creator === myPart || creator === myUser)) continue; // own echo
+    if (data.name && data.name === myName) continue; // own echo
+    var bytes;
     try {
-      deliver(base64.decode(val));
+      bytes = base64.decode(val);
     } catch (e) { continue; }
+    if (bytes.byteLength === 0) continue;
+    payloads.push(bytes);
+    drop.push({ _attributes_: attrs, mxGeometry: o.mxGeometry || null, hash: o.hash || "" });
+  }
+  return { payloads: payloads, drop: drop };
+}
+
+function handleServerModifyObjects(data) {
+  var r = modifyObjectsPayloads(data, participantHash, userHash, name);
+  for (var i = 0; i < r.payloads.length; i++) deliver(r.payloads[i]);
+  if (r.drop.length > 0) {
+    var s = sock;
+    setTimeout(function () {
+      if (sock === s) dropObjects(r.drop); // a small delay before deleting, as the native transport
+    }, 100);
   }
 }
 
@@ -544,26 +614,30 @@ function onSocketMessage(msg) {
   handleMessage(msg);
 }
 
-// reconnectAttempt is a single counter shared across the transport's whole
-// lifetime, capped at 10 and never reset - literal port of connectLoop's
-// `attempt` in boards.go (unlike mailru/yandex, boards does not reset
-// backoff after a long-lived connection).
+// reconnectAttempt counts consecutive failures, capped at 10; a session that
+// held for more than a minute is not part of a failure streak (as in
+// connectLoop in boards.go).
 var reconnectAttempt = 0;
+var connectedSince = 0;
 
 function scheduleNextConnect() {
   if (!running) return;
+  if (reconnectTimer) return; // one is already pending: a second would open a duplicate session
   var d = reconnectBackoff(reconnectAttempt);
   reconnectAttempt++;
   if (reconnectAttempt > 10) reconnectAttempt = 10;
-  setTimeout(function () {
+  reconnectTimer = setTimeout(function () {
+    reconnectTimer = null;
     if (running) connectOnce();
   }, d);
 }
 
 function connectOnce() {
-  connectAndServe().then(
+  var myGen = ++connectGen;
+  connectAndServe(myGen).then(
     function () { /* connected; onSocketClose schedules the next retry when it eventually closes */ },
     function (e) {
+      if (myGen !== connectGen) return; // superseded
       setState("reconnecting", String(e));
       scheduleNextConnect();
     }
@@ -573,31 +647,44 @@ function connectOnce() {
 function onSocketClose() {
   stopHeartbeats();
   sock = null;
+  if (connectedSince && Date.now() - connectedSince > 60000) reconnectAttempt = 0;
+  connectedSince = 0;
   if (!running) return;
   setState("reconnecting");
   scheduleNextConnect();
 }
 
-async function connectAndServe() {
+async function connectAndServe(myGen) {
+  // Every connection numbers its Socket.IO events from 0, the handshake's
+  // included: the wait for the subscribe answer ("431[...") depends on it.
+  ack = 0;
   var wsURL = "wss://" + wsHost + "/socket.io/?EIO=4&transport=websocket";
   var cookies = cookieJar.get();
   if (!cookies["token_" + hash]) cookies["token_" + hash] = jwt;
   var cookieStr = Object.keys(cookies).map(function (k) { return k + "=" + cookies[k]; }).join("; ");
 
-  sock = await ws.open(wsURL, {
+  var newSock = await ws.open(wsURL, {
     "User-Agent": UA,
     Origin: "https://" + BOARDS_BASE,
     "Accept-Language": "en-US,en;q=0.9",
     Cookie: cookieStr,
   }, { readTimeoutMs: READ_DEADLINE_MS });
+  if (myGen !== connectGen || !running) {
+    try { newSock.close(); } catch (e) {}
+    return;
+  }
 
+  sock = newSock;
   sock.onmessage = onSocketMessage;
-  sock.onclose = onSocketClose;
+  sock.onclose = function () {
+    if (sock !== newSock) return; // a socket we already replaced or dropped on purpose
+    onSocketClose();
+  };
 
   await handshake();
 
-  ack = 0;
   startHeartbeats();
+  connectedSince = Date.now();
   setState("connected");
 }
 
@@ -640,6 +727,9 @@ var Transport = {
 
   close: function () {
     running = false;
+    connectGen++;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     stopHeartbeats();
     pendingWaiters = [];
     if (sock) { try { sock.close(); } catch (e) {} }
@@ -648,8 +738,9 @@ var Transport = {
 
   onEvent: function (kind) {
     if (kind === "cookiesApplied") {
+      // The generic ApplyCookies wrote the jar; drop the socket so the next
+      // connection carries them. onclose then reconnects (once).
       if (sock) { try { sock.close(); } catch (e) {} }
-      sock = null;
     }
   },
 };

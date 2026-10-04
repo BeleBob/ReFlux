@@ -192,6 +192,10 @@ var frontier = "";
 var sock = null;
 var wsReconnectDelay = RECONNECT_MIN_MS;
 var sessionRotateTimer = null;
+var started = false; // the links (WebSocket, loops) are up: the first authorization succeeded
+var initialRetryTimer = null;
+var wsReconnectTimer = null; // at most one WebSocket reconnect pending
+var connectWSGen = 0; // bumped by every connectWS: a stale attempt closes what it opened
 
 // stats feed the stall detector, same shape as native's stalledTraffic.
 var dataSentWindow = 0;
@@ -223,11 +227,13 @@ async function authorize() {
       if (!loc) throw new Error("redirect without Location from " + currentURL);
 
       if (loc.indexOf("showcaptcha") !== -1 && loc.indexOf("showcaptchafast") === -1) {
-        raise("captchaRequired", { url: docURL, location: loc });
+        raise("captchaRequired", { url: docURL, location: loc, reason: "smartcaptcha" });
         throw new SentinelError("captchaRequired");
       }
       if (loc.indexOf("passport.yandex") !== -1) {
-        raise("loginRequired", { url: docURL });
+        // A login wall reaches the app through the same notifier as a captcha, told apart
+        // by reason (the native transport does the same): the app opens a sign-in page.
+        raise("captchaRequired", { url: docURL, reason: "login" });
         throw new SentinelError("loginRequired");
       }
       if (loc.indexOf("showcaptchafast") !== -1) {
@@ -533,8 +539,18 @@ function scheduleSessionRotation() {
   }, MAX_SESSION_AGE_MS);
 }
 
+function scheduleWSReconnect(d) {
+  if (!running) return;
+  if (wsReconnectTimer) return; // one is already pending: a second would open a duplicate session
+  wsReconnectTimer = setTimeout(function () {
+    wsReconnectTimer = null;
+    connectWS(false);
+  }, d);
+}
+
 async function connectWS(isFirst) {
   if (!running) return;
+  var myGen = ++connectWSGen;
   if (!isFirst) {
     try {
       var fresh = await authorize();
@@ -544,7 +560,7 @@ async function connectWS(isFirst) {
       // Keep the old auth, same as refreshAuth's failure path.
     }
   }
-  if (!running) return;
+  if (!running || myGen !== connectWSGen) return;
 
   try {
     var newSock = await ws.open(wsURLFor(auth), {
@@ -552,11 +568,16 @@ async function connectWS(isFirst) {
       Origin: "https://volga.yandex.ru",
       Cookie: auth.cookieHeader || "",
     }, { readTimeoutMs: WS_READ_TIMEOUT_MS });
+    if (!running || myGen !== connectWSGen) {
+      try { newSock.close(); } catch (e) {}
+      return;
+    }
 
     sock = newSock;
     var connectedAt = Date.now();
     sock.onmessage = handleMessage;
     sock.onclose = function () {
+      if (sock !== newSock) return; // a socket we already replaced or dropped on purpose
       sock = null;
       if (!running) return;
       var connectedFor = Date.now() - connectedAt;
@@ -566,7 +587,7 @@ async function connectWS(isFirst) {
       var d = wsReconnectDelay;
       wsReconnectDelay = Math.min(wsReconnectDelay * RECONNECT_MULTIPLIER, RECONNECT_MAX_MS);
       setState("reconnecting");
-      setTimeout(function () { connectWS(false); }, d);
+      scheduleWSReconnect(d);
     };
 
     scheduleSessionRotation();
@@ -575,7 +596,7 @@ async function connectWS(isFirst) {
     setState("reconnecting", String(e));
     var d2 = wsReconnectDelay;
     wsReconnectDelay = Math.min(wsReconnectDelay * RECONNECT_MULTIPLIER, RECONNECT_MAX_MS);
-    setTimeout(function () { connectWS(false); }, d2);
+    scheduleWSReconnect(d2);
   }
 }
 
@@ -610,6 +631,43 @@ function stopBackgroundLoops() {
   if (batchTimer) { clearTimeout(batchTimer); batchTimer = null; }
 }
 
+// startLinks brings the WebSocket and the background loops up with the first
+// good authorization - from open(), a retry, or the "cookiesApplied" that
+// follows a captcha/login solved while the transport had never started.
+function startLinks(a) {
+  if (started || !running) return;
+  started = true;
+  auth = a;
+  startBackgroundLoops();
+  connectWS(true);
+}
+
+function initialAuthorize() {
+  if (!running || started) return;
+  authorize().then(
+    function (a) {
+      startLinks(a);
+    },
+    function (e) {
+      if (!running || started) return;
+      if (e instanceof SentinelError) {
+        // a captcha/login wall: the app handles the raise(); the cookies it
+        // applies start the transport (onEvent below)
+        setState("dead", e.kind);
+        return;
+      }
+      // a transient failure (network, a page that did not parse): try again
+      setState("reconnecting", String(e));
+      var d = wsReconnectDelay;
+      wsReconnectDelay = Math.min(wsReconnectDelay * RECONNECT_MULTIPLIER, RECONNECT_MAX_MS);
+      initialRetryTimer = setTimeout(function () {
+        initialRetryTimer = null;
+        initialAuthorize();
+      }, d);
+    }
+  );
+}
+
 var Transport = {
   info: function () {
     return {
@@ -637,21 +695,7 @@ var Transport = {
     running = true;
     sendPool = concurrency.pool(SEND_CONCURRENCY);
     setState("connecting");
-
-    authorize().then(
-      function (a) {
-        auth = a;
-        startBackgroundLoops();
-        connectWS(true);
-      },
-      function (e) {
-        if (e instanceof SentinelError) {
-          setState("dead", e.kind); // exit-node level captcha/login wall; app handles the OOB event
-        } else {
-          setState("dead", String(e));
-        }
-      }
-    );
+    initialAuthorize();
   },
 
   write: function (bytes) {
@@ -663,6 +707,11 @@ var Transport = {
 
   close: function () {
     running = false;
+    connectWSGen++;
+    if (initialRetryTimer) clearTimeout(initialRetryTimer);
+    initialRetryTimer = null;
+    if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
     stopBackgroundLoops();
     if (sock) { try { sock.close(); } catch (e) {} }
     sock = null;
@@ -675,6 +724,12 @@ var Transport = {
       // swap in the fresh session, same as native ApplyCookies.
       authorize().then(
         function (a) {
+          if (!started) {
+            // the first authorization never succeeded (a captcha or login
+            // wall): the solved one starts the transport
+            startLinks(a);
+            return;
+          }
           auth = a;
           frontier = "";
           if (sock) { try { sock.close(); } catch (e) {} }

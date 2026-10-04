@@ -4,6 +4,11 @@
 // message shape below matches the native transport exactly - this file is
 // a faithfulness test for the host API, not a rewrite of the protocol.
 //
+// Kept in step with the native transport (parity is tested byte for byte in
+// transport/script/parity_test.go): the saveChanges "editor activity" stream,
+// every cursor entry of a batched server message, and a failed keep-alive
+// closing the socket so the transport reconnects.
+//
 // The Go<->JS packet boundary (write()/emit()) carries raw bytes as
 // ArrayBuffers; mailru's own wire format needs those bytes as base64 text
 // spliced into the cursor field, so this script calls the host's
@@ -13,8 +18,20 @@
 
 var USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-var CURSOR_RE = /"cursor":"[^;]+;([^"]+)"/;
+var CURSOR_RE = /"cursor":"[^;]+;([^"]+)"/g;
 var KEEPALIVE_MS = 10000; // transport.DefaultConfig().KeepAliveInterval
+var ACTIVITY_MIN_MS = 500; // editorActivityLoop: a random delay in [0.5 s, 5 s]
+var ACTIVITY_MAX_MS = 5000;
+
+// saveChanges message in the Mail.ru web client's format; the two %s are
+// UserId and UserShortId in excelAdditionalInfo. Byte-identical to
+// saveChangesMessageTemplate in mailru.go. isCoAuthoring/releaseLocks are
+// false here (true for yandex.docs).
+var SAVE_CHANGES_TEMPLATE_PARTS = [
+  '42["message",{"type":"saveChanges","changes":"[\\"76;AgAAADEA//8BAOwbfF7pEAAALQEAAAMAAAAAAAAAAAAAAAAAAAAAAAAA9v///xoAAAAyADAAMgA2AC4AMgAuADEALgAyADIANgA4AA==\\",\\"35;BgAAADYAMgA3AAEAHAABAAAAAAAAAAEAAABhAAAAAAMAAAA=\\",\\"35;BgAAADYAMgA3AAEAHAABAAAAAQAAAAEAAABzAAAAAAMAAAA=\\",\\"35;BgAAADYAMgA3AAEAHAABAAAAAgAAAAEAAABkAAAAAAMAAAA=\\"]","startSaveChanges":true,"endSaveChanges":true,"isCoAuthoring":false,"isExcel":false,"deleteIndex":null,"excelAdditionalInfo":"{\\"UserId\\":\\"',
+  '\\",\\"UserShortId\\":\\"',
+  '\\",\\"CursorInfo\\":\\"14;BgAAADYAMgA3AAMAAAA=\\"}","unlock":false,"releaseLocks":false}]',
+];
 var MAX_RECONNECT_ATTEMPTS = 999999; // transport.DefaultConfig().MaxReconnectAttempts
 
 var weblink = "";
@@ -25,6 +42,10 @@ var userID = null;
 var userCounter = 0;
 var connectedAt = null;
 var keepAliveTimer = null;
+var activityTimer = null;
+var docInfo = null; // the live session's fetchDocInfo result (editor user id for saveChanges)
+var connectGen = 0; // bumped by every connectToDoc: a stale attempt closes what it opened
+var reconnectTimer = null; // at most one reconnect pending
 
 function pad(n, width) {
   var s = String(n);
@@ -34,6 +55,33 @@ function pad(n, width) {
 
 function randUserID() {
   return pad(Math.floor(Math.random() * 1000000000), 10);
+}
+
+// buildSaveChanges is the saveChanges message for one participant: UserId is
+// the editor's real user id (the session's generated one when the server gave
+// none), UserShortId the same without its last character. Same as
+// BuildSaveChanges in mailru.go.
+function buildSaveChanges(userId) {
+  var short = userId;
+  if (short.length > 1) short = short.slice(0, short.length - 1);
+  return (
+    SAVE_CHANGES_TEMPLATE_PARTS[0] + userId +
+    SAVE_CHANGES_TEMPLATE_PARTS[1] + short +
+    SAVE_CHANGES_TEMPLATE_PARTS[2]
+  );
+}
+
+// cursorPayloads: the base64 payload of every cursor entry in a server
+// message, in order, without the keep-alive entries (a batched message may
+// carry several, a peer's keep-alive among them).
+function cursorPayloads(text) {
+  var out = [];
+  var m;
+  CURSOR_RE.lastIndex = 0;
+  while ((m = CURSOR_RE.exec(text)) !== null) {
+    if (m[1] && m[1] !== "---KA---") out.push(m[1]);
+  }
+  return out;
 }
 
 // normalizeWeblink accepts either a bare weblink ("AbCdEfGh1/IjKlMnOp2") or
@@ -69,8 +117,10 @@ function reconnectBackoff(n) {
 function scheduleReconnect(attempt) {
   var next = attempt + 1;
   if (!running || next >= MAX_RECONNECT_ATTEMPTS) return;
+  if (reconnectTimer) return; // one is already pending: a second would open a duplicate session
   var d = reconnectBackoff(next);
-  setTimeout(function () {
+  reconnectTimer = setTimeout(function () {
+    reconnectTimer = null;
     if (!running) return;
     connectToDoc(next);
   }, d);
@@ -131,14 +181,37 @@ function startKeepAlive() {
     try {
       sock.send('42["message",{"type":"cursor","cursor":"18;---KA---"}]');
     } catch (e) {
-      setState("degraded", String(e));
+      // Same as the native keep-alive: a write that fails means a dead
+      // connection - close it so the reconnect (via onclose) happens.
+      setState("reconnecting", String(e));
+      try {
+        sock.close();
+      } catch (e2) {}
     }
   }, KEEPALIVE_MS);
 }
 
-function handleMessage(text) {
-  if (text.indexOf("---KA---") !== -1) return;
+// editorActivityLoop: sends a saveChanges message at a random interval in
+// [0.5 s, 5 s] so the stream looks like a live person editing. Skipped while
+// there is no session (mid-reconnect), exactly like the native loop.
+function startEditorActivity() {
+  if (activityTimer) clearTimeout(activityTimer);
+  var tick = function () {
+    activityTimer = null;
+    if (!running) return;
+    if (sock && docInfo) {
+      try {
+        sock.send(buildSaveChanges(docInfo.editorUserId || userID));
+      } catch (e) {
+        // the next tick tries again; a dead socket is the keep-alive's to notice
+      }
+    }
+    activityTimer = setTimeout(tick, ACTIVITY_MIN_MS + Math.floor(Math.random() * (ACTIVITY_MAX_MS - ACTIVITY_MIN_MS + 1)));
+  };
+  activityTimer = setTimeout(tick, ACTIVITY_MIN_MS + Math.floor(Math.random() * (ACTIVITY_MAX_MS - ACTIVITY_MIN_MS + 1)));
+}
 
+function handleMessage(text) {
   // Socket.IO ping/pong.
   if (text === "2") {
     if (sock) {
@@ -155,14 +228,25 @@ function handleMessage(text) {
   }
 
   if (text.indexOf("cursor") !== -1) {
-    var m = CURSOR_RE.exec(text);
-    if (!m || !m[1]) return;
-    emit(base64.decode(m[1])); // cursor field is base64 text -> bytes
+    // One server message may carry several cursor entries (it batches them
+    // under load), a peer's keep-alive among them: deliver every payload, in
+    // order.
+    var payloads = cursorPayloads(text);
+    for (var i = 0; i < payloads.length; i++) {
+      var bytes;
+      try {
+        bytes = base64.decode(payloads[i]); // cursor field is base64 text -> bytes
+      } catch (e) {
+        continue;
+      }
+      emit(bytes);
+    }
   }
 }
 
 function onSocketClose(attempt) {
   sock = null;
+  docInfo = null;
   var next = attempt;
   // A connection that had been up for >15s gets the fast (attempt=1)
   // backoff on its next try instead of continuing to climb - identical to
@@ -176,22 +260,32 @@ function onSocketClose(attempt) {
 
 function connectToDoc(attempt) {
   if (!running) return;
+  var myGen = ++connectGen;
 
   (async function () {
     try {
       var info = await fetchDocInfo(weblink);
+      if (myGen !== connectGen || !running) return; // superseded while fetching
       var newSock = await ws.open(info.wsURL, {
         "User-Agent": USER_AGENT,
         Origin: "https://docs.datacloudmail.ru",
       });
+      if (myGen !== connectGen || !running) {
+        try {
+          newSock.close();
+        } catch (e) {}
+        return;
+      }
 
       sock = newSock;
+      docInfo = info;
       if (userID === null) {
         userID = baseUserID + pad(userCounter++ % 1000, 3);
       }
 
       sock.onmessage = handleMessage;
       sock.onclose = function () {
+        if (sock !== newSock) return; // a socket we already replaced or dropped on purpose
         onSocketClose(attempt);
       };
 
@@ -273,6 +367,7 @@ var Transport = {
     baseUserID = randUserID();
     running = true;
     startKeepAlive();
+    startEditorActivity();
     connectToDoc(0);
   },
 
@@ -283,7 +378,12 @@ var Transport = {
 
   close: function () {
     running = false;
+    connectGen++;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     if (keepAliveTimer) clearInterval(keepAliveTimer);
+    if (activityTimer) clearTimeout(activityTimer);
+    activityTimer = null;
     if (sock) {
       try {
         sock.close();
@@ -301,12 +401,15 @@ var Transport = {
   onEvent: function (kind) {
     if (kind === "cookiesApplied") {
       userID = null;
-      if (sock) {
+      docInfo = null;
+      connectGen++; // drop an attempt in flight: the one below starts from the new cookies
+      var old = sock;
+      sock = null; // its onclose is ignored (sock !== newSock): one reconnect, below
+      if (old) {
         try {
-          sock.close();
+          old.close();
         } catch (e) {}
       }
-      sock = null;
       setState("reconnecting");
       scheduleReconnect(0);
     }

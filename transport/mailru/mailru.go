@@ -413,6 +413,13 @@ func buildSaveChanges(session *DocSession) []byte {
 	if userID == "" {
 		userID = session.UserID
 	}
+	return BuildSaveChanges(userID)
+}
+
+// BuildSaveChanges is the saveChanges message for one participant: a pure
+// function of the user id, exported so the JS port of this transport can be
+// compared with it byte for byte.
+func BuildSaveChanges(userID string) []byte {
 	short := userID
 	if len(short) > 1 {
 		short = short[:len(short)-1]
@@ -453,7 +460,11 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 // cursorPayloads returns the base64 payload of every cursor entry in a server
 // message, in order, without the keep-alive entries.
-func cursorPayloads(text string) []string {
+func cursorPayloads(text string) []string { return CursorPayloads(text) }
+
+// CursorPayloads is the exported form of cursorPayloads (pure; the JS port is
+// compared with it in tests).
+func CursorPayloads(text string) []string {
 	var out []string
 	for _, m := range cursorPayloadRe.FindAllStringSubmatch(text, -1) {
 		if len(m) > 1 && m[1] != "---KA---" {

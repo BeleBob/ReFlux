@@ -100,15 +100,11 @@ func cursorInfo(userShortID string, seq int) string {
 	return cursorStream + ";" + base64.StdEncoding.EncodeToString(payload)
 }
 
-// buildSaveChanges собирает saveChanges-сообщение под конкретную сессию и
-// номер итерации: актуальные UserId/UserShortId и слегка меняющиеся позиции
-// курсора. Оригинальные entity-префиксы и модель-оп сохранены побайтово;
-// меняется только то, что действительно зависит от участника.
-func (t *YandexDocsTransport) buildSaveChanges(session *DocSession, seq int) []byte {
-	userID := session.Info.EditorUserID
-	if userID == "" {
-		userID = session.UserID // fallback: псевдо-id, если jwt не дал реального
-	}
+// BuildSaveChanges is the saveChanges message for one participant and
+// iteration (see buildSaveChanges for how the pieces are chosen). A pure
+// function of its arguments, exported so the JS port of this transport can be
+// compared with it byte for byte.
+func BuildSaveChanges(userID string, isExcel bool, seq int) []byte {
 	short := userID
 	if len(short) > 10 {
 		short = short[:10]
@@ -135,7 +131,7 @@ func (t *YandexDocsTransport) buildSaveChanges(session *DocSession, seq int) []b
 		"startSaveChanges":    true,
 		"endSaveChanges":      true,
 		"isCoAuthoring":       true,
-		"isExcel":             session.Info.IsExcel,
+		"isExcel":             isExcel,
 		"deleteIndex":         nil,
 		"excelAdditionalInfo": string(excelJSON),
 		"unlock":              false,
@@ -143,6 +139,18 @@ func (t *YandexDocsTransport) buildSaveChanges(session *DocSession, seq int) []b
 	}
 	body, _ := json.Marshal([]interface{}{"message", msg})
 	return append([]byte("42"), body...)
+}
+
+// buildSaveChanges собирает saveChanges-сообщение под конкретную сессию и
+// номер итерации: актуальные UserId/UserShortId и слегка меняющиеся позиции
+// курсора. Оригинальные entity-префиксы и модель-оп сохранены побайтово;
+// меняется только то, что действительно зависит от участника.
+func (t *YandexDocsTransport) buildSaveChanges(session *DocSession, seq int) []byte {
+	userID := session.Info.EditorUserID
+	if userID == "" {
+		userID = session.UserID // fallback: псевдо-id, если jwt не дал реального
+	}
+	return BuildSaveChanges(userID, session.Info.IsExcel, seq)
 }
 
 type YandexDocsInfo struct {
@@ -552,6 +560,13 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 }
 
 func (t *YandexDocsTransport) extractBase64String(response string) string {
+	return ExtractBase64(response)
+}
+
+// ExtractBase64 pulls the packet payload out of a server frame: from a
+// saveChanges message's excelAdditionalInfo, otherwise from a cursor field.
+// Pure, and exported so the JS port can be compared with it.
+func ExtractBase64(response string) string {
 	if strings.Contains(response, "saveChanges") {
 		marker := `"excelAdditionalInfo":"`
 		left := strings.Index(response, marker) + len(marker)

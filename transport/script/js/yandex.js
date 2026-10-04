@@ -141,6 +141,10 @@ module.exports = {
 // shared with vyandex.js/boards.js - see that file for the actual logic.
 // This is the SOURCE for the bundled, signed transport/script/js/yandex.js -
 // build it with scriptbundle, then re-sign the output.
+//
+// Kept in step with the native transport (parity is tested byte for byte in
+// transport/script/parity_test.go): the saveChanges "editor activity" stream
+// and a failed keep-alive closing the socket so the transport reconnects.
 
 var captcha = __require("lib/captcha.js");
 
@@ -150,6 +154,16 @@ var CLIENT_CONFIG_RE = /<script[^>]*id="client-config"[^>]*>(.*?)<\/script>/;
 var KEEPALIVE_MS = 10000;
 var MAX_RECONNECT_ATTEMPTS = 999999;
 var CAPTCHA_WAIT_MS = 30000; // scheduleReconnectNoCaptcha's fixed delay
+var ACTIVITY_MIN_MS = 500; // editorActivityLoop: a random delay in [0.5 s, 5 s]
+var ACTIVITY_MAX_MS = 5000;
+
+// saveChanges pieces, byte-identical to yandex.go. The op format is the
+// editor's closed binary; only the participant's id, the cursor positions
+// and the sequence counter vary. modelMetaOp is tied to the editor's version.
+var MODEL_META_OP =
+  "76;AgAAADEA//8BAJ+fl7jkAwIALQEAAAMAAAAAAAAAAAAAAAAAAAAAAAAA9v///xoAAAAyADAAMgA2AC4AMgAuADEALgAyADIANgA4AA==";
+var ENTITY_CURSOR = "35"; // cursor stream id (as in the original)
+var CURSOR_STREAM = "14"; // cursor stream id in CursorInfo
 
 var docURL = "";
 var running = false;
@@ -159,6 +173,10 @@ var userID = null;
 var userCounter = 0;
 var connectedAt = null;
 var keepAliveTimer = null;
+var activityTimer = null;
+var docInfo = null; // the live session's fetchDocInfo result (editor user id, isExcel)
+var connectGen = 0; // bumped by every connectToDoc: a stale attempt closes what it opened
+var reconnectTimer = null; // at most one reconnect pending
 // captchaWaitPending/captchaWaitAttempt/captchaWaitToken together guard
 // scheduleReconnectNoCaptcha's wait: a "cookiesApplied" event checks
 // captchaWaitPending, and if a wait IS outstanding right now, bumps
@@ -180,6 +198,71 @@ function randUserID() {
   return pad(Math.floor(Math.random() * 1000000000), 10);
 }
 
+// ---- saveChanges (editor activity) ----
+
+function utf16le(str) {
+  var out = [];
+  for (var i = 0; i < str.length; i++) out.push(str.charCodeAt(i) & 0xff, 0x00);
+  return out;
+}
+
+function bytesToB64(arr) {
+  return base64.encode(new Uint8Array(arr));
+}
+
+// cursorOp: one cursor op "<entity>;<base64>" - the same shape as the
+// original dump (string length prefix, userShortID in UTF-16LE, fixed
+// fields, a changing sequence byte).
+function cursorOp(userShortID, seq) {
+  var payload = [0x06, 0x00, 0x00, 0x00].concat(utf16le(userShortID), [
+    0x01, 0x00, 0x1c, 0x00,
+    0x01, 0x00, 0x00, 0x00,
+    seq & 0xff, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+  ]);
+  return ENTITY_CURSOR + ";" + bytesToB64(payload);
+}
+
+function cursorInfo(userShortID, seq) {
+  var payload = [0x06, 0x00, 0x00, 0x00].concat(utf16le(userShortID), [0x03, 0x00, 0x00, 0x00, seq & 0xff, 0x00]);
+  return CURSOR_STREAM + ";" + bytesToB64(payload);
+}
+
+// buildSaveChanges: the saveChanges message for one participant and
+// iteration. Same as BuildSaveChanges in yandex.go; object keys are written
+// in sorted order because Go marshals maps that way and the parity test
+// compares the bytes.
+function buildSaveChanges(userId, isExcel, seq) {
+  var short = userId.length > 10 ? userId.slice(0, 10) : userId;
+  var changes = [MODEL_META_OP, cursorOp(short, seq), cursorOp(short, seq + 1), cursorOp(short, seq + 2)];
+  var excelInfo = {
+    CursorInfo: cursorInfo(short, seq),
+    UserId: userId,
+    UserShortId: short,
+  };
+  var msg = {
+    changes: JSON.stringify(changes),
+    deleteIndex: null,
+    endSaveChanges: true,
+    excelAdditionalInfo: JSON.stringify(excelInfo),
+    isCoAuthoring: true,
+    isExcel: !!isExcel,
+    releaseLocks: true,
+    startSaveChanges: true,
+    type: "saveChanges",
+    unlock: false,
+  };
+  return "42" + JSON.stringify(["message", msg]);
+}
+
+// isExcelFile: a spreadsheet, by editor_config.document.fileType.
+function isExcelFile(fileType) {
+  var t = String(fileType || "").replace(/^\./, "").toLowerCase();
+  return t === "xlsx" || t === "xls" || t === "xlsm" || t === "csv";
+}
+
 function reconnectBackoff(n) {
   if (n < 1) n = 1;
   var shift = n - 1;
@@ -193,8 +276,10 @@ function reconnectBackoff(n) {
 function scheduleReconnect(attempt) {
   var next = attempt + 1;
   if (!running || next >= MAX_RECONNECT_ATTEMPTS) return;
+  if (reconnectTimer) return; // one is already pending: a second would open a duplicate session
   var d = reconnectBackoff(next);
-  setTimeout(function () {
+  reconnectTimer = setTimeout(function () {
+    reconnectTimer = null;
     if (!running) return;
     connectToDoc(next);
   }, d);
@@ -241,7 +326,7 @@ async function fetchDocInfo(url, uid) {
       if (!loc) throw new Error("redirect without Location from " + currentURL);
 
       if (loc.indexOf("showcaptcha") !== -1 && loc.indexOf("showcaptchafast") === -1) {
-        raise("captchaRequired", { url: url, location: loc });
+        raise("captchaRequired", { url: url, location: loc, reason: "smartcaptcha" });
         throw new SentinelError("captchaRequired");
       }
       if (loc.indexOf("showcaptchafast") !== -1) {
@@ -250,7 +335,9 @@ async function fetchDocInfo(url, uid) {
         continue;
       }
       if (loc.indexOf("passport.yandex") !== -1) {
-        raise("loginRequired", { url: url });
+        // A login wall reaches the app through the same notifier as a captcha, told apart
+        // by reason (the native transport does the same): the app opens a sign-in page.
+        raise("captchaRequired", { url: url, reason: "login" });
         throw new SentinelError("loginRequired");
       }
       currentURL = loc;
@@ -298,10 +385,17 @@ async function fetchDocInfo(url, uid) {
   var docKey = document_.key;
   if (!docKey) throw new Error("editor_config.document.key missing - will reconnect");
 
+  // editor_config.user.id is the participant's real id in the document: the
+  // server signs presence/cursors under it, so saveChanges must carry it.
+  var editorUser = editorConfig.user;
+  var editorUserId = editorUser && typeof editorUser.id === "string" ? editorUser.id : "";
+
   return {
     cookieStr: cookieStr,
     token: token,
     docId: docKey,
+    editorUserId: editorUserId,
+    isExcel: isExcelFile(document_.fileType),
     origin: balancerURL,
     host: host,
     wsURL: "wss://" + host + "/2024.1.1-375/doc/" + docKey + "/c/?EIO=4&transport=websocket",
@@ -333,9 +427,38 @@ function startKeepAlive() {
     try {
       sock.send('42["message",{"type":"cursor","cursor":"18;---KA---"}]');
     } catch (e) {
-      setState("degraded", String(e));
+      // Same as the native keep-alive: a write that fails means a dead
+      // connection - close it so the reconnect (via onclose) happens.
+      setState("reconnecting", String(e));
+      try { sock.close(); } catch (e2) {}
     }
   }, KEEPALIVE_MS);
+}
+
+// editorActivityLoop: sends a saveChanges message at a random interval in
+// [0.5 s, 5 s] so the stream looks like a live person editing. Skipped while
+// there is no session (mid-reconnect), exactly like the native loop.
+var activitySeq = 0;
+function startEditorActivity() {
+  if (activityTimer) clearTimeout(activityTimer);
+  activitySeq = 0;
+  var nextDelay = function () {
+    return ACTIVITY_MIN_MS + Math.floor(Math.random() * (ACTIVITY_MAX_MS - ACTIVITY_MIN_MS + 1));
+  };
+  var tick = function () {
+    activityTimer = null;
+    if (!running) return;
+    if (sock && docInfo) {
+      activitySeq++;
+      try {
+        sock.send(buildSaveChanges(docInfo.editorUserId || userID, docInfo.isExcel, activitySeq));
+      } catch (e) {
+        // the next tick tries again; a dead socket is the keep-alive's to notice
+      }
+    }
+    activityTimer = setTimeout(tick, nextDelay());
+  };
+  activityTimer = setTimeout(tick, nextDelay());
 }
 
 // extractBase64: yandex's collab server carries the payload either in a
@@ -372,6 +495,7 @@ function handleMessage(msg) {
 
 function onSocketClose(attempt) {
   sock = null;
+  docInfo = null;
   var next = attempt;
   if (connectedAt !== null && Date.now() - connectedAt > 15000) {
     next = -1;
@@ -382,6 +506,7 @@ function onSocketClose(attempt) {
 
 function connectToDoc(attempt) {
   if (!running) return;
+  var myGen = ++connectGen;
 
   (async function () {
     try {
@@ -400,15 +525,24 @@ function connectToDoc(attempt) {
         throw e;
       }
 
+      if (myGen !== connectGen || !running) return; // superseded while fetching
       var newSock = await ws.open(info.wsURL, {
         "User-Agent": "Mozilla/5.0",
         Origin: info.origin,
         Cookie: info.cookieStr,
         Host: info.host,
       });
+      if (myGen !== connectGen || !running) {
+        try { newSock.close(); } catch (e) {}
+        return;
+      }
       sock = newSock;
+      docInfo = info;
       sock.onmessage = handleMessage;
-      sock.onclose = function () { onSocketClose(attempt); };
+      sock.onclose = function () {
+        if (sock !== newSock) return; // a socket we already replaced or dropped on purpose
+        onSocketClose(attempt);
+      };
 
       sock.send('40{"token":"' + info.token + '"}');
       var authData = {
@@ -449,6 +583,7 @@ var Transport = {
     baseUserID = randUserID();
     running = true;
     startKeepAlive();
+    startEditorActivity();
     connectToDoc(0);
   },
 
@@ -459,9 +594,14 @@ var Transport = {
 
   close: function () {
     running = false;
+    connectGen++;
     captchaWaitToken++;
     captchaWaitPending = false;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
     if (keepAliveTimer) clearInterval(keepAliveTimer);
+    if (activityTimer) clearTimeout(activityTimer);
+    activityTimer = null;
     if (sock) { try { sock.close(); } catch (e) {} }
     sock = null;
   },
@@ -474,8 +614,14 @@ var Transport = {
   onEvent: function (kind) {
     if (kind === "cookiesApplied") {
       var wasWaiting = captchaWaitPending;
-      if (sock) { try { sock.close(); } catch (e) {} }
-      sock = null;
+      // The native ApplyCookies drops the session, so the next connect is a
+      // fresh participant: a new user id.
+      userID = null;
+      docInfo = null;
+      connectGen++; // drop an attempt in flight: the one below starts from the new cookies
+      var old = sock;
+      sock = null; // its onclose is ignored (sock !== newSock): one reconnect, below
+      if (old) { try { old.close(); } catch (e) {} }
       setState("reconnecting");
       if (wasWaiting) {
         wakeCaptchaWait();
