@@ -48,7 +48,7 @@ func registerHostAPI(vm *goja.Runtime, t *ScriptTransport) {
 
 	vm.Set("emit", hostEmit(vm, t))
 	vm.Set("setState", hostSetState(t))
-	vm.Set("raise", hostRaise(t))
+	vm.Set("raise", hostRaise(vm, t))
 }
 
 // ---- text.decode / text.encode ----
@@ -698,9 +698,11 @@ var captchaRaiseKinds = map[string]bool{"captchaRequired": true, "needsSetup": t
 // pattern used by the native yandex/mailru transports, generalized to any
 // kind); captchaRaiseKinds additionally reach SetErrorNotifier - the same
 // path those native transports' own captcha/login signal takes - carrying
-// payload.url (a real site) or payload.html (the script's own page, see
-// js/template_html.html) and payload.reason.
-func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
+// payload.url (a real site, or the script's own httpserver.listen() address)
+// or payload.html (the script's own page, see js/template_html.html) and
+// payload.reason. For those kinds the payload is checked first (see
+// setuppage.go) and a bad one throws a TypeError into the script.
+func hostRaise(vm *goja.Runtime, t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 	return func(call goja.FunctionCall) goja.Value {
 		kind := call.Argument(0).String()
 		payload := map[string]interface{}{}
@@ -708,6 +710,16 @@ func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 			for _, k := range obj.Keys() {
 				payload[k] = obj.Get(k).Export()
 			}
+		}
+		str := func(key string) string { s, _ := payload[key].(string); return s }
+		reason := str("reason")
+		if captchaRaiseKinds[kind] {
+			checked, err := t.checkSetupPayload(str("html"), str("url"), reason)
+			if err != nil {
+				panic(vm.NewTypeError("raise(" + kind + "): " + err.Error()))
+			}
+			reason = checked
+			payload["reason"] = reason
 		}
 		if kind == "roomList" {
 			if rooms, _ := payload["rooms"].(string); rooms != "" {
@@ -719,8 +731,7 @@ func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 		}
 		if captchaRaiseKinds[kind] {
 			if en := t.errorNotifier(); en != nil {
-				str := func(key string) string { s, _ := payload[key].(string); return s }
-				en(fmt.Errorf("script: %s", kind), t.name, str("url"), str("html"), str("reason"))
+				en(fmt.Errorf("script: %s", kind), t.name, str("url"), str("html"), reason)
 			}
 		}
 		return goja.Undefined()

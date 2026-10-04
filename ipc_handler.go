@@ -4,8 +4,33 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
+
+// localCheckRequest is what the app is asked when one of this process's own
+// transports needs a page shown: a real site's check, or a script's own
+// setup page (inline html, or the script's own loopback server). Own is the
+// core's call, so no app has to guess it from the address.
+func localCheckRequest(name, url, html, reason string) *ipc.CookiesRequestPayload {
+	return &ipc.CookiesRequestPayload{
+		Transport: name, URL: url, HTML: html, Reason: reason, Own: script.IsOwnPage(url, html),
+	}
+}
+
+// remoteCheckRequest is the request for a check the exit node reported: the
+// page is passed from the exit's address (proxy) and the answer goes back to
+// the exit. Nil when the exit's page may not be shown (see
+// script.AcceptRemoteCheck): its loopback address means nothing on this
+// machine and must not be opened here.
+func remoteCheckRequest(name, url, html, reason, proxy string) *ipc.CookiesRequestPayload {
+	if !script.AcceptRemoteCheck(url, html) {
+		return nil
+	}
+	return &ipc.CookiesRequestPayload{
+		Transport: name, URL: url, HTML: html, Reason: reason, Own: html != "", Remote: true, Proxy: proxy,
+	}
+}
 
 // coreIPCHandler is the app-facing side of the IPC bridge.
 //

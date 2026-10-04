@@ -13,6 +13,13 @@
 // yandex-family transport's happy path, exactly like the real app relaying
 // a solved captcha's cookies back via ApplyCookies.
 //
+// A script that asks for setup (raise("needsSetup" | "captchaRequired", ...))
+// is answered the way an app would: its page is served on 127.0.0.1 with
+// window.openfluxSubmit in it (-open shows it in your browser), and what the
+// page submits goes back to the script as cookiesApplied. -submit does the
+// submitting for you, for a script run without a person. See
+// transport/script/devhost and docs/scripted-transports.md.
+//
 // -burst/-burst-size measure real submission throughput: pick a count well
 // above the write queue's 1024-slot buffer (transport.DefaultConfig's
 // MaxQueueSize), or the measurement is just "how fast can I fill a buffer",
@@ -25,11 +32,14 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/script"
+	"github.com/p1neappleXpress/OpenFlux/transport/script/devhost"
 )
 
 func main() {
@@ -46,6 +56,10 @@ func main() {
 		"Once connected, send this many packets back-to-back as fast as Send() accepts them, then report "+
 			"elapsed time and throughput. 0 (default) = no burst, just -send's single packet.")
 	burstSize := flag.Int("burst-size", 512, "Payload size in bytes for each -burst packet")
+	openPages := flag.Bool("open", false,
+		"Open the setup pages the script raises in your browser (they are always served on 127.0.0.1 and the address printed)")
+	autoSubmit := flag.String("submit", "",
+		"JSON a setup page would submit, e.g. '{\"token\":\"abc\"}': delivered as soon as the script raises a setup page, as if the user had filled it in")
 	flag.Parse()
 
 	if *scriptPath == "" || *pubkeyHex == "" {
@@ -78,6 +92,18 @@ func main() {
 	tr.SetEventHandler(func(kind string, payload map[string]interface{}) {
 		fmt.Printf("[%s] EVENT %s %+v\n", ts(), kind, payload)
 	})
+	hostOpts := devhost.Options{Logf: func(f string, a ...interface{}) {
+		fmt.Printf("[%s] SETUP "+f+"\n", append([]interface{}{ts()}, a...)...)
+	}}
+	if *openPages {
+		hostOpts.Open = openBrowser
+	}
+	if *autoSubmit != "" {
+		hostOpts.AutoSubmit = []byte(*autoSubmit)
+	}
+	setupHost := devhost.New(tr, hostOpts)
+	defer setupHost.Close()
+	tr.SetErrorNotifier(setupHost.Notify)
 	recv := 0
 	tr.Receive(func(b []byte) {
 		recv++
@@ -182,6 +208,18 @@ func runBurst(tr *script.ScriptTransport, n, size int) {
 	pps := float64(sentOK) / elapsed.Seconds()
 	fmt.Printf("[%s] burst done: sent=%d failed=%d elapsed=%s throughput=%.0f pkt/s (%.1f KB/s submit-side)\n",
 		ts(), sentOK, failed, elapsed.Round(time.Millisecond), pps, bps/1024)
+}
+
+// openBrowser shows a URL in the developer's default browser.
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url).Start()
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
+	}
 }
 
 func ts() string { return time.Now().Format("15:04:05.000") }

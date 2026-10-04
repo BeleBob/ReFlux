@@ -856,21 +856,21 @@ DEPRECATED (removed in v2)
 			// Checks for local transports go to the app as-is; checks the
 			// exit reports are marked Remote, to be passed from its address.
 			managerInst.SetCaptchaNotifier(func(name, url, html, reason string) {
-				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-					Transport: name, URL: url, HTML: html, Reason: reason,
-				})
+				_ = srv.SendCookiesRequest(localCheckRequest(name, url, html, reason))
 			})
 			if *role == roleClient {
 				demux = transport.NewPortDemux(managerInst, authProxyPortLo, authProxyPortHi)
 				authProxy := &remoteAuthProxy{demux: demux}
 				managerInst.SetRemoteAuthNotifier(func(name, url, html, reason string) {
+					if remoteCheckRequest(name, url, html, reason, "") == nil {
+						log.Printf("remote check from %s ignored: its address is not a site this machine may open and it brought no page", name)
+						return
+					}
 					proxy, err := authProxy.Addr()
 					if err != nil {
 						log.Printf("remote auth proxy: %v", err)
 					}
-					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-						Transport: name, URL: url, HTML: html, Reason: reason, Remote: true, Proxy: proxy,
-					})
+					_ = srv.SendCookiesRequest(remoteCheckRequest(name, url, html, reason, proxy))
 				})
 			}
 		}

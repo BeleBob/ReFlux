@@ -1,7 +1,6 @@
 package mobile
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 )
 
 // Android side of the core's out-of-band captcha/login flow. Desktop and iOS
@@ -23,7 +23,12 @@ var captcha struct {
 	// html is a page the script built itself (template_html.html's
 	// contract), shown instead of url when set - a script transport's
 	// own setup/login page rather than a real site.
-	html   string
+	html string
+	// own marks a page that is the script's own (html, or an address on its
+	// own loopback server) rather than a real site: the app shows it as it
+	// is, offers window.openfluxSubmit and collects no cookies. The core
+	// decides (script.IsOwnPage); the app must not guess from the URL.
+	own    bool
 	reason string
 	// apply hands cookies to the live transport that asked for them; nil
 	// once that transport stopped or failed to start.
@@ -63,6 +68,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 	captcha.key = transportType + " " + documentURL
 	captcha.url = ""
 	captcha.html = ""
+	captcha.own = false
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.apply = nil
@@ -76,6 +82,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 			captcha.mu.Lock()
 			captcha.url = url
 			captcha.html = html
+			captcha.own = script.IsOwnPage(url, html)
 			captcha.reason = reason
 			captcha.mu.Unlock()
 		})
@@ -93,6 +100,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *authProxy) {
 	captcha.mu.Lock()
 	captcha.key, captcha.url, captcha.html, captcha.reason, captcha.apply = "", "", "", "", nil
+	captcha.own = false
 	captcha.proxy, captcha.remoteName = "", ""
 	store := captcha.store
 	captcha.mu.Unlock()
@@ -107,6 +115,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 		appendLog(fmt.Sprintf("[ANDROID] %s: нужна проверка в браузере (%s)", name, reason))
 		captcha.mu.Lock()
 		captcha.url, captcha.html, captcha.reason, captcha.key = url, html, reason, keys[name]
+		captcha.own = script.IsOwnPage(url, html)
 		captcha.proxy, captcha.remoteName = "", ""
 		captcha.apply = func(jar map[string]string) error { return m.ApplyCookiesFor(name, jar) }
 		captcha.mu.Unlock()
@@ -118,8 +127,12 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 	// passed from the exit's address, so the page goes through the tunnel,
 	// and the cookies go back to the exit, which applies and keeps them.
 	m.SetRemoteAuthNotifier(func(name, url, html, reason string) {
+		if !script.AcceptRemoteCheck(url, html) {
+			appendLog(fmt.Sprintf("[ANDROID] Нода: %s прислала адрес не https, игнорирую", name))
+			return
+		}
 		captcha.mu.Lock()
-		quiet := captcha.url != "" || time.Now().Before(captcha.snooze[name])
+		quiet := captcha.url != "" || captcha.html != "" || time.Now().Before(captcha.snooze[name])
 		captcha.mu.Unlock()
 		if quiet {
 			return
@@ -132,6 +145,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 		appendLog(fmt.Sprintf("[ANDROID] Нода: %s требует проверку в браузере (%s)", name, reason))
 		captcha.mu.Lock()
 		captcha.url, captcha.html, captcha.reason, captcha.key = url, html, reason, ""
+		captcha.own = html != ""
 		captcha.proxy, captcha.remoteName = addr, name
 		captcha.apply = func(jar map[string]string) error { return m.OfferCookies(name, jar) }
 		captcha.mu.Unlock()
@@ -159,7 +173,8 @@ func detachCaptcha() {
 // PendingCaptchaURL returns the page the user must open to pass a captcha
 // or log in, or "" when nothing is pending. Mutually exclusive with
 // PendingCaptchaHTML: a script transport's own page sets one or the other,
-// never both.
+// never both. It is https (a real site), or, when PendingCaptchaOwn is true,
+// an http://127.0.0.1:port address the script's own server answers on.
 func PendingCaptchaURL() string {
 	captcha.mu.Lock()
 	defer captcha.mu.Unlock()
@@ -174,6 +189,17 @@ func PendingCaptchaHTML() string {
 	captcha.mu.Lock()
 	defer captcha.mu.Unlock()
 	return captcha.html
+}
+
+// PendingCaptchaOwn reports that the pending page is the script's own: its
+// inline PendingCaptchaHTML, or a PendingCaptchaURL on the script's own
+// loopback server (http://127.0.0.1:port). The app shows it as it is, gives
+// it window.openfluxSubmit (SubmitCaptchaData takes what it hands over) and
+// does not look for cookies in it. False for a real site's check.
+func PendingCaptchaOwn() bool {
+	captcha.mu.Lock()
+	defer captcha.mu.Unlock()
+	return captcha.own
 }
 
 // PendingCaptchaReason is "smartcaptcha" or "login" while a check is pending.
@@ -195,6 +221,7 @@ func CancelCaptcha() {
 	}
 	captcha.url = ""
 	captcha.html = ""
+	captcha.own = false
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.mu.Unlock()
@@ -211,19 +238,17 @@ func SubmitCaptchaCookies(cookieHeader string) string {
 	return submitCaptchaJar(jar)
 }
 
-// SubmitCaptchaData takes the JSON object a script transport's own setup
-// page passed to window.openfluxSubmit (template_html.html's contract) and
-// delivers it the same way SubmitCaptchaCookies delivers real cookies: the
-// script reads it back via cookieJar.get() in its onEvent("cookiesApplied")
-// handler (see js/template.js) - ApplyCookies does not care whether the
-// values are browser cookies or a script's own config.
+// SubmitCaptchaData takes the JSON a script transport's own setup page
+// passed to window.openfluxSubmit (script.FlattenSubmission says how it is
+// read: flat or {client: {...}}, values as strings) and delivers it the same
+// way SubmitCaptchaCookies delivers real cookies: the script reads it back
+// via cookieJar.get() in its onEvent("cookiesApplied") handler (see
+// js/template.js) - ApplyCookies does not care whether the values are
+// browser cookies or a script's own config.
 func SubmitCaptchaData(json_ string) string {
-	jar, err := decodeStringMap(json_)
+	jar, err := script.FlattenSubmission([]byte(json_))
 	if err != nil {
-		return "Некорректные данные: " + err.Error()
-	}
-	if len(jar) == 0 {
-		return "Данные не получены"
+		return "Страница настройки: " + err.Error()
 	}
 	return submitCaptchaJar(jar)
 }
@@ -236,6 +261,7 @@ func submitCaptchaJar(jar map[string]string) string {
 	store, key, apply := captcha.store, captcha.key, captcha.apply
 	captcha.url = ""
 	captcha.html = ""
+	captcha.own = false
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.mu.Unlock()
@@ -255,17 +281,6 @@ func submitCaptchaJar(jar map[string]string) string {
 	}
 	appendLog(fmt.Sprintf("[ANDROID] Получено значений: %d", len(jar)))
 	return ""
-}
-
-// decodeStringMap parses a JSON object of string values, as
-// window.openfluxSubmit's payload is - a script's setup page collects
-// plain form input, not nested structures.
-func decodeStringMap(s string) (map[string]string, error) {
-	var out map[string]string
-	if err := json.Unmarshal([]byte(s), &out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func parseCookieHeader(header string) map[string]string {

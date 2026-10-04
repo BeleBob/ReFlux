@@ -1,8 +1,14 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
+	"io"
+	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +17,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
 	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 )
 
 // e2eTransport is a fake raw transport that implements ErrorNotifier and
@@ -110,12 +117,7 @@ func TestCaptchaOverIPC(t *testing.T) {
 
 	// Wire the captcha notifier exactly the way main.go does.
 	m.SetCaptchaNotifier(func(_name, url, html, reason string) {
-		_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-			Transport: "yandex",
-			URL:       url,
-			HTML:      html,
-			Reason:    reason,
-		})
+		_ = srv.SendCookiesRequest(localCheckRequest("yandex", url, html, reason))
 	})
 
 	// 3. IPC client with a handler that answers CookiesRequest with an offer.
@@ -154,4 +156,162 @@ func TestCaptchaOverIPC(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("cookies not applied: %+v", raw.getJar())
+}
+
+// A script transport asks for its own setup page, served by its own
+// httpserver.listen(), and the app answers it: script -> manager -> IPC ->
+// app (opens the page, the user submits) -> IPC -> manager -> script. The
+// request must say the page is the script's own, the address is its
+// loopback server, and what the page submits reaches onEvent.
+func TestScriptSetupPageOverIPC(t *testing.T) {
+	const src = `
+var Transport = {
+  info: function () { return { name: "setup-e2e", version: "1.0.0", cookieDomain: "https://example.com/" }; },
+  open: function (cfg) {
+    var srv = httpserver.listen(function (req) {
+      if (req.path === "/") return { headers: { "Content-Type": "text/html" }, body: "<!doctype html><p>setup page of the script</p>" };
+      return { status: 404, body: "no" };
+    });
+    this._srv = srv;
+    setState("connecting");
+    raise("needsSetup", { url: "http://" + srv.addr + "/", reason: "Подключите аккаунт" });
+  },
+  onEvent: function (kind) {
+    if (kind === "cookiesApplied") {
+      var c = cookieJar.get();
+      setState("connected");
+      raise("applied", { token: c.token, port: c.port });
+    }
+  },
+  write: function (bytes) {},
+  close: function () { if (this._srv) this._srv.close(); },
+};
+`
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "setup-e2e.js")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".sig", ed25519.Sign(priv, []byte(src)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := script.New("setup-e2e", path, pub, "local://test", nil, transport.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := make(chan map[string]interface{}, 1)
+	tr.SetEventHandler(func(kind string, payload map[string]interface{}) {
+		if kind == "applied" {
+			applied <- payload
+		}
+	})
+
+	sess, err := transport.NewSession(transport.PeerParameters{
+		Capabilities:  control.CapabilityIPv4 | control.CapabilityTCP,
+		MaxPacketSize: 1500,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Stop()
+	m := manager.New(sess, nil, "test-secret-long-enough", "test-ctx")
+	if err := m.Add("setup-e2e", "script", tr, 100, tr); err != nil {
+		t.Fatal(err)
+	}
+
+	sock := filepath.Join(t.TempDir(), "oflx.sock")
+	srv := ipc.NewServer(sock, &coreIPCHandler{manager: m})
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	m.SetCaptchaNotifier(func(name, url, html, reason string) {
+		_ = srv.SendCookiesRequest(localCheckRequest(name, url, html, reason))
+	})
+
+	cli, err := ipc.Dial(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	type seen struct {
+		req  ipc.CookiesRequestPayload
+		page string
+	}
+	got := make(chan seen, 1)
+	cli.SetHandler(func(typ ipc.MsgType, payload []byte) {
+		if typ != ipc.MsgCookiesRequest {
+			return
+		}
+		var req ipc.CookiesRequestPayload
+		if err := ipc.DecodeJSON(payload, &req); err != nil {
+			return
+		}
+		// The app opens the page ...
+		page := ""
+		if resp, err := http.Get(req.URL); err == nil {
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			page = string(b)
+		}
+		got <- seen{req, page}
+		// ... and the user submits it (window.openfluxSubmit).
+		_ = cli.SendCookiesOffer(&ipc.CookiesOfferPayload{
+			Transport: req.Transport,
+			Jar:       map[string]string{"token": "from-the-page", "port": "8080"},
+		})
+	})
+	time.Sleep(100 * time.Millisecond)
+
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+
+	select {
+	case s := <-got:
+		if !s.req.Own {
+			t.Error("the core must mark the script's own server page as own")
+		}
+		if !strings.HasPrefix(s.req.URL, "http://127.0.0.1:") || s.req.HTML != "" || s.req.Remote {
+			t.Errorf("request = %+v, want the script's loopback address, no html, not remote", s.req)
+		}
+		if s.req.Reason != "Подключите аккаунт" || s.req.Transport != "setup-e2e" {
+			t.Errorf("reason/transport = %q / %q", s.req.Reason, s.req.Transport)
+		}
+		if !strings.Contains(s.page, "setup page of the script") {
+			t.Errorf("the app could not open the page: %q", s.page)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the app never got the setup request")
+	}
+	select {
+	case a := <-applied:
+		if a["token"] != "from-the-page" || a["port"] != "8080" {
+			t.Fatalf("the script got %v", a)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("what the page submitted never reached the script")
+	}
+}
+
+func TestRemoteCheckRequest(t *testing.T) {
+	if r := remoteCheckRequest("yandex", "https://docs.yandex.ru/d", "", "smartcaptcha", "127.0.0.1:9"); r == nil || !r.Remote || r.Own || r.Proxy != "127.0.0.1:9" {
+		t.Errorf("a real site's check from the exit = %+v", r)
+	}
+	if r := remoteCheckRequest("script", "", "<p>setup</p>", "x", "127.0.0.1:9"); r == nil || !r.Own || !r.Remote {
+		t.Errorf("an exit script's inline page = %+v", r)
+	}
+	if r := remoteCheckRequest("script", "http://127.0.0.1:5000/", "", "x", "127.0.0.1:9"); r != nil {
+		t.Errorf("the exit's loopback address must not be shown here: %+v", r)
+	}
+	if r := localCheckRequest("script", "http://127.0.0.1:5000/", "", "x"); !r.Own || r.Remote {
+		t.Errorf("a local script's own server page = %+v", r)
+	}
+	if r := localCheckRequest("yandex", "https://docs.yandex.ru/d", "", "smartcaptcha"); r.Own {
+		t.Errorf("a real site's check is not own: %+v", r)
+	}
 }

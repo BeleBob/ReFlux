@@ -55,9 +55,9 @@ func registerHTTPServer(vm *goja.Runtime, t *ScriptTransport) {
 		respond := newLoopRespondFunc(vm)
 		hs := &scriptHTTPServer{t: t, vm: vm, handler: handler, respond: respond}
 		srv := &http.Server{Handler: hs}
-		t.addHTTPServer(srv)
-
 		addr := ln.Addr().(*net.TCPAddr)
+		t.addHTTPServer(srv, addr.Port)
+
 		utils.SafeGo("script."+t.name+".httpserver", func() {
 			_ = srv.Serve(ln)
 			t.removeHTTPServer(srv)
@@ -222,9 +222,17 @@ func decodeServerResponse(vm *goja.Runtime, v goja.Value) (status int, headers m
 	return
 }
 
-func (t *ScriptTransport) addHTTPServer(s *http.Server) {
+// ownedServer is one listener a script started, with the port it got: the
+// port is what lets raise() accept a setup page address only for a server
+// this transport itself serves (see checkSetupURL).
+type ownedServer struct {
+	srv  *http.Server
+	port int
+}
+
+func (t *ScriptTransport) addHTTPServer(s *http.Server, port int) {
 	t.httpServersMu.Lock()
-	t.httpServers = append(t.httpServers, s)
+	t.httpServers = append(t.httpServers, ownedServer{srv: s, port: port})
 	t.httpServersMu.Unlock()
 }
 
@@ -232,11 +240,24 @@ func (t *ScriptTransport) removeHTTPServer(s *http.Server) {
 	t.httpServersMu.Lock()
 	defer t.httpServersMu.Unlock()
 	for i, s2 := range t.httpServers {
-		if s2 == s {
+		if s2.srv == s {
 			t.httpServers = append(t.httpServers[:i], t.httpServers[i+1:]...)
 			return
 		}
 	}
+}
+
+// ownsHTTPPort reports whether one of this transport's running
+// httpserver.listen() servers is bound to port.
+func (t *ScriptTransport) ownsHTTPPort(port int) bool {
+	t.httpServersMu.Lock()
+	defer t.httpServersMu.Unlock()
+	for _, s := range t.httpServers {
+		if s.port == port {
+			return true
+		}
+	}
+	return false
 }
 
 // closeHTTPServers shuts down every server this transport started. Called
@@ -248,8 +269,7 @@ func (t *ScriptTransport) closeHTTPServers() {
 	t.httpServersMu.Unlock()
 	for _, s := range servers {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = s.Shutdown(ctx)
+		_ = s.srv.Shutdown(ctx)
 		cancel()
 	}
 }
-

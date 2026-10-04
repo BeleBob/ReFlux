@@ -75,7 +75,7 @@ type ScriptTransport struct {
 	// (its setup/login mini-app - see host_httpserver.go), closed in Stop
 	// so none outlives the transport.
 	httpServersMu sync.Mutex
-	httpServers   []*http.Server
+	httpServers   []ownedServer
 }
 
 // New builds a script transport from a signed JS file at scriptPath. pubKey
