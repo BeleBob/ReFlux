@@ -1,6 +1,6 @@
 module openflux-mobile
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/p1neappleXpress/OpenFlux v0.0.0

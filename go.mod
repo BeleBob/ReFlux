@@ -1,6 +1,6 @@
 module github.com/p1neappleXpress/OpenFlux
 
-go 1.26.4
+go 1.26.6
 
 require github.com/gorilla/websocket v1.5.3
 
@@ -14,21 +14,21 @@ require (
 )
 
 require (
+	github.com/dop251/goja v0.0.0-20260926152631-39ec2650adc9
+	github.com/dop251/goja_nodejs v0.0.0-20260918173711-b481721df8a2
 	github.com/jlaffaye/ftp v0.2.4
 	github.com/klauspost/compress v1.20.0
 	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/pion/webrtc/v3 v3.3.6
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/xjasonlyu/windivert-go v0.0.0-20201010013527-4239d0afa76f
-	golang.org/x/crypto v0.51.0
-	golang.org/x/net v0.55.0
+	golang.org/x/crypto v0.56.0
+	golang.org/x/net v0.57.0
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 )
 
 require (
 	github.com/dlclark/regexp2/v2 v2.5.2 // indirect
-	github.com/dop251/goja v0.0.0-20260926152631-39ec2650adc9 // indirect
-	github.com/dop251/goja_nodejs v0.0.0-20260918173711-b481721df8a2 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
 	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -50,6 +50,6 @@ require (
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 )
