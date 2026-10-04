@@ -222,8 +222,8 @@ func lintPackage(m *script.PackageManifest, scriptSrc []byte, manifestPath strin
 		return fmt.Errorf("%s: \"version\" must be MAJOR.MINOR.PATCH (e.g. 1.0.0), got %q", manifestPath, m.Version)
 	}
 	for _, u := range m.Update {
-		if !strings.HasPrefix(u, "https://") {
-			return fmt.Errorf("%s: update URL %q must be https", manifestPath, u)
+		if !script.SecureURL(u) {
+			return fmt.Errorf("%s: update URL %q must be https (http only to localhost)", manifestPath, u)
 		}
 	}
 	info, err := script.Inspect(scriptSrc)

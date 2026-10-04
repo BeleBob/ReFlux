@@ -150,8 +150,9 @@ func HTTPFetcher(ctx context.Context, rawURL string, limit int64) ([]byte, error
 	return b, nil
 }
 
-// secureURL: https, or plain http only to the loopback (tests, local dev).
-func secureURL(raw string) bool {
+// SecureURL: https, or plain http only to the loopback (tests, local dev). The one rule
+// for update addresses, in the core and in scriptsign.
+func SecureURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return false
@@ -228,7 +229,7 @@ func ApplyUpdate(ctx context.Context, inst Installed, channel, dir string, allow
 
 	var data []byte
 	for _, u := range append([]string{rep.url}, rep.mirrors...) {
-		if !secureURL(u) {
+		if !SecureURL(u) {
 			return fail(CodeInsecureURL)
 		}
 		b, err := get(ctx, u, maxPackageBytes)
@@ -359,7 +360,7 @@ func swap(cur, prev, tmp string) error {
 func fetchIndex(ctx context.Context, inst Installed, get Fetcher) (*UpdateIndex, string, string) {
 	code := CodeFetchFailed
 	for _, u := range inst.Update {
-		if !secureURL(u) {
+		if !SecureURL(u) {
 			code = CodeInsecureURL
 			continue
 		}
