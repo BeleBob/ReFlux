@@ -196,3 +196,31 @@ CLI (desktop): `--check-script-update`, `--apply-script-update
 [--allow-wire-break]`, `--rollback-script`, each with `--id --pubkey
 --update=<url,…> [--version --wire --channel --dir]`, printing the JSON
 report. Mobile: `CheckScriptUpdate`, `ApplyScriptUpdate`, `RollbackScript`.
+
+## Official keys
+
+A transport is "official" when its signature verifies under a key in
+`officialKeys` (`transport/script/trust.go`; `OfficialKeyHex`, the first, is the
+one packages are signed with today). Official transports are the only ones an app
+updates without asking (`UpdateReport.AutoOK`), so these keys are the root of
+that trust and are handled accordingly:
+
+- **Where the private key lives.** On the key holder's machine
+  (`~/oflx-keys/script-signing.key`), signed with `transport/script/js/build.sh
+  <key>` (bundled scripts) or `OpenFluxTransports/scripts/build.sh <id> <key>`
+  (released packages). It is not stored as a CI secret; the release workflow in
+  OpenFluxTransports notices the missing `SIGNING_KEY` and a release is made by
+  hand.
+- **Rotating it** takes two core releases. First add the new public key to
+  `officialKeys` and ship that (every installed app now trusts both). Once most
+  apps have it, sign with the new key. An update of an official transport signed
+  by another official key is accepted and reported as `UpdateReport.NewKey`; the
+  app re-pins the install to it. The previous version kept for a rollback is also
+  accepted when it predates the rotation.
+- **A leaked key** is removed from `officialKeys` in a release: installs pinned to
+  it stop being "official" (they ask before updating) and nothing it signed is
+  trusted as first-party any more. Re-sign the transports with a new key and ship
+  the list that has it first.
+- **Third-party transports** never change key through an update, and an update
+  index announcing a key other than the pinned one is blocked (`key_changed`): that
+  is a new trust decision, made by importing the transport again.
