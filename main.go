@@ -188,6 +188,18 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "--inspect-script" {
 		os.Exit(runInspectScript(os.Args[2:], os.Stdout))
 	}
+	// Updates of installed script transports, JSON reports on stdout; see
+	// script_cli.go. The apps decide only when to call them and what to say.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "--check-script-update":
+			os.Exit(runCheckScriptUpdate(os.Args[2:], os.Stdout))
+		case "--apply-script-update":
+			os.Exit(runApplyScriptUpdate(os.Args[2:], os.Stdout))
+		case "--rollback-script":
+			os.Exit(runRollbackScript(os.Args[2:], os.Stdout))
+		}
+	}
 	fmt.Print("written by p1neappleXpress\n")
 
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")

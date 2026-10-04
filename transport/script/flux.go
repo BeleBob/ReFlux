@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 // PackageManifest is the distribution-level metadata a .flux package carries
@@ -19,11 +20,57 @@ import (
 // bytes, so a legitimate transport's name/author/description can't be
 // swapped without invalidating the signature.
 type PackageManifest struct {
+	// ID is the transport's stable identity across versions and mirrors: what
+	// an update index must name and what the app files the package under. Empty
+	// in older packages; EffectiveID then derives it from Name.
+	ID          string `json:"id,omitempty"`
 	Name        string `json:"name"`
 	Version     string `json:"version"`
 	Author      string `json:"author"`
 	Description string `json:"description"`
 	Icon        string `json:"icon,omitempty"` // filename inside the archive, e.g. "icon.png"
+
+	// Wire is the generation of the transport's own wire format. A client and
+	// a node both run the transport, so two versions with the same Wire always
+	// interoperate and an update between them is safe; a different Wire is a
+	// breaking change both ends must take together. 0 (absent) means 1.
+	Wire int `json:"wire,omitempty"`
+	// API is the host-API generation (APIVersion) the script was written for;
+	// a core that knows only an older one refuses it. 0 (absent) means 1.
+	API int `json:"api,omitempty"`
+	// Update lists the https URLs of the author's update.json (the first
+	// that answers wins; later ones are mirrors). Covered by the signature
+	// like everything else here, so an update source cannot be swapped for a
+	// package without re-signing it.
+	Update []string `json:"update,omitempty"`
+}
+
+// APIVersion is the host-API generation this core implements. A package
+// declaring a newer one is refused instead of half-running.
+const APIVersion = 1
+
+// EffectiveID is the id the package is filed and updated under.
+func (m PackageManifest) EffectiveID() string {
+	if id := strings.TrimSpace(m.ID); id != "" {
+		return id
+	}
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(m.Name), " ", "-"))
+}
+
+// EffectiveWire is Wire with the "absent means 1" rule applied.
+func (m PackageManifest) EffectiveWire() int {
+	if m.Wire <= 0 {
+		return 1
+	}
+	return m.Wire
+}
+
+// EffectiveAPI is API with the "absent means 1" rule applied.
+func (m PackageManifest) EffectiveAPI() int {
+	if m.API <= 0 {
+		return 1
+	}
+	return m.API
 }
 
 // Package is one loaded, signature-verified .flux file.

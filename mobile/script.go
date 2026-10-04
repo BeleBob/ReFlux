@@ -12,6 +12,7 @@ package mobile
 // Picking a real script transport in a profile is a later step.
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -158,4 +159,57 @@ func ScriptEngineSelfTest(dir string) string {
 	res["ok"] = got >= len(probe)
 	b, _ := json.Marshal(res)
 	return string(b)
+}
+
+// scriptUpdateCall decodes the installed-transport JSON the apps pass
+// ({"id","version","wire","pubkey","update":[...]}).
+func scriptUpdateCall(installedJSON string) (script.Installed, bool) {
+	var inst script.Installed
+	if json.Unmarshal([]byte(installedJSON), &inst) != nil || inst.ID == "" || inst.PubkeyHex == "" {
+		return inst, false
+	}
+	return inst, true
+}
+
+func updateReportJSON(rep script.UpdateReport) string {
+	b, _ := json.Marshal(rep)
+	return string(b)
+}
+
+const usageReport = `{"status":"error","code":"usage"}`
+
+// CheckScriptUpdate asks an installed transport's update sources whether a
+// newer version exists on channel ("stable"/"nightly"). Returns a JSON
+// UpdateReport: status, code, current, latest, wire, wireBreak, notes,
+// official, autoOk. See script.CheckUpdate.
+func CheckScriptUpdate(installedJSON, channel string) string {
+	inst, ok := scriptUpdateCall(installedJSON)
+	if !ok {
+		return usageReport
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return updateReportJSON(script.CheckUpdate(ctx, inst, channel, script.HTTPFetcher))
+}
+
+// ApplyScriptUpdate checks, downloads, verifies under the pinned key and
+// installs the update into dir; the replaced version stays as <id>.flux.prev.
+// A wire break installs only with allowWireBreak.
+func ApplyScriptUpdate(installedJSON, channel, dir string, allowWireBreak bool) string {
+	inst, ok := scriptUpdateCall(installedJSON)
+	if !ok || dir == "" {
+		return usageReport
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	return updateReportJSON(script.ApplyUpdate(ctx, inst, channel, dir, allowWireBreak, script.HTTPFetcher))
+}
+
+// RollbackScript makes the previous version of a transport current again.
+func RollbackScript(installedJSON, dir string) string {
+	inst, ok := scriptUpdateCall(installedJSON)
+	if !ok || dir == "" {
+		return usageReport
+	}
+	return updateReportJSON(script.RollbackPackage(dir, inst.ID, inst.PubkeyHex))
 }

@@ -76,6 +76,9 @@ func New(name, scriptPath string, pubKey ed25519.PublicKey, url string, params m
 		if err != nil {
 			return nil, err
 		}
+		if p.Manifest.EffectiveAPI() > APIVersion {
+			return nil, fmt.Errorf("script: %s needs host API %d, this core has %d", scriptPath, p.Manifest.EffectiveAPI(), APIVersion)
+		}
 		pkg, src = p, p.Script
 	} else {
 		s, err := LoadSigned(scriptPath, pubKey)

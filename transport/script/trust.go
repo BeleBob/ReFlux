@@ -27,6 +27,15 @@ type TrustReport struct {
 	Official      bool    `json:"official,omitempty"`
 	Author        string  `json:"author,omitempty"`
 	PackageAuthor string  `json:"packageAuthor,omitempty"`
+	// From a .flux package's manifest; the app stores them with the install so
+	// updates can be found and judged later (see CheckUpdate).
+	ID     string   `json:"id,omitempty"`
+	Wire   int      `json:"wire,omitempty"`
+	API    int      `json:"api,omitempty"`
+	Update []string `json:"update,omitempty"`
+	// Code is a machine reason when OK is false for a known cause
+	// (CodeNeedsNewerApp).
+	Code string `json:"code,omitempty"`
 }
 
 // InspectTrust reads a downloaded transport before it is trusted or run and
@@ -65,6 +74,12 @@ func InspectTrust(data, sig []byte, pubkeyHex, officialKeyHex string) TrustRepor
 			return report
 		}
 		src = pkg.Script
+		report.ID, report.Wire, report.API, report.Update = pkg.Manifest.EffectiveID(), pkg.Manifest.EffectiveWire(), pkg.Manifest.EffectiveAPI(), pkg.Manifest.Update
+		if report.API > APIVersion {
+			report.Code = CodeNeedsNewerApp
+			report.Error = "транспорту нужна более новая версия приложения"
+			return report
+		}
 		if pkg.Manifest.Author != "" {
 			report.PackageAuthor = pkg.Manifest.Author
 		}

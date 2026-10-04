@@ -152,3 +152,47 @@ API above) is traded for a hard gate at the door.
 
 These three tools are also cross-compiled and published by the nightly
 channel - see [building-and-releases.md](building-and-releases.md).
+
+## Versions and updates
+
+The unit of an update is the signed `.flux` package. Its `manifest.json`
+(covered by the signature) carries:
+
+| field | meaning |
+|---|---|
+| `id` | stable identity across versions and mirrors; the package is filed as `<id>.flux` (defaults to the lower-cased `name`) |
+| `version` | semantic version, `MAJOR.MINOR.PATCH[-pre]`; must equal the script's own `info().version` (`scriptsign pack` checks) |
+| `wire` | wire-format generation (default 1). Same `wire` = client and node interoperate, an update is safe; another `wire` = breaking, both ends must update together |
+| `api` | host-API generation the script was written for (default 1, `script.APIVersion`); a core that knows only an older one refuses the package |
+| `update` | https URLs of the author's `update.json`; the first that answers wins, the rest are mirrors |
+
+The author publishes an `update.json` next to the release, one entry per
+channel (`stable`, `nightly`); `scriptsign index` writes it from the built
+package so id, version, wire, api and the SHA-256 cannot disagree with what is
+actually published:
+
+```json
+{ "format": 1, "id": "vyandex",
+  "channels": { "stable": { "version": "1.4.0", "wire": 2, "api": 1,
+                            "url": "vyandex-1.4.0.flux", "sha256": "…",
+                            "mirrors": ["https://…"], "notes": "…" } } }
+```
+
+Nothing in `update.json` is trusted by itself. `script.CheckUpdate` /
+`ApplyUpdate` accept a package only if it verifies under the key the user
+pinned when they first trusted the transport (a changed key is never an
+update: it is a new import with a new fingerprint), its manifest agrees with
+the index (id, version, wire, api), its hash matches, it is strictly newer,
+and every URL is https. A rejected update leaves the installed file
+untouched; an accepted one keeps the replaced file as `<id>.flux.prev`, and
+`RollbackPackage` swaps it back (re-verified, so it fails closed too).
+
+The report (`UpdateReport`) carries machine codes only (`status`, `code`,
+`wireBreak`, `official`, `autoOk`); the apps own the wording. `autoOk` is the
+core's decision for "may install without asking": first-party key, same
+wire, same author key. Everything else is asked about.
+
+CLI (desktop): `--check-script-update`, `--apply-script-update
+[--allow-wire-break]`, `--rollback-script`, each with `--id --pubkey
+--update=<url,…> [--version --wire --channel --dir]`, printing the JSON
+report. Mobile: `CheckScriptUpdate`, `ApplyScriptUpdate`, `RollbackScript`.

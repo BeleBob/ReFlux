@@ -7,6 +7,7 @@
 //	scriptsign sign   <priv.key> <transport.js>        writes transport.js.sig
 //	scriptsign verify <pub.key>  <transport.js>        (or a .flux package)
 //	scriptsign pack [-store] <priv.key> <manifest.json> <script.js> <out.flux> [icon-file]
+//	scriptsign index -channel=stable -url=<where the .flux will be> [-notes=<text>] [-mirror=<url>]... <update.json> <package.flux>
 //
 // Keys are stored raw-hex, one line, no headers.
 package main
@@ -14,6 +15,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -39,6 +41,8 @@ func main() {
 		err = verify(os.Args[2:])
 	case "pack":
 		err = pack(os.Args[2:])
+	case "index":
+		err = index(os.Args[2:])
 	default:
 		usage()
 	}
@@ -54,6 +58,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  scriptsign sign   <priv.key> <transport.js>")
 	fmt.Fprintln(os.Stderr, "  scriptsign verify <pub.key>  <transport.js|transport.flux>")
 	fmt.Fprintln(os.Stderr, "  scriptsign pack [-store] <priv.key> <manifest.json> <script.js> <out.flux> [icon-file]")
+	fmt.Fprintln(os.Stderr, "  scriptsign index -channel=stable -url=<package url> [-notes=<text>] [-mirror=<url>]... <update.json> <package.flux>")
 	os.Exit(2)
 }
 
@@ -162,6 +167,9 @@ func pack(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := lintPackage(&manifest, scriptSrc, manifestPath); err != nil {
+		return err
+	}
 
 	var icon []byte
 	manifest.Icon = ""
@@ -191,4 +199,105 @@ func readHexFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	return hex.DecodeString(strings.TrimSpace(string(b)))
+}
+
+// lintPackage fills the manifest's identity defaults and refuses the
+// mistakes that would only surface on a user's device: a manifest that
+// disagrees with the script's own info(), a version that is not semver, an
+// update source that is not https.
+func lintPackage(m *script.PackageManifest, scriptSrc []byte, manifestPath string) error {
+	if m.ID == "" {
+		m.ID = m.EffectiveID()
+	}
+	if m.Wire <= 0 {
+		m.Wire = 1
+	}
+	if m.API <= 0 {
+		m.API = script.APIVersion
+	}
+	if m.API > script.APIVersion {
+		return fmt.Errorf("%s: api %d is newer than this scriptsign knows (%d)", manifestPath, m.API, script.APIVersion)
+	}
+	if script.CompareVersions(m.Version, "0.0.0") < 0 || m.Version == "" {
+		return fmt.Errorf("%s: \"version\" must be MAJOR.MINOR.PATCH (e.g. 1.0.0), got %q", manifestPath, m.Version)
+	}
+	for _, u := range m.Update {
+		if !strings.HasPrefix(u, "https://") {
+			return fmt.Errorf("%s: update URL %q must be https", manifestPath, u)
+		}
+	}
+	info, err := script.Inspect(scriptSrc)
+	if err != nil {
+		return fmt.Errorf("script does not load: %w", err)
+	}
+	if info.Version != m.Version {
+		return fmt.Errorf("version mismatch: %s says %q, the script's info() says %q - keep them equal", manifestPath, m.Version, info.Version)
+	}
+	if info.Name != m.Name {
+		return fmt.Errorf("name mismatch: %s says %q, the script's info() says %q", manifestPath, m.Name, info.Name)
+	}
+	return nil
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+// index writes (or extends) an update.json for a built package: it reads the
+// package's own manifest and bytes, so the id/version/wire/api and the hash
+// can never disagree with what is actually published. An existing file keeps
+// its other channels.
+func index(args []string) error {
+	fs := flag.NewFlagSet("index", flag.ExitOnError)
+	channel := fs.String("channel", "stable", "channel this package is the current release of (stable | nightly)")
+	pkgURL := fs.String("url", "", "https URL (or path relative to update.json) the .flux will be published at")
+	notes := fs.String("notes", "", "release notes shown to the user before installing")
+	var mirrors multiFlag
+	fs.Var(&mirrors, "mirror", "extra URL the same .flux is published at (repeatable)")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 2 || *pkgURL == "" {
+		usage()
+	}
+	outPath, pkgPath := rest[0], rest[1]
+
+	data, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return err
+	}
+	raw, err := script.ReadPackage(data)
+	if err != nil {
+		return err
+	}
+	m := raw.Manifest
+	sum := sha256.Sum256(data)
+
+	idx := script.UpdateIndex{Format: 1, ID: m.EffectiveID(), Channels: map[string]script.IndexChannel{}}
+	if old, err := os.ReadFile(outPath); err == nil {
+		var prev script.UpdateIndex
+		if json.Unmarshal(old, &prev) == nil && prev.ID == idx.ID && prev.Channels != nil {
+			idx.Channels = prev.Channels
+		} else if prev.ID != idx.ID {
+			return fmt.Errorf("%s belongs to %q, this package is %q", outPath, prev.ID, idx.ID)
+		}
+	}
+	idx.Channels[*channel] = script.IndexChannel{
+		Version: m.Version,
+		Wire:    m.EffectiveWire(),
+		API:     m.EffectiveAPI(),
+		URL:     *pkgURL,
+		Mirrors: mirrors,
+		SHA256:  hex.EncodeToString(sum[:]),
+		Notes:   *notes,
+	}
+	out, err := json.MarshalIndent(idx, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(outPath, append(out, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%s %s on %s)\n", outPath, idx.ID, m.Version, *channel)
+	return nil
 }
