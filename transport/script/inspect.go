@@ -34,6 +34,12 @@ func registerInspectAPI(vm *goja.Runtime) {
 	}
 }
 
+// inspectTimer interrupts vm after inspectBudget; call the result to stop it.
+func inspectTimer(vm *goja.Runtime) (stop func()) {
+	timer := time.AfterFunc(inspectBudget, func() { vm.Interrupt("inspect: the script ran too long") })
+	return func() { timer.Stop() }
+}
+
 // Inspect evaluates a script's source just far enough to read its runtime
 // manifest (Transport.info()) and returns it, WITHOUT ever calling open() or
 // touching the network: the script runs against registerInspectAPI (I/O
@@ -51,8 +57,7 @@ func registerInspectAPI(vm *goja.Runtime) {
 func Inspect(src []byte) (Info, error) {
 	vm := goja.New()
 	registerInspectAPI(vm)
-	timer := time.AfterFunc(inspectBudget, func() { vm.Interrupt("inspect: the script ran too long") })
-	defer timer.Stop()
+	defer inspectTimer(vm)()
 	if _, err := vm.RunString(string(src)); err != nil {
 		return Info{}, fmt.Errorf("eval: %w", err)
 	}

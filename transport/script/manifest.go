@@ -9,20 +9,108 @@ package script
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/dop251/goja"
 )
 
-// Param describes one user-supplied input a script transport needs before
-// Open() can run (e.g. a board URL, a room code). It is pure declaration -
-// the manager/CLI/UI use it to know what to collect from the operator, and
-// the script itself decides how to use the values it's handed back in cfg.
+// Param describes one input a script transport asks the user for, or one
+// setting it exposes. It is pure declaration: the apps build their forms from
+// it (the profile editor for the primary input, the settings wizard page for
+// the rest, see settingspage.go), and the script gets the values back in
+// cfg.url / cfg.params - always as strings.
+//
+// Only Key, Label, Type and Required existed at first; the rest is optional
+// and an older script that does not set it behaves exactly as before.
 type Param struct {
 	Key      string `json:"key"`
 	Label    string `json:"label"`
-	Type     string `json:"type"` // "url" | "text" | "secret"
+	Type     string `json:"type"` // ParamURL | ParamText | ParamSecret | ParamNumber | ParamBoolean | ParamSelect | ParamTextarea
 	Required bool   `json:"required"`
+
+	// Scope says where the app asks for it: "profile" (the profile editor's
+	// one value field, delivered as cfg.url) or "settings" (the wizard page,
+	// delivered in cfg.params). Left empty, the first param is the profile's
+	// and the rest are settings, as the apps always treated them.
+	Scope string `json:"scope,omitempty"`
+	// Default is what cfg.params carries until the user sets something; a
+	// boolean's is "true" or "false". Declared as a string, number or boolean.
+	Default string `json:"default,omitempty"`
+	// Description is the help text under the field; Placeholder the grey hint in it.
+	Description string `json:"description,omitempty"`
+	Placeholder string `json:"placeholder,omitempty"`
+	// Options are a select's choices, declared as ["a", "b"] or [{value, label}].
+	Options []ParamOption `json:"options,omitempty"`
+	// Min and Max bound a number.
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
+	// Pattern is a regular expression a text or url value must match (the
+	// page checks it as a JavaScript RegExp, the core's checks as RE2: keep
+	// to the common subset).
+	Pattern string `json:"pattern,omitempty"`
+	// Group is a section title; fields with the same Group sit together.
+	Group string `json:"group,omitempty"`
+	// Advanced folds the field under "Дополнительно".
+	Advanced bool `json:"advanced,omitempty"`
+}
+
+// ParamOption is one choice of a select param.
+type ParamOption struct {
+	Value string `json:"value"`
+	Label string `json:"label,omitempty"`
+}
+
+// The param types. An unknown type is treated as ParamText, so a script
+// written for a newer core still gets a working (if plainer) form.
+const (
+	ParamURL      = "url"
+	ParamText     = "text"
+	ParamSecret   = "secret"
+	ParamNumber   = "number"
+	ParamBoolean  = "boolean"
+	ParamSelect   = "select"
+	ParamTextarea = "textarea"
+)
+
+// UnmarshalJSON reads what a script's info() returns: a default may be a
+// string, a number or a boolean, and options may be plain strings.
+func (p *Param) UnmarshalJSON(b []byte) error {
+	type plain Param
+	aux := struct {
+		*plain
+		Default interface{}       `json:"default"`
+		Options []json.RawMessage `json:"options"`
+	}{plain: (*plain)(p)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	p.Default = ""
+	switch d := aux.Default.(type) {
+	case nil:
+	case string:
+		p.Default = d
+	case bool:
+		p.Default = strconv.FormatBool(d)
+	case float64:
+		p.Default = strconv.FormatFloat(d, 'f', -1, 64)
+	default:
+		return fmt.Errorf("param %q: default must be a string, a number or a boolean", p.Key)
+	}
+	p.Options = nil
+	for _, raw := range aux.Options {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			p.Options = append(p.Options, ParamOption{Value: s})
+			continue
+		}
+		var o ParamOption
+		if err := json.Unmarshal(raw, &o); err != nil {
+			return fmt.Errorf("param %q: an option is a string or {value, label}", p.Key)
+		}
+		p.Options = append(p.Options, o)
+	}
+	return nil
 }
 
 // Info is the manifest a script transport returns from Transport.info().

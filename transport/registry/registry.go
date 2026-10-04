@@ -154,7 +154,33 @@ func newScript(url string, params map[string]interface{}, o Options) (transport.
 	if o.LowMemory {
 		base.MaxQueueSize = 512
 	}
-	return script.New(name, path, pub, url, withRole(params, o.IsExit), base)
+	return script.New(name, path, pub, url, withRole(withSettings(params), o.IsExit), base)
+}
+
+// coreParams are the script params the core owns: a setting cannot shadow them.
+var coreParams = map[string]bool{"path": true, "pubkey": true, "name": true, "exit": true, "settings": true}
+
+// withSettings flattens params["settings"] (the values the user saved in the
+// script's settings wizard; the .conf carries them as one encoded line, see
+// DecodeSettings) into the params the script sees as cfg.params, next to the
+// ones the core adds. A setting never overrides a core-owned key.
+func withSettings(params map[string]interface{}) map[string]interface{} {
+	settings, ok := params["settings"].(map[string]interface{})
+	if !ok {
+		return params
+	}
+	out := make(map[string]interface{}, len(params)+len(settings))
+	for k, v := range params {
+		if k != "settings" {
+			out[k] = v
+		}
+	}
+	for k, v := range settings {
+		if !coreParams[k] {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // withRole copies a script transport's params and adds the role the core

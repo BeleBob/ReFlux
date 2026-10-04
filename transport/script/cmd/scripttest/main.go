@@ -20,6 +20,11 @@
 // submitting for you, for a script run without a person. See
 // transport/script/devhost and docs/scripted-transports.md.
 //
+// -settings does not start the transport: it opens the script's settings
+// wizard (the page an app shows under "Настройки": the script's own
+// Transport.settings(), else the form generated from info().params), prefilled
+// from -param, and prints what a Save would hand to the script. -lang ru|en.
+//
 // -burst/-burst-size measure real submission throughput: pick a count well
 // above the write queue's 1024-slot buffer (transport.DefaultConfig's
 // MaxQueueSize), or the measurement is just "how fast can I fill a buffer",
@@ -60,6 +65,8 @@ func main() {
 		"Open the setup pages the script raises in your browser (they are always served on 127.0.0.1 and the address printed)")
 	autoSubmit := flag.String("submit", "",
 		"JSON a setup page would submit, e.g. '{\"token\":\"abc\"}': delivered as soon as the script raises a setup page, as if the user had filled it in")
+	settings := flag.Bool("settings", false, "Open the script's settings wizard instead of running it (prefilled from -param); prints what Save submits")
+	lang := flag.String("lang", "ru", "ru | en: the words the generated settings page adds")
 	flag.Parse()
 
 	if *scriptPath == "" || *pubkeyHex == "" {
@@ -80,6 +87,10 @@ func main() {
 				params[k] = v
 			}
 		}
+	}
+
+	if *settings {
+		os.Exit(runSettings(*scriptPath, *pubkeyHex, params, *lang, *duration, *openPages))
 	}
 
 	name := *scriptPath
@@ -229,4 +240,84 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// runSettings serves the settings wizard of the script and prints each
+// submission as the script would get it (normalized: defaults in, types
+// checked) until the first valid Save or the deadline.
+func runSettings(path, pubkey string, params map[string]interface{}, lang string, wait time.Duration, open bool) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "script:", err)
+		return 1
+	}
+	var sig []byte
+	if !(len(data) > 1 && data[0] == 'P' && data[1] == 'K') { // a bare .js has a detached .sig
+		if sig, err = os.ReadFile(path + ".sig"); err != nil {
+			fmt.Fprintln(os.Stderr, "signature:", err)
+			return 1
+		}
+	}
+	values := map[string]string{}
+	for k, v := range params {
+		values[k] = fmt.Sprint(v)
+	}
+	rep := script.BuildSettings(data, sig, pubkey, values, lang)
+	if !rep.OK {
+		fmt.Fprintf(os.Stderr, "settings page: %s (%s)\n", rep.Error, rep.Code)
+		return 1
+	}
+	if info, err := script.Inspect(scriptSource(data)); err == nil {
+		for _, p := range info.CheckParams() {
+			fmt.Printf("[%s] WARN  %s\n", ts(), p)
+		}
+	}
+	kind := "generated from info().params"
+	if rep.Custom {
+		kind = "the script's own Transport.settings()"
+	}
+	fmt.Printf("[%s] settings wizard of %s v%s (%s): %d settings\n", ts(), rep.Name, rep.Version, kind, len(rep.Params))
+
+	saved := make(chan map[string]string, 1)
+	opts := devhost.Options{Logf: func(f string, a ...interface{}) {
+		fmt.Printf("[%s] SETUP "+f+"\n", append([]interface{}{ts()}, a...)...)
+	}}
+	if open {
+		opts.Open = openBrowser
+	}
+	h := devhost.New(nil, opts)
+	defer h.Close()
+	h.ShowPage(rep.HTML, func(got map[string]string) error {
+		clean, errs := script.NormalizeSettings(rep.Params, got)
+		if len(errs) > 0 && !rep.Custom {
+			return fmt.Errorf("%s", errs[0])
+		}
+		if rep.Custom {
+			clean = got
+		}
+		select {
+		case saved <- clean:
+		default:
+		}
+		return nil
+	})
+	select {
+	case got := <-saved:
+		b, _ := json.MarshalIndent(got, "", "  ")
+		fmt.Printf("[%s] SAVED, the script would get as cfg.params:\n%s\n", ts(), b)
+		return 0
+	case <-time.After(wait):
+		fmt.Printf("[%s] nothing was saved within %s\n", ts(), wait)
+		return 0
+	}
+}
+
+// scriptSource is the JavaScript of a bare .js or of a .flux package.
+func scriptSource(data []byte) []byte {
+	if len(data) > 1 && data[0] == 'P' && data[1] == 'K' {
+		if pkg, err := script.ReadPackage(data); err == nil {
+			return pkg.Script
+		}
+	}
+	return data
 }

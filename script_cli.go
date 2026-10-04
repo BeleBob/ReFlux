@@ -50,6 +50,54 @@ func runInspectScript(args []string, stdout io.Writer) int {
 	return 0
 }
 
+// runScriptSettings is the desktop apps' way to the settings wizard of an
+// installed script transport (the mobile apps call script.BuildSettings in
+// process):
+//
+//	--script-settings --data=<.flux|.js> [--sig=<.sig>] --pubkey=<hex> [--values=<json>] [--lang=ru|en]
+//
+// --pubkey is the key the user pinned: a script that does not verify against
+// it gets no page. --values is a JSON object of the current settings (strings).
+// Always prints one JSON SettingsReport and exits 0: "no page" is a report
+// field (ok false, code, error), not a process failure.
+func runScriptSettings(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("--script-settings", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	dataPath := fs.String("data", "", "Path to the installed .flux package or bare .js source (required)")
+	sigPath := fs.String("sig", "", "Path to the detached signature for a bare .js; ignored for .flux")
+	pubkeyHex := fs.String("pubkey", "", "The author key the user pinned (hex, required)")
+	valuesJSON := fs.String("values", "", "Current settings as a JSON object of strings")
+	lang := fs.String("lang", "ru", "ru | en: the words the generated page adds")
+	fail := func(msg string) int {
+		b, _ := json.Marshal(script.SettingsReport{Signature: "unverified", Params: []script.Param{}, Code: script.CodeSettingsFailed, Error: msg})
+		fmt.Fprintln(stdout, string(b))
+		return 0
+	}
+	if err := fs.Parse(args); err != nil || *dataPath == "" {
+		fail("usage: --script-settings --data=<path> [--sig=<path>] --pubkey=<hex> [--values=<json>] [--lang=ru|en]")
+		return 1
+	}
+	data, err := os.ReadFile(*dataPath)
+	if err != nil {
+		return fail("read --data: " + err.Error())
+	}
+	var sig []byte
+	if *sigPath != "" {
+		if sig, err = os.ReadFile(*sigPath); err != nil {
+			return fail("read --sig: " + err.Error())
+		}
+	}
+	var values map[string]string
+	if *valuesJSON != "" {
+		if err := json.Unmarshal([]byte(*valuesJSON), &values); err != nil {
+			return fail("--values is not a JSON object of strings: " + err.Error())
+		}
+	}
+	b, _ := json.Marshal(script.BuildSettings(data, sig, *pubkeyHex, values, *lang))
+	fmt.Fprintln(stdout, string(b))
+	return 0
+}
+
 // scriptUpdateFlags are the flags shared by the update subcommands.
 func scriptUpdateFlags(name string, args []string) (*flag.FlagSet, script.Installed, *string, *string, bool) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)

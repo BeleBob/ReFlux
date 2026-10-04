@@ -68,6 +68,9 @@ type Host struct {
 	tr   *script.ScriptTransport
 	opts Options
 
+	// sink, when set (ShowPage), takes each submission instead of the transport.
+	sink func(values map[string]string) error
+
 	mu      sync.Mutex
 	ln      net.Listener
 	srv     *http.Server
@@ -83,6 +86,17 @@ func New(tr *script.ScriptTransport, opts Options) *Host {
 		opts.Logf = func(string, ...interface{}) {}
 	}
 	return &Host{tr: tr, opts: opts}
+}
+
+// ShowPage serves a page of its own (the settings wizard of a script that is
+// not running) and hands what it submits to sink instead of a transport; the
+// page's openfluxSubmit gets sink's error back as {ok:false, error}. The Host
+// may be made with a nil transport for this.
+func (h *Host) ShowPage(page string, sink func(values map[string]string) error) {
+	h.mu.Lock()
+	h.sink = sink
+	h.mu.Unlock()
+	h.show(page, nil)
 }
 
 // Notify is the transport.ErrorNotifier callback: wire it with
@@ -217,8 +231,20 @@ func (h *Host) deliver(body []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := h.tr.ApplyCookies(values); err != nil {
-		return err
+	h.mu.Lock()
+	sink := h.sink
+	h.mu.Unlock()
+	switch {
+	case sink != nil:
+		if err := sink(values); err != nil {
+			return err
+		}
+	case h.tr != nil:
+		if err := h.tr.ApplyCookies(values); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("no script is running to take the data")
 	}
 	keys := make([]string, 0, len(values))
 	for k := range values {
@@ -265,7 +291,7 @@ func InjectBridge(page string) string {
 // InjectSnippet is InjectBridge for any snippet (the apps use their own
 // bridge, written the same way).
 func InjectSnippet(page, snippet string) string {
-	lower := strings.ToLower(page)
+	lower := asciiLower(page)
 	for _, tag := range []string{"<head", "<html"} {
 		if i := strings.Index(lower, tag); i >= 0 {
 			// The tag must really be the tag (<header is not <head).
@@ -284,6 +310,18 @@ func InjectSnippet(page, snippet string) string {
 		}
 	}
 	return snippet + page
+}
+
+// asciiLower lowercases A-Z only, so every index into the result is an index
+// into s (strings.ToLower can change a string's length, e.g. İ).
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 func orDash(s string) string {

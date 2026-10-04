@@ -1,14 +1,22 @@
 package registry
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
@@ -135,5 +143,78 @@ func TestLowMemoryShrinksTheQueue(t *testing.T) {
 	o.LowMemory = true
 	if _, err := New("vyandex", "https://example.test/", nil, o); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// What the user saved in a script's settings wizard reaches the script as
+// cfg.params, next to the keys the core adds; the declared defaults fill in
+// what was never set; and a setting cannot shadow a key the core owns.
+func TestScriptSettingsReachTheScript(t *testing.T) {
+	const src = `
+var Transport = {
+  info: function () {
+    return { name: "settings-e2e", version: "1.0.0", params: [
+      { key: "url", label: "U", type: "url" },
+      { key: "token", label: "T", type: "secret" },
+      { key: "retries", label: "R", type: "number", default: 3 },
+      { key: "mode", label: "M", type: "select", options: ["a", "b"], default: "a" }
+    ] };
+  },
+  open: function (cfg) { setState("connected"); raise("cfg", { json: JSON.stringify({ url: cfg.url, params: cfg.params }) }); },
+  write: function () {}, close: function () {}
+};`
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "s.js")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".sig", ed25519.Sign(priv, []byte(src)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	params := map[string]interface{}{
+		"path": path, "pubkey": hex.EncodeToString(pub), "name": "s",
+		"settings": map[string]interface{}{"token": "a#b;c", "retries": "7", "exit": "hijack", "path": "/etc/passwd"},
+	}
+	tr, err := New("script", "https://doc.example/d", params, Options{Base: transport.DefaultConfig(), IsExit: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	tr.(*script.ScriptTransport).SetEventHandler(func(kind string, p map[string]interface{}) {
+		if kind == "cfg" {
+			got <- p["json"].(string)
+		}
+	})
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+	var cfg struct {
+		URL    string                 `json:"url"`
+		Params map[string]interface{} `json:"params"`
+	}
+	select {
+	case s := <-got:
+		if err := json.Unmarshal([]byte(s), &cfg); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the script never opened")
+	}
+	if cfg.URL != "https://doc.example/d" {
+		t.Errorf("cfg.url = %q", cfg.URL)
+	}
+	p := cfg.Params
+	if p["token"] != "a#b;c" || p["retries"] != "7" {
+		t.Errorf("saved settings: %v", p)
+	}
+	if p["mode"] != "a" {
+		t.Errorf("an unset setting must show its declared default, got %q", p["mode"])
+	}
+	if p["path"] != path || p["exit"] != false {
+		t.Errorf("a setting overrode a key the core owns: path %q exit %q", p["path"], p["exit"])
 	}
 }

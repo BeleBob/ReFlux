@@ -21,6 +21,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 	"github.com/p1neappleXpress/OpenFlux/transport/phpbox"
 	"github.com/p1neappleXpress/OpenFlux/transport/registry"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/tunnel"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -182,6 +183,9 @@ func main() {
 	// A downloaded script transport's trust report, for an app (desktop) that
 	// cannot call transport/script in-process the way the mobile gomobile
 	// bindings do: --inspect-script --data=<path> [--sig=<path>] [--pubkey=<hex>]
+	if len(os.Args) >= 2 && os.Args[1] == "--script-settings" {
+		os.Exit(runScriptSettings(os.Args[2:], os.Stdout))
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "--inspect-script" {
 		os.Exit(runInspectScript(os.Args[2:], os.Stdout))
 	}
@@ -472,6 +476,15 @@ DEPRECATED (removed in v2)
 					"path":   t.Values["Path"],
 					"pubkey": t.Values["Pubkey"],
 					"name":   t.Values["Name"],
+				}
+				// Settings the user saved in the script's wizard: one encoded line, because
+				// a .conf value ends at '#' or ';' and a setting may hold either.
+				if enc := t.Values["Params"]; enc != "" {
+					settings, err := script.DecodeSettings(enc)
+					if err != nil {
+						log.Fatalf("--config: [Transport %s] Params: %v", t.Name, err)
+					}
+					spec.Params["settings"] = settings
 				}
 			}
 			confTransports = append(confTransports, spec)

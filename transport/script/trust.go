@@ -42,16 +42,19 @@ func OfficialKeys() []string { return append([]string(nil), officialKeys...) }
 // before installing a downloaded script, and what it stores alongside the
 // file afterwards (name, fingerprint, params). See InspectTrust.
 type TrustReport struct {
-	OK            bool    `json:"ok"`
-	Error         string  `json:"error,omitempty"`
-	Name          string  `json:"name,omitempty"`
-	Version       string  `json:"version,omitempty"`
-	Params        []Param `json:"params,omitempty"`
-	Signature     string  `json:"signature"` // "valid" | "invalid" | "unverified"
-	Fingerprint   string  `json:"fingerprint,omitempty"`
-	Official      bool    `json:"official,omitempty"`
-	Author        string  `json:"author,omitempty"`
-	PackageAuthor string  `json:"packageAuthor,omitempty"`
+	OK      bool    `json:"ok"`
+	Error   string  `json:"error,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	Version string  `json:"version,omitempty"`
+	Params  []Param `json:"params,omitempty"`
+	// ParamProblems are what is wrong with the declaration (Info.CheckParams):
+	// for the author, never a reason to refuse the script.
+	ParamProblems []string `json:"paramProblems,omitempty"`
+	Signature     string   `json:"signature"` // "valid" | "invalid" | "unverified"
+	Fingerprint   string   `json:"fingerprint,omitempty"`
+	Official      bool     `json:"official,omitempty"`
+	Author        string   `json:"author,omitempty"`
+	PackageAuthor string   `json:"packageAuthor,omitempty"`
 	// From a .flux package's manifest; the app stores them with the install so
 	// updates can be found and judged later (see CheckUpdate).
 	ID     string   `json:"id,omitempty"`
@@ -134,6 +137,7 @@ func InspectTrust(data, sig []byte, pubkeyHex, officialKeyHex string) TrustRepor
 	report.Name = info.Name
 	report.Version = info.Version
 	report.Params = info.Params
+	report.ParamProblems = info.CheckParams()
 	report.OK = true
 	return report
 }

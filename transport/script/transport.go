@@ -466,7 +466,9 @@ func (t *ScriptTransport) bootstrap(vm *goja.Runtime) error {
 	cfg := vm.NewObject()
 	cfg.Set("url", t.cfgURL)
 	params := vm.NewObject()
-	for k, v := range t.cfgParams {
+	// Declared defaults stand in for what the user has not set (the script
+	// need not repeat them in code), see Param.Default.
+	for k, v := range WithDefaults(t.info.SettingParams(), t.cfgParams) {
 		params.Set(k, v)
 	}
 	cfg.Set("params", params)

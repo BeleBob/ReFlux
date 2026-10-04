@@ -264,9 +264,43 @@ func TestInjectSnippet(t *testing.T) {
 		{"doctype only", "<!DOCTYPE html><p>x", "<!DOCTYPE html><S><p>x"},
 		{"fragment", "<p>x</p>", "<S><p>x</p>"},
 		{"empty", "", "<S>"},
+		{"non-ascii before head keeps the offsets", "<!-- İİİ --><head><b>", "<!-- İİİ --><head><S><b>"},
 	} {
 		if got := InjectSnippet(c.in, s); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// The settings wizard of a script that is not running: the host takes a page
+// and a sink, no transport.
+func TestShowPageWithASink(t *testing.T) {
+	h := New(nil, Options{})
+	defer h.Close()
+	var got map[string]string
+	h.ShowPage("<!doctype html><p>wizard</p>", func(v map[string]string) error {
+		if v["bad"] != "" {
+			return fmt.Errorf("refused %s", v["bad"])
+		}
+		got = v
+		return nil
+	})
+	base := h.PageURL()
+	if _, body, _ := get(t, base); !strings.Contains(body, "wizard") || !strings.Contains(body, "openfluxSubmit=function") {
+		t.Errorf("page = %.120q", body)
+	}
+	if code, out := post(t, base+"__openflux/submit", `{"a":"1","n":2}`); code != 200 || out["ok"] != true || got["a"] != "1" || got["n"] != "2" {
+		t.Errorf("submit: %d %v %v", code, out, got)
+	}
+	if code, out := post(t, base+"__openflux/submit", `{"bad":"x"}`); code != 400 || out["error"] != "refused x" {
+		t.Errorf("a refusing sink: %d %v", code, out)
+	}
+
+	// no transport and no sink: nothing to give the data to
+	h2 := New(nil, Options{})
+	defer h2.Close()
+	h2.show("<p>x</p>", nil)
+	if code, _ := post(t, h2.PageURL()+"__openflux/submit", `{"a":"1"}`); code != 400 {
+		t.Errorf("no taker: %d, want 400", code)
 	}
 }

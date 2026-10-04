@@ -41,6 +41,26 @@ func InspectTransport(data []byte, sig []byte, pubkeyHex string) string {
 	return string(b)
 }
 
+// ScriptSettings builds the settings wizard page of an installed script
+// transport and returns a JSON SettingsReport (ok, code, error, name, version,
+// params, custom, html, values). data is the installed .flux or bare .js, sig
+// the detached signature for a bare .js; pubkeyHex is the key the user pinned
+// (a script that does not verify against it gets no page); valuesJSON the
+// current settings as a JSON object of strings ("" for none); lang "ru" or "en".
+// The app shows html like a script's own setup page (window.openfluxSubmit
+// hands the values back) and saves them. See script.BuildSettings.
+func ScriptSettings(data []byte, sig []byte, pubkeyHex, valuesJSON, lang string) string {
+	var values map[string]string
+	if valuesJSON != "" {
+		if err := json.Unmarshal([]byte(valuesJSON), &values); err != nil {
+			b, _ := json.Marshal(script.SettingsReport{Signature: "unverified", Params: []script.Param{}, Code: script.CodeSettingsFailed, Error: "значения настроек не JSON-объект строк: " + err.Error()})
+			return string(b)
+		}
+	}
+	b, _ := json.Marshal(script.BuildSettings(data, sig, pubkeyHex, values, lang))
+	return string(b)
+}
+
 // ScriptFingerprint returns the SHA-256 (hex) of an author public key, the
 // stable id the UI shows and the user compares out of band. "" if the key
 // can't be decoded.
