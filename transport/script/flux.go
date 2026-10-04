@@ -120,6 +120,9 @@ func LoadSignedPackage(path string, pubKey ed25519.PublicKey) (*Package, error) 
 	}
 	defer r.Close()
 
+	if err := checkPackageEntries(len(r.File)); err != nil {
+		return nil, fmt.Errorf("script: %s: %w", path, err)
+	}
 	files := map[string][]byte{}
 	for _, f := range r.File {
 		b, err := readZipFile(f)
@@ -187,6 +190,9 @@ func ReadPackage(data []byte) (*RawPackage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("script: open .flux: %w", err)
 	}
+	if err := checkPackageEntries(len(zr.File)); err != nil {
+		return nil, fmt.Errorf("script: %w", err)
+	}
 	files := map[string][]byte{}
 	for _, f := range zr.File {
 		b, err := readZipFile(f)
@@ -226,13 +232,38 @@ func (p *RawPackage) Verify(pubKey ed25519.PublicKey) error {
 	return VerifyScript(PackagePayload(p.ManifestJSON, p.Script, p.Icon), p.Sig, pubKey)
 }
 
+// Limits on a .flux archive. It is read BEFORE its signature is checked (an
+// import dialog, an update download), so what it claims to contain must not be
+// able to exhaust memory: a few KB of deflate can inflate to gigabytes.
+const (
+	maxPackageEntries   = 16
+	maxPackageEntryByte = 8 << 20
+)
+
 func readZipFile(f *zip.File) ([]byte, error) {
+	if f.UncompressedSize64 > maxPackageEntryByte {
+		return nil, fmt.Errorf("entry larger than %d bytes", maxPackageEntryByte)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	return io.ReadAll(rc)
+	b, err := io.ReadAll(io.LimitReader(rc, maxPackageEntryByte+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxPackageEntryByte { // the header lied about the size
+		return nil, fmt.Errorf("entry larger than %d bytes", maxPackageEntryByte)
+	}
+	return b, nil
+}
+
+func checkPackageEntries(n int) error {
+	if n > maxPackageEntries {
+		return fmt.Errorf("package has %d entries, at most %d are allowed", n, maxPackageEntries)
+	}
+	return nil
 }
 
 // WritePackage builds and signs a .flux archive at path. compress picks
