@@ -48,6 +48,10 @@ func ScriptFingerprint(pubkeyHex string) string {
 	return script.Fingerprint(pubkeyHex)
 }
 
+// CompareScriptVersions orders two semantic versions (-1, 0, 1), so the app
+// does not carry a second implementation of what "newer" means.
+func CompareScriptVersions(a, b string) int { return script.CompareVersions(a, b) }
+
 // OfficialScriptKey is the first-party signing key (hex), so the app can pin
 // bundled/official transports without hardcoding it in Kotlin too.
 func OfficialScriptKey() string { return script.OfficialKeyHex }
