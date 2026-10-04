@@ -17,8 +17,9 @@ All notable changes to the OpenFlux core. Format loosely follows
   can run as an exit that creates its rooms (`raise("roomList", {rooms})`,
   `ScriptTransport.RoomList/OnRoomList`); a oneme receiver no longer places calls
   after its call socket closes. Details and what still differs:
-  `docs/plans/2026-10-04-native-js-parity.md`. Their signatures are pending
-  (`transport/script/js/PENDING_SIGNATURE`, `js/build.sh <key>`).
+  `docs/plans/2026-10-04-native-js-parity.md`. Signed with the official key
+  (`transport/script/js/build.sh <key>` rebuilds and signs; the signature test
+  verifies every shipped signature).
 - `ScriptTransport.Stop()` calls the script's `close()`, closes every socket
   the host opened for it, and interrupts JS that does not return (it used to
   leave sockets open, so a participant stayed in the document, and could hang).

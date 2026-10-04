@@ -73,9 +73,11 @@ All seven bundled scripts are now version 1.1.0.
 - **Both natives and JS** drop a whole Yandex frame that contains a keep-alive
   marker (only mailru was fixed natively to deliver every entry of a batch).
 
-## Unsigned until the key holder signs
+## Signing
 
-The scripts changed, so their `.sig` files are stale. `js/PENDING_SIGNATURE`
-marks it (the signature test skips while it exists); `js/build.sh <key>`
-rebuilds, signs and deletes the marker. The Android app keeps its own copies in
-`androidApp/src/main/assets/scripts` and has to take the signed ones.
+The scripts were signed with the official key after this work (`js/build.sh
+<key>` rebuilds the bundles from `src/`, signs, and removes the
+`PENDING_SIGNATURE` marker; `shipped_signatures_test.go` verifies every shipped
+signature under `OfficialKeyHex`). The Android app keeps its own copies in
+`androidApp/src/main/assets/scripts`; they have to be copied after each signing
+(the app replaces an installed bundled script when the shipped one is newer).
