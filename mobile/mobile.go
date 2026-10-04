@@ -6,18 +6,13 @@ package mobile
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
-	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
-	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
-	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
-	"github.com/p1neappleXpress/OpenFlux/transport/script"
-	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/transport/registry"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
@@ -227,76 +222,12 @@ func classicParams(transportType, documentURL, maxToken, maxUid string) map[stri
 // exit side (exit) direct listens on "listen", or on "dial" when only that
 // is set, since a profile keeps one address per transport.
 func newRawTransport(typ, url string, params map[string]interface{}, config transport.TransportConfig, exit bool) (transport.Transport, error) {
-	str := func(key string) string {
-		v, _ := params[key].(string)
-		return v
-	}
-	if lowMemory.Load() {
-		config.MaxQueueSize = 512
-	}
-	switch typ {
-	case "", "yandex":
-		return yandex.NewYandexDocsTransport(url, config), nil
-	case "vyandex":
-		if lowMemory.Load() {
-			return yandex.NewYandexVolgaTransportWithConfig(url, config, yandex.SlimVolgaConfig()), nil
-		}
-		return yandex.NewYandexVolgaTransport(url, config), nil
-	case "boards":
-		return yandex.NewBoardsTransport(url, config), nil
-	case "mailru":
-		return mailru.NewMailruDocsTransport(url, config), nil
-	case "cupsonline":
-		return cupsonline.NewCupsonlineTransport(url, config, !exit), nil
-	case "oneme":
-		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
-		return oneme.NewOneMeTransport(exit, str("token"), uid, config), nil
-	case "script":
-		// A JS (goja) script transport. Params carry the on-disk script
-		// (path to <name>.flux or <name>.js, its .sig verified against the
-		// pinned author key) plus whatever the script's own info().params
-		// asked the user for. script.New verifies the signature before the
-		// script is ever evaluated - an unsigned or tampered script never
-		// runs, so a swapped file on disk fails closed here, not at connect.
-		scriptPath := str("path")
-		if scriptPath == "" {
-			return nil, fmt.Errorf("script: не указан путь к скрипту")
-		}
-		pub, err := script.DecodePublicKeyHex(str("pubkey"))
-		if err != nil {
-			return nil, fmt.Errorf("script: ключ автора: %w", err)
-		}
-		name := str("name")
-		if name == "" {
-			name = "script"
-		}
-		scriptParams := make(map[string]interface{}, len(params)+1)
-		for k, v := range params {
-			scriptParams[k] = v
-		}
-		if _, set := scriptParams["exit"]; !set {
-			scriptParams["exit"] = exit // the role the core knows and the script cannot (cupsonline creates rooms on an exit only)
-		}
-		return script.New(name, scriptPath, pub, url, scriptParams, config)
-	case "direct":
-		dcfg := transport.DefaultDirectConfig()
-		if exit {
-			dcfg.IsExit = true
-			if dcfg.ListenAddr = str("listen"); dcfg.ListenAddr == "" {
-				dcfg.ListenAddr = str("dial")
-			}
-			if dcfg.ListenAddr == "" {
-				return nil, fmt.Errorf("direct: не указан адрес для прослушивания (host:port)")
-			}
-			return transport.NewDirectTransport(config, dcfg), nil
-		}
-		if dcfg.DialAddr = str("dial"); dcfg.DialAddr == "" {
-			return nil, fmt.Errorf("direct: не указан адрес ноды (host:port)")
-		}
-		return transport.NewDirectTransport(config, dcfg), nil
-	default:
-		return nil, fmt.Errorf("неизвестный тип транспорта %q", typ)
-	}
+	return registry.New(typ, url, params, registry.Options{
+		Base:         config,
+		IsExit:       exit,
+		LowMemory:    lowMemory.Load(),
+		StrictDirect: true, // the app tells the user an address is missing
+	})
 }
 
 func Stop() {

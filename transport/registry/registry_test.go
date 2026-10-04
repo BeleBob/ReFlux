@@ -1,0 +1,139 @@
+package registry
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
+	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
+	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
+	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+)
+
+func opts() Options { return Options{Base: transport.DefaultConfig()} }
+
+func TestEveryNativeTypeBuilds(t *testing.T) {
+	cases := map[string]interface{}{
+		"":           &yandex.YandexDocsTransport{},
+		"yandex":     &yandex.YandexDocsTransport{},
+		"vyandex":    &yandex.YandexVolgaTransport{},
+		"boards":     &yandex.BoardsTransport{},
+		"mailru":     &mailru.MailruDocsTransport{},
+		"cupsonline": &cupsonline.CupsonlineTransport{},
+		"oneme":      &oneme.OneMeTransport{},
+		"direct":     &transport.DirectTransport{},
+	}
+	for typ, want := range cases {
+		got, err := New(typ, "https://example.test/doc", map[string]interface{}{"dial": "127.0.0.1:1", "token": "t", "uid": "5"}, opts())
+		if err != nil {
+			t.Errorf("%q: %v", typ, err)
+			continue
+		}
+		if gt, wt := fmt.Sprintf("%T", got), fmt.Sprintf("%T", want); gt != wt {
+			t.Errorf("%q built %s, want %s", typ, gt, wt)
+		}
+	}
+}
+
+func TestEveryListedTypeIsKnown(t *testing.T) {
+	for _, typ := range Types {
+		_, err := New(typ, "x", map[string]interface{}{"dial": "127.0.0.1:1", "path": "/nope", "pubkey": strings.Repeat("00", 32)}, opts())
+		if err != nil && strings.Contains(err.Error(), "unknown transport type") {
+			t.Errorf("%q is listed in Types but New does not know it", typ)
+		}
+	}
+	if _, err := New("telegram", "x", nil, opts()); err == nil || !strings.Contains(err.Error(), "unknown transport type") {
+		t.Fatalf("an unknown type must be refused, got %v", err)
+	}
+}
+
+// A cupsonline client never creates rooms; only an exit does (the transport
+// is told its role here).
+func TestCupsonlineRoleFollowsTheOptions(t *testing.T) {
+	for _, exit := range []bool{false, true} {
+		o := opts()
+		o.IsExit = exit
+		tr, err := New("cupsonline", "", nil, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr == nil {
+			t.Fatal("nil transport")
+		}
+	}
+}
+
+func TestDirectAddressesAndRoles(t *testing.T) {
+	// A client dials; an exit listens, falling back to the one address a
+	// profile keeps.
+	o := opts()
+	if _, err := New("direct", "", map[string]interface{}{"dial": "10.0.0.1:8445"}, o); err != nil {
+		t.Fatal(err)
+	}
+	o.IsExit = true
+	if _, err := New("direct", "", map[string]interface{}{"dial": "0.0.0.0:8445"}, o); err != nil {
+		t.Fatal(err)
+	}
+	// Strict (the apps): no address is an error.
+	o.StrictDirect = true
+	if _, err := New("direct", "", nil, o); err == nil {
+		t.Fatal("an exit without an address must be refused when strict")
+	}
+	o.IsExit = false
+	if _, err := New("direct", "", nil, o); err == nil {
+		t.Fatal("a client without an address must be refused when strict")
+	}
+	// Not strict (the CLI): it fails when it starts, as before.
+	o.StrictDirect = false
+	if _, err := New("direct", "", nil, o); err != nil {
+		t.Fatalf("the CLI path must not refuse here: %v", err)
+	}
+}
+
+func TestOnemeRoleFromParamsOrOptions(t *testing.T) {
+	// "exit" in the params wins (a bool or "true"); otherwise the options say.
+	for _, params := range []map[string]interface{}{{"exit": true}, {"exit": "true"}, {"exit": false}, nil} {
+		if _, err := New("oneme", "", params, opts()); err != nil {
+			t.Fatalf("%v: %v", params, err)
+		}
+	}
+	if !roleParam(map[string]interface{}{"exit": "TRUE"}, "exit", false) || roleParam(map[string]interface{}{"exit": "no"}, "exit", true) {
+		t.Fatal("roleParam must read \"true\" in any case and treat other strings as false")
+	}
+	if !roleParam(nil, "exit", true) {
+		t.Fatal("without the param the default applies")
+	}
+}
+
+func TestScriptNeedsAPathAndAKey(t *testing.T) {
+	if _, err := New("script", "", map[string]interface{}{}, opts()); err == nil {
+		t.Fatal("a script without a path must be refused")
+	}
+	if _, err := New("script", "", map[string]interface{}{"path": "/x.flux", "pubkey": "zz"}, opts()); err == nil {
+		t.Fatal("a script with a bad key must be refused")
+	}
+}
+
+func TestWithRoleCopiesAndKeepsWhatTheProfileSet(t *testing.T) {
+	in := map[string]interface{}{"path": "p"}
+	out := withRole(in, true)
+	if out["exit"] != true || out["path"] != "p" {
+		t.Fatalf("%v", out)
+	}
+	if _, set := in["exit"]; set {
+		t.Fatal("the caller's map must not be changed")
+	}
+	if withRole(map[string]interface{}{"exit": false}, true)["exit"] != false {
+		t.Fatal("a role the profile set must be kept")
+	}
+}
+
+func TestLowMemoryShrinksTheQueue(t *testing.T) {
+	o := opts()
+	o.LowMemory = true
+	if _, err := New("vyandex", "https://example.test/", nil, o); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -17,13 +17,10 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/streamproxy"
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
-	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
-	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
-	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
 	"github.com/p1neappleXpress/OpenFlux/transport/phpbox"
-	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/transport/registry"
 	"github.com/p1neappleXpress/OpenFlux/tunnel"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -887,29 +884,20 @@ DEPRECATED (removed in v2)
 	} else {
 		// Classic single-transport path without a Session: no key (the
 		// Session needs one), or a bench role.
-		var inner transport.Transport
+		// The types the classic path serves; the registry builds them.
 		switch *transportType {
-		case "boards":
-			inner = yandex.NewBoardsTransport(globalDocUrl, config)
-		case "vyandex":
-			t, err := newVolgaTransport(globalDocUrl, config)
-			if err != nil {
-				log.Fatalf("vyandex: %v", err)
-			}
-			inner = t
-		case "yandex":
-			inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
-		case "oneme":
-			uidint, _ := strconv.ParseInt(maxUid, 10, 64)
-			inner = oneme.NewOneMeTransport(isExit, maxToken, uidint, config)
-		case "cupsonline":
-			c := cupsonline.NewCupsonlineTransport(globalDocUrl, config, !isExit)
-			rooms[specs[0].Name] = c
-			inner = c
-		case "mailru":
-			inner = mailru.NewMailruDocsTransport(globalDocUrl, config)
+		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "mailru":
 		default:
 			log.Fatalf("Unknown transport type: %s", *transportType)
+		}
+		inner, err := registry.New(*transportType, globalDocUrl,
+			map[string]interface{}{"token": maxToken, "uid": maxUid, "exit": isExit},
+			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile})
+		if err != nil {
+			log.Fatalf("%s: %v", *transportType, err)
+		}
+		if r, ok := inner.(roomLister); ok {
+			rooms[specs[0].Name] = r
 		}
 
 		// Persist cookie exchanger for the legacy path.
@@ -1129,23 +1117,22 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 // mobile bridges.
 // streamCarrier builds the carrier the stream mux rides.
 func streamCarrier(transportType, url string) phpbox.Carrier {
-	cfg := transport.DefaultConfig()
 	switch transportType {
-	case "cupsonline":
-		return cupsonline.NewCupsonlineTransport(url, cfg, true)
-	case "yandex", "":
-		return yandex.NewYandexDocsTransport(url, cfg)
-	case "vyandex":
-		t, err := newVolgaTransport(url, cfg)
-		if err != nil {
-			log.Fatalf("--mode=stream vyandex: %v", err)
-		}
-		return t
-	case "mailru":
-		return mailru.NewMailruDocsTransport(url, cfg)
+	case "cupsonline", "yandex", "", "vyandex", "mailru":
+	default:
+		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
 	}
-	log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
-	return nil
+	t, err := registry.New(transportType, url, nil, registry.Options{
+		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile,
+	})
+	if err != nil {
+		log.Fatalf("--mode=stream %s: %v", transportType, err)
+	}
+	carrier, ok := t.(phpbox.Carrier)
+	if !ok {
+		log.Fatalf("--mode=stream: transport %q cannot carry a stream", transportType)
+	}
+	return carrier
 }
 
 // runStreamTUN is the stream mode as a full tunnel (--inbound=tun): the
