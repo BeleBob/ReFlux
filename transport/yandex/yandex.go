@@ -208,6 +208,12 @@ type YandexDocsTransport struct {
 	// cookiesApplied wakes a scheduleReconnectNoCaptcha wait early. Unbuffered
 	// on purpose: a send only succeeds while such a wait is in progress.
 	cookiesApplied chan struct{}
+
+	// reconnecting is set while a scheduled reconnect waits out its backoff: the
+	// reader's error and ApplyCookies both schedule one when the cookies are
+	// replaced under a live connection, and two reconnects open two sessions to
+	// the document (a second participant that stays).
+	reconnecting atomic.Bool
 }
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
@@ -593,6 +599,9 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 		return
 	}
 
+	if !t.reconnecting.CompareAndSwap(false, true) {
+		return // one is already waiting
+	}
 	// Back off before retrying so a server that closes us immediately doesn't
 	// turn into a tight connect/close loop (previously reconnect was instant).
 	d := reconnectBackoff(next)
@@ -600,8 +609,10 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	select {
 	case <-time.After(d):
 	case <-t.Done():
+		t.reconnecting.Store(false)
 		return
 	}
+	t.reconnecting.Store(false) // a failed connect schedules the next one itself
 	if !t.IsRunning() {
 		return
 	}

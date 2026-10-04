@@ -87,6 +87,12 @@ type MailruDocsTransport struct {
 
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
+
+	// reconnecting is set while a scheduled reconnect waits out its backoff:
+	// the reader's error and ApplyCookies both schedule one when the cookies
+	// are replaced under a live connection, and two reconnects open two
+	// sessions to the document.
+	reconnecting atomic.Bool
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCdEfGh1/IjKlMnOp2")
@@ -480,9 +486,13 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 		return
 	}
 
+	if !t.reconnecting.CompareAndSwap(false, true) {
+		return // one is already waiting
+	}
 	d := reconnectBackoff(next)
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
 	time.Sleep(d)
+	t.reconnecting.Store(false) // a failed connect schedules the next one itself
 	if !t.IsRunning() {
 		return
 	}
