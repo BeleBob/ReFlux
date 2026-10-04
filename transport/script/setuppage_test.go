@@ -178,3 +178,48 @@ func TestFlattenSubmission(t *testing.T) {
 		}
 	}
 }
+
+// Values applied before the script has run (the replay of what an earlier run
+// saved) must be where the script looks once it has: under its own
+// info().cookieDomain, which is only known after info() is read.
+func TestApplyCookiesBeforeStartLandsUnderTheScriptsDomain(t *testing.T) {
+	const src = `
+var Transport = {
+  info: function () { return { name: "pre-start", version: "1.0.0", cookieDomain: "https://example.com/" }; },
+  open: function (cfg) { setState("connected"); raise("saw", { token: cookieJar.get().token || "" }); },
+  write: function () {}, close: function () {}
+};`
+	path, pub := mustSignedScript(t, src)
+	tr, err := New("pre-start", path, pub, "local://test", nil, transport.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	saw := make(chan string, 1)
+	tr.SetEventHandler(func(kind string, p map[string]interface{}) {
+		if kind == "saw" {
+			saw <- p["token"].(string)
+		}
+	})
+	if err := tr.ApplyCookies(map[string]string{"token": "from-an-earlier-run"}); err != nil {
+		t.Fatalf("applying before start must not fail: %v", err)
+	}
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+	select {
+	case got := <-saw:
+		if got != "from-an-earlier-run" {
+			t.Fatalf("the script saw %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the script never opened")
+	}
+	// after start, the usual path: written at once and the script is told
+	if err := tr.ApplyCookies(map[string]string{"token": "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := tr.FetchCookies(); got["token"] != "later" {
+		t.Errorf("after start: %v", got)
+	}
+}

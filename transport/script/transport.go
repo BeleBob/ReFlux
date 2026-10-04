@@ -74,6 +74,11 @@ type ScriptTransport struct {
 	// httpServers are this transport's own httpserver.listen() servers
 	// (its setup/login mini-app - see host_httpserver.go), closed in Stop
 	// so none outlives the transport.
+	// pending are cookie values ApplyCookies was given before info() was read.
+	pendingMu sync.Mutex
+	pending   map[string]string
+	infoReady bool
+
 	httpServersMu sync.Mutex
 	httpServers   []ownedServer
 }
@@ -307,6 +312,29 @@ func (t *ScriptTransport) ApplyCookies(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	// Before the script has run, info().cookieDomain is not known: the values
+	// would land under the default base address and the script would never see
+	// them. (This is the replay of what an earlier run saved, which the
+	// session and the apps do before Start.) Keep them until info() is read.
+	t.pendingMu.Lock()
+	if !t.infoReady {
+		if t.pending == nil {
+			t.pending = make(map[string]string, len(values))
+		}
+		for k, v := range values {
+			t.pending[k] = v
+		}
+		t.pendingMu.Unlock()
+		return nil
+	}
+	t.pendingMu.Unlock()
+	t.writeCookies(values)
+	return t.Deliver("cookiesApplied", nil)
+}
+
+// writeCookies puts values into the shared jar the way a browser would have
+// from a Set-Cookie response header (see ScopeCookiesToParentDomain).
+func (t *ScriptTransport) writeCookies(values map[string]string) {
 	u := t.cookieBaseURL()
 	domain := ""
 	if t.info.ScopeCookiesToParentDomain {
@@ -330,7 +358,19 @@ func (t *ScriptTransport) ApplyCookies(values map[string]string) error {
 		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/", Domain: domain})
 	}
 	t.cookieJar.SetCookies(u, cookies)
-	return t.Deliver("cookiesApplied", nil)
+}
+
+// infoRead marks info() as parsed and puts in the values ApplyCookies kept
+// until then. Called by bootstrap, before open().
+func (t *ScriptTransport) infoRead() {
+	t.pendingMu.Lock()
+	t.infoReady = true
+	pending := t.pending
+	t.pending = nil
+	t.pendingMu.Unlock()
+	if len(pending) > 0 {
+		t.writeCookies(pending)
+	}
 }
 
 func (t *ScriptTransport) Start() error {
@@ -457,6 +497,7 @@ func (t *ScriptTransport) bootstrap(vm *goja.Runtime) error {
 		return err
 	}
 	t.info = info
+	t.infoRead()
 	t.tuneHTTPTransport()
 
 	openFn, ok := goja.AssertFunction(obj.Get("open"))

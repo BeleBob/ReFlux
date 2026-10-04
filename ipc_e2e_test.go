@@ -315,3 +315,106 @@ func TestRemoteCheckRequest(t *testing.T) {
 		t.Errorf("a real site's check is not own: %+v", r)
 	}
 }
+
+// What a script's setup page was given is kept like cookies: a restart does
+// not ask again. Core path of a Session: UseCookieStore replays the saved
+// values into the script's jar before it starts.
+func TestScriptSetupSurvivesARestart(t *testing.T) {
+	const src = `
+var Transport = {
+  info: function () { return { name: "pair-e2e", version: "1.0.0", cookieDomain: "https://example.com/" }; },
+  open: function (cfg) {
+    var token = cookieJar.get().token;
+    if (token) { setState("connected"); raise("paired", { token: token }); return; }
+    setState("connecting");
+    raise("needsSetup", { html: "<p>pair</p>", reason: "Pair" });
+  },
+  write: function () {}, close: function () {}
+};
+`
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "pair-e2e.js")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".sig", ed25519.Sign(priv, []byte(src)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := transport.NewCookieStore(filepath.Join(t.TempDir(), "cookies.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := transportSpec{Name: "script", Type: "script", URL: "https://doc.example/d", Params: map[string]interface{}{"name": "pair-e2e"}}
+	other := transportSpec{Name: "script", Type: "script", URL: "https://doc.example/d", Params: map[string]interface{}{"name": "another"}}
+	if sessionCookieKey(spec, "") == sessionCookieKey(other, "") {
+		t.Fatal("two scripts with one URL must not share a key")
+	}
+
+	run := func() (*script.ScriptTransport, *manager.Manager, chan string, chan struct{}) {
+		tr, err := script.New("pair-e2e", path, pub, spec.URL, nil, transport.DefaultConfig())
+		if err != nil {
+			t.Fatal(err)
+		}
+		paired, asked := make(chan string, 1), make(chan struct{}, 1)
+		tr.SetEventHandler(func(kind string, p map[string]interface{}) {
+			if kind == "paired" {
+				paired <- p["token"].(string)
+			}
+		})
+		sess, err := transport.NewSession(transport.PeerParameters{Capabilities: control.CapabilityIPv4 | control.CapabilityTCP, MaxPacketSize: 1500}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sess.Stop() })
+		m := manager.New(sess, nil, "test-secret-long-enough", "test-ctx")
+		if err := m.Add("script", "script", tr, 100, tr); err != nil {
+			t.Fatal(err)
+		}
+		m.SetCaptchaNotifier(func(string, string, string, string) { asked <- struct{}{} })
+		// what main.go does for a Session, before the transport starts
+		if err := m.UseCookieStore(store, "script", sessionCookieKey(spec, "")); err != nil {
+			t.Logf("replay before start: %v (expected: the script is not running yet)", err)
+		}
+		return tr, m, paired, asked
+	}
+
+	// first start: nothing saved, the script asks; the app answers (IPC -> AcceptCookies, which persists)
+	tr1, m1, paired1, asked1 := run()
+	if err := tr1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-asked1:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the script never asked for setup")
+	}
+	if err := m1.AcceptCookies("script", map[string]string{"token": "tok-keep"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case tok := <-paired1:
+		t.Fatalf("paired without being asked again? %q", tok)
+	default:
+	}
+	_ = tr1.Stop()
+
+	// the next start: the script finds it
+	tr2, _, paired2, asked2 := run()
+	if err := tr2.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr2.Stop()
+	select {
+	case tok := <-paired2:
+		if tok != "tok-keep" {
+			t.Fatalf("token after a restart = %q", tok)
+		}
+	case <-asked2:
+		t.Fatal("the script asked for setup again after a restart")
+	case <-time.After(3 * time.Second):
+		t.Fatal("the script never opened")
+	}
+}

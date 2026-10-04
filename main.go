@@ -113,6 +113,18 @@ func transportHasCookies(t string) bool {
 	return false
 }
 
+// sessionCookieKey is cookieKey for a transport of a Session. A script
+// transport keeps what its setup page was given (a token, a pairing) in the
+// same store, so the user is not asked again at the next start; its key names
+// the script, because two scripts may share one URL.
+func sessionCookieKey(spec transportSpec, maxUid string) string {
+	if spec.Type == "script" {
+		name, _ := spec.Params["name"].(string)
+		return "script:" + name + " " + spec.URL
+	}
+	return cookieKey(spec.Type, spec.URL, maxUid)
+}
+
 // cookieKey identifies a session inside the cookie store. For most transports
 // this is the document URL; for oneme it would be maxUid, but oneme does not
 // use the store at all.
@@ -841,10 +853,10 @@ DEPRECATED (removed in v2)
 		// saved; the Manager routes cookie control messages by name.
 		if store != nil {
 			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) {
+				if !transportHasCookies(spec.Type) && spec.Type != "script" {
 					continue
 				}
-				if err := managerInst.UseCookieStore(store, spec.Name, cookieKey(spec.Type, spec.URL, maxUid)); err != nil {
+				if err := managerInst.UseCookieStore(store, spec.Name, sessionCookieKey(spec, maxUid)); err != nil {
 					utils.Debugf("[COOKIE] replay %s: %v", spec.Name, err)
 				}
 			}
