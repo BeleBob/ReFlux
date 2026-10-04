@@ -65,7 +65,11 @@ const (
 
 // Installed is what the app knows about an installed transport.
 type Installed struct {
-	ID        string   `json:"id"`
+	ID string `json:"id"`
+	// File is the package's file name inside the scripts directory; empty
+	// means <id>.flux. An app that filed an older install under another name
+	// says so here, and the update replaces that very file.
+	File      string   `json:"file,omitempty"`
 	Version   string   `json:"version"`
 	Wire      int      `json:"wire,omitempty"`
 	PubkeyHex string   `json:"pubkey"`
@@ -108,6 +112,14 @@ type UpdateIndex struct {
 	Format   int                     `json:"format"`
 	ID       string                  `json:"id"`
 	Channels map[string]IndexChannel `json:"channels"`
+}
+
+// FileName is the package's file name inside the scripts directory.
+func (i Installed) FileName() string {
+	if i.File != "" {
+		return filepath.Base(i.File)
+	}
+	return i.ID + ".flux"
 }
 
 // Fetcher GETs a URL; the check and apply paths take it as a parameter so
@@ -200,7 +212,7 @@ func CheckUpdate(ctx context.Context, inst Installed, channel string, get Fetche
 }
 
 // ApplyUpdate checks, downloads, verifies and installs the update into dir
-// (filed as <id>.flux, the previous version kept as <id>.flux.prev). A wire
+// (as inst.FileName(), the previous version kept as <file>.prev). A wire
 // break is installed only when allowWireBreak says the caller has taken
 // responsibility for the node side too.
 func ApplyUpdate(ctx context.Context, inst Installed, channel, dir string, allowWireBreak bool, get Fetcher) UpdateReport {
@@ -231,7 +243,7 @@ func ApplyUpdate(ctx context.Context, inst Installed, channel, dir string, allow
 	if code := verifyDownload(data, inst, rep); code != "" {
 		return fail(code)
 	}
-	if err := InstallPackage(dir, inst.ID, data); err != nil {
+	if err := InstallPackage(dir, inst.FileName(), data); err != nil {
 		return fail(CodeInstallFailed)
 	}
 	rep.Status, rep.Code = UpdateInstalled, ""
@@ -271,13 +283,13 @@ func verifyDownload(data []byte, inst Installed, rep UpdateReport) string {
 	return ""
 }
 
-// InstallPackage writes data as dir/<id>.flux atomically, moving the file it
-// replaces to <id>.flux.prev. The caller has verified data.
-func InstallPackage(dir, id string, data []byte) error {
+// InstallPackage writes data as dir/<file> atomically, moving the file it
+// replaces to <file>.prev. The caller has verified data.
+func InstallPackage(dir, file string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	cur := filepath.Join(dir, id+".flux")
+	cur := filepath.Join(dir, filepath.Base(file))
 	tmp := cur + ".new"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
@@ -301,8 +313,8 @@ func InstallPackage(dir, id string, data []byte) error {
 // replaces becomes the new "previous", so a rollback can itself be undone).
 // The previous file is re-verified under the pinned key first: it fails
 // closed like every other load.
-func RollbackPackage(dir, id, pubkeyHex string) UpdateReport {
-	cur := filepath.Join(dir, id+".flux")
+func RollbackPackage(dir, file, pubkeyHex string) UpdateReport {
+	cur := filepath.Join(dir, filepath.Base(file))
 	prev := cur + ".prev"
 	rep := UpdateReport{Status: UpdateError}
 	pub, err := DecodePublicKeyHex(strings.ReplaceAll(pubkeyHex, " ", ""))

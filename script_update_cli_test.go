@@ -45,7 +45,7 @@ func TestScriptUpdateCLI(t *testing.T) {
 	defer srv.Close()
 
 	dir := filepath.Join(tmp, "scripts")
-	if err := script.InstallPackage(dir, "demo", v1); err != nil {
+	if err := script.InstallPackage(dir, "demo.flux", v1); err != nil {
 		t.Fatal(err)
 	}
 	common := []string{"--id=demo", "--version=1.0.0", "--pubkey=" + pubHex, "--update=" + srv.URL + "/update.json"}

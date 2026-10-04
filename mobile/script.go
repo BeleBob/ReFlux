@@ -162,7 +162,7 @@ func ScriptEngineSelfTest(dir string) string {
 }
 
 // scriptUpdateCall decodes the installed-transport JSON the apps pass
-// ({"id","version","wire","pubkey","update":[...]}).
+// ({"id","file","version","wire","pubkey","update":[...]}).
 func scriptUpdateCall(installedJSON string) (script.Installed, bool) {
 	var inst script.Installed
 	if json.Unmarshal([]byte(installedJSON), &inst) != nil || inst.ID == "" || inst.PubkeyHex == "" {
@@ -211,5 +211,5 @@ func RollbackScript(installedJSON, dir string) string {
 	if !ok || dir == "" {
 		return usageReport
 	}
-	return updateReportJSON(script.RollbackPackage(dir, inst.ID, inst.PubkeyHex))
+	return updateReportJSON(script.RollbackPackage(dir, inst.FileName(), inst.PubkeyHex))
 }

@@ -192,7 +192,7 @@ func TestApplyUpdateInstallsAndKeepsPrevious(t *testing.T) {
 	r := newRig(t)
 	dir := t.TempDir()
 	old := r.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"}, r.priv)
-	if err := InstallPackage(dir, "demo", old); err != nil {
+	if err := InstallPackage(dir, "demo.flux", old); err != nil {
 		t.Fatal(err)
 	}
 	pkg := r.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.1.0"}, r.priv)
@@ -215,13 +215,13 @@ func TestApplyUpdateInstallsAndKeepsPrevious(t *testing.T) {
 	}
 
 	// Roll back, then forward again: the swap keeps both.
-	if rb := RollbackPackage(dir, "demo", r.pubHex()); rb.Status != UpdateInstalled || rb.Latest != "1.0.0" {
+	if rb := RollbackPackage(dir, "demo.flux", r.pubHex()); rb.Status != UpdateInstalled || rb.Latest != "1.0.0" {
 		t.Fatalf("rollback: %+v", rb)
 	}
 	if p, _ := LoadSignedPackage(filepath.Join(dir, "demo.flux"), r.pub); p == nil || p.Manifest.Version != "1.0.0" {
 		t.Fatal("rollback did not restore 1.0.0")
 	}
-	if rb := RollbackPackage(dir, "demo", r.pubHex()); rb.Latest != "1.1.0" {
+	if rb := RollbackPackage(dir, "demo.flux", r.pubHex()); rb.Latest != "1.1.0" {
 		t.Fatalf("roll forward: %+v", rb)
 	}
 }
@@ -287,7 +287,7 @@ func TestApplyUpdateWireBreakNeedsConsent(t *testing.T) {
 
 func TestRollbackWithoutPrevious(t *testing.T) {
 	r := newRig(t)
-	if rep := RollbackPackage(t.TempDir(), "demo", r.pubHex()); rep.Code != CodeNoPrevious {
+	if rep := RollbackPackage(t.TempDir(), "demo.flux", r.pubHex()); rep.Code != CodeNoPrevious {
 		t.Fatalf("%+v", rep)
 	}
 }
@@ -298,7 +298,7 @@ func TestRollbackRefusesTamperedPrevious(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "demo.flux.prev"), r.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"}, r.priv), 0o644)
 	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
 	_ = os.WriteFile(filepath.Join(dir, "demo.flux.prev"), r.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"}, otherPriv), 0o644)
-	if rep := RollbackPackage(dir, "demo", r.pubHex()); rep.Code != CodeBadSignature {
+	if rep := RollbackPackage(dir, "demo.flux", r.pubHex()); rep.Code != CodeBadSignature {
 		t.Fatalf("%+v", rep)
 	}
 }

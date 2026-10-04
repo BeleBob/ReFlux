@@ -56,6 +56,7 @@ func scriptUpdateFlags(name string, args []string) (*flag.FlagSet, script.Instal
 	fs.SetOutput(io.Discard)
 	var inst script.Installed
 	fs.StringVar(&inst.ID, "id", "", "Installed transport id (required)")
+	fs.StringVar(&inst.File, "file", "", "Package file name in --dir (default <id>.flux)")
 	fs.StringVar(&inst.Version, "version", "", "Installed version")
 	fs.IntVar(&inst.Wire, "wire", 0, "Installed wire generation (0 = 1)")
 	fs.StringVar(&inst.PubkeyHex, "pubkey", "", "Pinned author key (hex, required)")
@@ -114,5 +115,5 @@ func runRollbackScript(args []string, stdout io.Writer) int {
 		fmt.Fprintln(stdout, `{"status":"error","code":"usage"}`)
 		return 1
 	}
-	return printUpdateReport(stdout, script.RollbackPackage(*dir, inst.ID, inst.PubkeyHex))
+	return printUpdateReport(stdout, script.RollbackPackage(*dir, inst.FileName(), inst.PubkeyHex))
 }
