@@ -28,7 +28,9 @@ var captcha struct {
 	// own loopback server) rather than a real site: the app shows it as it
 	// is, offers window.openfluxSubmit and collects no cookies. The core
 	// decides (script.IsOwnPage); the app must not guess from the URL.
-	own    bool
+	own bool
+	// name is the transport that asked, for the dialog's title.
+	name   string
 	reason string
 	// apply hands cookies to the live transport that asked for them; nil
 	// once that transport stopped or failed to start.
@@ -69,6 +71,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 	captcha.url = ""
 	captcha.html = ""
 	captcha.own = false
+	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.apply = nil
@@ -83,6 +86,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 			captcha.url = url
 			captcha.html = html
 			captcha.own = script.IsOwnPage(url, html)
+			captcha.name = name
 			captcha.reason = reason
 			captcha.mu.Unlock()
 		})
@@ -101,6 +105,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 	captcha.mu.Lock()
 	captcha.key, captcha.url, captcha.html, captcha.reason, captcha.apply = "", "", "", "", nil
 	captcha.own = false
+	captcha.name = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	store := captcha.store
 	captcha.mu.Unlock()
@@ -116,6 +121,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 		captcha.mu.Lock()
 		captcha.url, captcha.html, captcha.reason, captcha.key = url, html, reason, keys[name]
 		captcha.own = script.IsOwnPage(url, html)
+		captcha.name = name
 		captcha.proxy, captcha.remoteName = "", ""
 		captcha.apply = func(jar map[string]string) error { return m.ApplyCookiesFor(name, jar) }
 		captcha.mu.Unlock()
@@ -146,6 +152,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 		captcha.mu.Lock()
 		captcha.url, captcha.html, captcha.reason, captcha.key = url, html, reason, ""
 		captcha.own = html != ""
+		captcha.name = name
 		captcha.proxy, captcha.remoteName = addr, name
 		captcha.apply = func(jar map[string]string) error { return m.OfferCookies(name, jar) }
 		captcha.mu.Unlock()
@@ -202,6 +209,14 @@ func PendingCaptchaOwn() bool {
 	return captcha.own
 }
 
+// PendingCaptchaTransport is the name of the transport that asked for the
+// pending page, "" when nothing is pending.
+func PendingCaptchaTransport() string {
+	captcha.mu.Lock()
+	defer captcha.mu.Unlock()
+	return captcha.name
+}
+
 // PendingCaptchaReason is "smartcaptcha" or "login" while a check is pending.
 func PendingCaptchaReason() string {
 	captcha.mu.Lock()
@@ -222,6 +237,7 @@ func CancelCaptcha() {
 	captcha.url = ""
 	captcha.html = ""
 	captcha.own = false
+	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.mu.Unlock()
@@ -262,6 +278,7 @@ func submitCaptchaJar(jar map[string]string) string {
 	captcha.url = ""
 	captcha.html = ""
 	captcha.own = false
+	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
 	captcha.mu.Unlock()
