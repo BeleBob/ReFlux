@@ -312,21 +312,6 @@ func (t *BoardsTransport) authorize(hash, name string) (boardsInfo, error) {
 	}, nil
 }
 
-func (t *BoardsTransport) get(client *http.Client, u, accept, referer string) error {
-	req, _ := http.NewRequest("GET", u, nil)
-	req.Header.Set("User-Agent", boardsUA)
-	req.Header.Set("Accept", accept)
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Referer", referer)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	return nil
-}
-
 // apiRequest builds a POST /api call: the action and its content (JSON,
 // base64-encoded) in a JSON body. The API used to take a form and now
 // answers 415 "Request body must use a JSON Content-Type" to one.

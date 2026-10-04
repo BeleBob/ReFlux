@@ -437,10 +437,6 @@ func CheckVolgaDocument(docURL string, jar http.CookieJar) (VolgaDocument, error
 	return VolgaDocument{DocID: a.DocID, Editable: a.Action == "" || a.Action == "edit"}, nil
 }
 
-func authorize(docURL string) (*volgaAuth, error) {
-	return authorizeWithJar(docURL, nil)
-}
-
 func getStr(m map[string]interface{}, key string) string {
 	if m == nil {
 		return ""
