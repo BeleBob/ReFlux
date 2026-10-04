@@ -49,11 +49,27 @@ type ScriptTransport struct {
 
 	writeCh chan []byte
 
-	mu        sync.RWMutex
-	lastState string
-	lastErr   string
-	onEvent   EventHandler
+	mu          sync.RWMutex
+	lastState   string
+	lastErr     string
+	onEvent     EventHandler
 	errNotifier func(err error, transportName, url, html, reason string)
+
+	// roomList is the packed room list a script reported with
+	// raise("roomList", {rooms}) (cupsonline: the rooms an exit keeps, what a
+	// client needs as its url); onRoomList is told when it changes. Same
+	// shape as the native cupsonline transport's RoomList/OnRoomList.
+	roomMu     sync.Mutex
+	roomList   string
+	onRoomList func(packed string)
+
+	// vm is the script's runtime, kept so Stop can interrupt JS that will
+	// not return; closers close what the script opened (sockets, peer
+	// connections) however it behaves.
+	vm       *goja.Runtime
+	closeMu  sync.Mutex
+	closers  []func()
+	stopOnce sync.Once
 
 	// httpServers are this transport's own httpserver.listen() servers
 	// (its setup/login mini-app - see host_httpserver.go), closed in Stop
@@ -103,6 +119,32 @@ func New(name, scriptPath string, pubKey ed25519.PublicKey, url string, params m
 	}
 	t.httpClient, t.httpClientNoRedirect = t.buildHTTPClients(jar)
 	return t, nil
+}
+
+// RoomList is the packed list of rooms a script reported with
+// raise("roomList", {rooms}); "" until it has.
+func (t *ScriptTransport) RoomList() string {
+	t.roomMu.Lock()
+	defer t.roomMu.Unlock()
+	return t.roomList
+}
+
+// OnRoomList calls f with the new list whenever RoomList changes.
+func (t *ScriptTransport) OnRoomList(f func(packed string)) {
+	t.roomMu.Lock()
+	t.onRoomList = f
+	t.roomMu.Unlock()
+}
+
+func (t *ScriptTransport) setRoomList(packed string) {
+	t.roomMu.Lock()
+	changed := packed != t.roomList
+	t.roomList = packed
+	f := t.onRoomList
+	t.roomMu.Unlock()
+	if changed && f != nil {
+		f(packed)
+	}
 }
 
 // Package returns the .flux package this transport was loaded from
@@ -329,16 +371,69 @@ func (t *ScriptTransport) Stop() error {
 	if err := t.BaseTransport.Stop(); err != nil {
 		return err
 	}
+	t.stopOnce.Do(t.shutdown)
+	return nil
+}
+
+// stopBudget is how long a script gets to wind down in close() before it is
+// interrupted.
+const stopBudget = 2 * time.Second
+
+// shutdown asks the script to close (its own sockets, timers, state), then
+// closes whatever it left open and ends the event loop. The script's close()
+// was never called before: its WebSockets stayed open after Stop, so a
+// participant stayed attached to the document - the native transports close
+// their connection in Stop for exactly that reason.
+func (t *ScriptTransport) shutdown() {
+	if t.loop != nil && t.jsTransport != nil {
+		done := make(chan struct{})
+		posted := t.loop.RunOnLoop(func(vm *goja.Runtime) {
+			defer close(done)
+			if fn, ok := goja.AssertFunction(t.jsTransport.Get("close")); ok {
+				_, _ = fn(t.jsTransport)
+			}
+		})
+		if posted {
+			select {
+			case <-done:
+			case <-time.After(stopBudget):
+				// The loop is busy in JS that does not return (or close() hangs):
+				// interrupt it, or the Terminate below would wait for ever.
+				if t.vm != nil {
+					t.vm.Interrupt("script transport stopped")
+				}
+			}
+		}
+	}
 	t.closeHTTPServers()
+	t.closeAll()
 	if t.loop != nil {
 		// Terminate (not Stop): also clears the script's keepalive/reconnect
 		// timers, so nothing fires after this call returns.
 		t.loop.Terminate()
 	}
-	return nil
+}
+
+// addCloser registers something the host opened for the script; shutdown
+// closes it even if the script's close() did not.
+func (t *ScriptTransport) addCloser(f func()) {
+	t.closeMu.Lock()
+	t.closers = append(t.closers, f)
+	t.closeMu.Unlock()
+}
+
+func (t *ScriptTransport) closeAll() {
+	t.closeMu.Lock()
+	fs := t.closers
+	t.closers = nil
+	t.closeMu.Unlock()
+	for _, f := range fs {
+		f()
+	}
 }
 
 func (t *ScriptTransport) bootstrap(vm *goja.Runtime) error {
+	t.vm = vm
 	registerHostAPI(vm, t)
 	if _, err := vm.RunString(string(t.scriptSrc)); err != nil {
 		return fmt.Errorf("eval: %w", err)

@@ -558,7 +558,7 @@ var Transport = {
   info: function () {
     return {
       name: "boards",
-      version: "1.0.0",
+      version: "1.1.0",
       cookieDomain: "https://boards.yandex.ru/",
       mtu: 0,
       reliable: false,

@@ -270,7 +270,14 @@ func newRawTransport(typ, url string, params map[string]interface{}, config tran
 		if name == "" {
 			name = "script"
 		}
-		return script.New(name, scriptPath, pub, url, params, config)
+		scriptParams := make(map[string]interface{}, len(params)+1)
+		for k, v := range params {
+			scriptParams[k] = v
+		}
+		if _, set := scriptParams["exit"]; !set {
+			scriptParams["exit"] = exit // the role the core knows and the script cannot (cupsonline creates rooms on an exit only)
+		}
+		return script.New(name, scriptPath, pub, url, scriptParams, config)
 	case "direct":
 		dcfg := transport.DefaultDirectConfig()
 		if exit {

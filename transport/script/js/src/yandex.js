@@ -432,7 +432,7 @@ var Transport = {
   info: function () {
     return {
       name: "yandex",
-      version: "1.0.0",
+      version: "1.1.0",
       cookieDomain: "https://yandex.ru/",
       scopeCookiesToParentDomain: true,
       mtu: 0,

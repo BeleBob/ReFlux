@@ -45,6 +45,7 @@ func newPeerConnectionJS(vm *goja.Runtime, t *ScriptTransport, call goja.Functio
 	if err != nil {
 		panic(vm.NewGoError(err))
 	}
+	t.addCloser(func() { _ = pc.Close() })
 
 	obj := vm.NewObject()
 

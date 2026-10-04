@@ -82,7 +82,7 @@ func transportFactory(baseCfg transport.TransportConfig, isExit bool) manager.Fa
 			if name == "" {
 				name = "script"
 			}
-			return script.New(name, scriptPath, pub, cfg.URL, cfg.Params, baseCfg)
+			return script.New(name, scriptPath, pub, cfg.URL, withRole(cfg.Params, isExit), baseCfg)
 		case "direct":
 			dcfg := transport.DefaultDirectConfig()
 			if v, ok := cfg.Params["listen"].(string); ok {
@@ -99,4 +99,19 @@ func transportFactory(baseCfg transport.TransportConfig, isExit bool) manager.Fa
 			return nil, fmt.Errorf("factory: unknown transport type %q", cfg.Type)
 		}
 	}
+}
+
+// withRole copies a script transport's params and adds the role the core
+// knows and the script cannot: "exit" (a cupsonline exit creates rooms, a
+// client never does; oneme picks caller or receiver). A value the profile
+// already set is kept.
+func withRole(params map[string]interface{}, isExit bool) map[string]interface{} {
+	out := make(map[string]interface{}, len(params)+1)
+	for k, v := range params {
+		out[k] = v
+	}
+	if _, set := out["exit"]; !set {
+		out["exit"] = isExit
+	}
+	return out
 }

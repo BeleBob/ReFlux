@@ -13,10 +13,11 @@
 // at once (Promise.all, matching native joinListed) is both safe and
 // faster - no race to avoid, so no reason to serialize it.
 //
-// The exit-side "no rooms given -> create N fresh ones and print the
-// packed list for the operator to copy" convenience is not ported: it's
-// an operational nicety (first-time setup), not a wire-protocol
-// requirement, and every real use of this transport joins existing rooms.
+// An exit (params.exit, which the core passes to every script transport)
+// started without rooms - or with only closed ones - creates N fresh rooms and
+// reports the packed list with raise("roomList", {rooms}) so the app can put
+// it into the share link; a client never creates rooms. Kept in step with the
+// native transport (parity is tested in transport/script/parity_test.go).
 
 var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 var BASE_ROOM_URL = "https://interview.cups.online/live-coding/";
@@ -46,7 +47,11 @@ var CONN_TOKEN_RE = /<meta[^>]+name="centrifuge-connection-token"[^>]+content="(
 var CONN_URL_RE = /<meta[^>]+name="centrifuge-connection-url"[^>]+content="([^"]+)"/;
 var SUB_URL_RE = /<meta[^>]+name="centrifuge-subscription-token-url"[^>]+content="([^"]+)"/;
 
+var ROOM_CREATE_PAUSE_MS = 500;
+var ROOM_CREATE_ATTEMPTS = 6;
+
 var running = false;
+var isClient = true;
 var rooms = [];
 var rrIndex = 0;
 
@@ -63,6 +68,12 @@ function b64urlDecode(s) {
 
 function b64urlEncode(bytes) {
   return base64.encode(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// packRooms: the base64url (no padding) of a JSON array of room uuids, as
+// packRooms in cupsonline.go.
+function packRooms(ids) {
+  return b64urlEncode(text.encode(JSON.stringify(ids)));
 }
 
 function parseRoomList(rawURL) {
@@ -121,8 +132,13 @@ function Room(idx, id) {
   this.batch = [];
   this.batchBytes = 0;
   this.batchTimer = null;
+  // Batches go out one after another (the native sendLoop is one goroutine per
+  // room): a batch is cut into several messages, and the far side puts them
+  // back together by stream order, so two batches sending at once would
+  // interleave their pieces and corrupt both.
+  this.sendChain = Promise.resolve();
   this.lastSend = 0;
-  this.recvBuf = new Uint8Array(0);
+  this.recvBufs = {}; // per sender (room member): a packet cut across messages stays with its sender
   this.needJoin = true;
 }
 
@@ -133,9 +149,16 @@ Room.prototype.joinURL = function () {
 };
 
 // authorize (this room's own session -> own jar, own csrftoken).
-Room.prototype.authorize = async function () {
+Room.prototype.authorize = function () {
+  return this.authorizeAt(this.joinURL(), this.id);
+};
+
+// authorizeAt loads a room page and collects what it takes to join the room's
+// channel. expectId, when set, is the room it must turn out to be: a closed
+// room can come back as a fresh one (another uuid), which counts as gone.
+Room.prototype.authorizeAt = async function (roomURL, expectId) {
   var res = await this.session.fetch({
-    url: this.joinURL(),
+    url: roomURL,
     headers: {
       "User-Agent": UA,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -155,10 +178,10 @@ Room.prototype.authorize = async function () {
   var subURL = firstMatch(SUB_URL_RE, html);
 
   if (!roomUUID || !userUUID) throw new RoomGoneError("room/user uuid missing");
-  if (roomUUID !== this.id) throw new RoomGoneError("вместо неё выдана новая " + roomUUID.slice(0, 8));
+  if (expectId && roomUUID !== expectId) throw new RoomGoneError("вместо неё выдана новая " + roomUUID.slice(0, 8));
   if (!connToken || !connURL || !subURL) throw new Error("centrifuge meta missing");
 
-  var cookies = this.session.cookies.get(this.joinURL());
+  var cookies = this.session.cookies.get(roomURL);
   var csrfToken = cookies["csrftoken"] || "";
   if (!csrfToken) throw new Error("csrftoken missing");
 
@@ -171,8 +194,8 @@ Room.prototype.authorize = async function () {
       "User-Agent": UA,
       "Content-Type": "application/json",
       "X-CSRFToken": csrfToken,
-      Origin: originOf(this.joinURL()),
-      Referer: this.joinURL(),
+      Origin: originOf(roomURL),
+      Referer: roomURL,
     },
     body: JSON.stringify({ channel: channel }),
   });
@@ -180,7 +203,7 @@ Room.prototype.authorize = async function () {
   var subToken = (JSON.parse(subRes.body) || {}).token;
   if (!subToken) throw new Error("empty sub token");
 
-  var finalCookies = this.session.cookies.get(this.joinURL());
+  var finalCookies = this.session.cookies.get(roomURL);
   var cookieHeader = Object.keys(finalCookies).map(function (k) { return k + "=" + finalCookies[k]; }).join("; ");
 
   this.auth = {
@@ -255,7 +278,15 @@ Room.prototype.dispatchToWaiters = function (line) {
 
 Room.prototype.writeRaw = function (data) {
   if (!this.sock) throw new Error("ws not connected");
-  this.sock.send(data);
+  try {
+    this.sock.send(data);
+  } catch (e) {
+    // A failed (or timed-out) write leaves the socket unusable: close it so
+    // the read side notices and the room reconnects, instead of sitting on a
+    // dead channel until the read timeout - as the native writeRaw does.
+    try { this.sock.close(); } catch (e2) {}
+    throw e;
+  }
 };
 
 Room.prototype.writeJSON = function (v) {
@@ -278,18 +309,28 @@ Room.prototype.connectAndServe = async function () {
   }, { readTimeoutMs: WS_READ_TIMEOUT_MS });
 
   this.sock = sock;
-  this.recvBuf = new Uint8Array(0);
+  // Fresh socket, fresh stream: drop any half-assembled packet from before.
+  this.recvBufs = {};
 
   sock.onmessage = function (raw) { room.onFrame(raw); };
   var closed = new Promise(function (resolve) {
     sock.onclose = function (reason) { resolve(reason); };
   });
 
+  // Centrifugo hanging up mid-handshake is how it can turn our tokens down
+  // without a word: only a fresh join fixes that, so it counts as a refusal.
+  var hungUp = closed.then(function (reason) {
+    var err = new Error("refused: connection closed during the handshake: " + reason);
+    err.isRefused = true;
+    throw err;
+  });
+  hungUp.catch(function () {}); // consumed below; no unhandled rejection if the handshake wins
+
   this.writeJSON({ id: 1, connect: { token: this.auth.connToken, name: "js" } });
-  await this.waitForReply(1, WS_HANDSHAKE_MS);
+  await Promise.race([this.waitForReply(1, WS_HANDSHAKE_MS), hungUp]);
 
   this.writeJSON({ id: 2, subscribe: { channel: this.auth.channel, token: this.auth.subToken } });
-  await this.waitForReply(2, WS_HANDSHAKE_MS);
+  await Promise.race([this.waitForReply(2, WS_HANDSHAKE_MS), hungUp]);
 
   this.connected = true;
   this.markAlive();
@@ -352,23 +393,29 @@ Room.prototype.handleLine = function (line) {
   if (2 + dataLen > decoded.length) return;
   var chunk = decoded.slice(2, 2 + dataLen);
 
-  var merged = new Uint8Array(this.recvBuf.length + chunk.length);
-  merged.set(this.recvBuf, 0);
-  merged.set(chunk, this.recvBuf.length);
+  // Append to this sender's running stream and pull out whole packets; a
+  // packet split across messages completes once the rest of it arrives.
+  var sender = payload.user_uuid || "";
+  var prev = this.recvBufs[sender] || new Uint8Array(0);
+  var merged = new Uint8Array(prev.length + chunk.length);
+  merged.set(prev, 0);
+  merged.set(chunk, prev.length);
 
-  var off = 0, count = 0;
+  var off = 0;
   while (merged.length - off >= 2) {
     var ln = (merged[off] << 8) | merged[off + 1];
-    if (ln === 0) { off = merged.length; break; }
-    if (merged.length - off < 2 + ln) break;
-    var pkt = merged.slice(off + 2, off + 2 + ln);
-    emit(pkt.buffer);
+    if (ln === 0) { off = merged.length; break; } // not a real length: the stream is out of sync
+    if (merged.length - off < 2 + ln) break; // the rest of this packet has not arrived yet
+    emit(merged.slice(off + 2, off + 2 + ln).buffer);
     off += 2 + ln;
-    count++;
   }
-  this.recvBuf = merged.slice(off);
-  if (this.recvBuf.length > MAX_PAYLOAD_BYTES + MAX_MESSAGE_DATA) {
-    this.recvBuf = new Uint8Array(0);
+  var rest = merged.slice(off);
+  if (rest.length === 0) {
+    delete this.recvBufs[sender]; // a member with nothing pending holds no buffer
+  } else if (rest.length > MAX_PAYLOAD_BYTES + MAX_MESSAGE_DATA) {
+    delete this.recvBufs[sender]; // a stream that never yields a packet must not grow without bound
+  } else {
+    this.recvBufs[sender] = rest;
   }
 };
 
@@ -455,9 +502,14 @@ Room.prototype.flushBatch = function () {
   var batch = this.batch;
   this.batch = [];
   this.batchBytes = 0;
-  if (!this.connected) return; // stale batch on a dead channel - drop it, like native
   var room = this;
-  this.sendBatch(batch).catch(function () { /* dropped, same as native */ });
+  this.sendChain = this.sendChain.then(function () {
+    // The channel may have gone down while this batch waited its turn: by now
+    // it is stale (new traffic has moved to a room that is up), so drop it
+    // rather than deliver it late and out of order, like native.
+    if (!room.connected) return;
+    return room.sendBatch(batch);
+  }).catch(function () { /* dropped, same as native */ });
 };
 
 Room.prototype.queuePacket = function (bytes) {
@@ -554,52 +606,127 @@ function pickRoom() {
   return null;
 }
 
+// createRooms makes n fresh rooms (an exit started without any, or whose saved
+// ones are all closed), as createRooms in cupsonline.go: every room loaded
+// from the base page in a session of its own, retried with a wait that grows
+// faster on a rate limit (403/429).
+async function createRooms(n) {
+  var out = [];
+  var delay = ROOM_CREATE_PAUSE_MS;
+  var lastErr = null;
+  for (var i = 0; i < n; i++) {
+    var room = null;
+    for (var attempt = 0; attempt < ROOM_CREATE_ATTEMPTS; attempt++) {
+      if (!running) return out;
+      var candidate = new Room(out.length, "");
+      try {
+        await candidate.authorizeAt(BASE_ROOM_URL, "");
+        room = candidate;
+        break;
+      } catch (e) {
+        lastErr = e;
+        var msg = String((e && e.message) || e);
+        var wait = msg.indexOf("403") !== -1 || msg.indexOf("429") !== -1
+          ? Math.min(delay * Math.pow(2, attempt), 30000)
+          : delay * (attempt + 1);
+        await sleep(wait);
+      }
+    }
+    if (!room) continue;
+    room.id = room.auth.roomUUID;
+    room.needJoin = false;
+    out.push(room);
+    if (i < n - 1) await sleep(delay);
+  }
+  if (out.length === 0) throw new Error("could not create any room: " + ((lastErr && lastErr.message) || lastErr));
+  return out;
+}
+
+// reportRooms tells the app which rooms this transport keeps channels to: the
+// string a client needs (the exit's share link).
+function reportRooms(ids) {
+  raise("roomList", { rooms: packRooms(ids) });
+}
+
+function beginRooms() {
+  setState("connected");
+  for (var j = 0; j < rooms.length; j++) rooms[j].run();
+}
+
+// startRooms is enterRooms of cupsonline.go: join the listed rooms (all at
+// once - on a phone each join is two round trips); one that was not reachable
+// keeps being retried. When none could be joined: a client fails; an exit
+// whose rooms are merely unreachable fails too (new rooms for a network hiccup
+// would cost the phone its string for nothing); an exit whose rooms are all
+// closed - or that had none - creates new ones.
+async function startRooms(ids) {
+  try {
+    if (ids.length > 0) {
+      rooms = [];
+      for (var i = 0; i < ids.length; i++) rooms.push(new Room(i, ids[i]));
+      var results = await Promise.all(rooms.map(function (r) {
+        return r.authorize().then(
+          function () { r.needJoin = false; return { ok: true }; },
+          function (e) { if (e && e.isRoomGone) r.markDead(); return { ok: false, gone: !!(e && e.isRoomGone) }; }
+        );
+      }));
+      if (!running) return;
+      var joined = results.filter(function (x) { return x.ok; }).length;
+      var allGone = results.every(function (x) { return x.ok || x.gone; });
+      if (joined > 0) {
+        reportRooms(ids);
+        beginRooms();
+        return;
+      }
+      if (isClient) {
+        setState("dead", allGone ? "cupsonline: all rooms are gone" : "cupsonline: no rooms joined");
+        return;
+      }
+      if (!allGone) {
+        setState("dead", "cupsonline: saved rooms unreachable");
+        return;
+      }
+    } else if (isClient) {
+      setState("dead", "cupsonline: no room ids in url");
+      return;
+    }
+
+    var created = await createRooms(NUM_ROOMS);
+    if (!running) return;
+    rooms = created;
+    reportRooms(created.map(function (r) { return r.id; }));
+    beginRooms();
+  } catch (e) {
+    setState("dead", String(e));
+  }
+}
+
 var Transport = {
   info: function () {
     return {
       name: "cupsonline",
-      version: "1.0.0",
+      version: "1.1.0",
       mtu: 0,
       reliable: false,
       ordered: false,
       params: [
-        { key: "url", label: "Packed room list (?rooms=... or ?room=...)", type: "text", required: true },
+        { key: "url", label: "Packed room list (?rooms=... or ?room=...); empty on an exit creates new rooms", type: "text", required: false },
       ],
     };
   },
 
   open: function (cfg) {
-    var raw = (cfg.params && cfg.params.url) || cfg.url || "";
+    var p = cfg.params || {};
+    var raw = p.url || cfg.url || "";
     var ids = parseRoomList(raw);
-    if (ids.length === 0) {
-      setState("dead", "cupsonline: no room ids in url");
-      return;
-    }
+    // The core tells every script transport its role (params.exit); a client
+    // never creates rooms of its own - one built as an exit everywhere used to
+    // create four new ones when it had none, and wait in them for an exit that
+    // never came.
+    isClient = !(p.exit === true || p.exit === "true");
     running = true;
     setState("connecting");
-    rooms = [];
-    for (var i = 0; i < ids.length; i++) rooms.push(new Room(i, ids[i]));
-
-    (async function () {
-      // Each room has its own http.newSession() (own jar/csrftoken), so -
-      // unlike a shared-jar design - joining all of them at once is both
-      // safe and matches native joinListed's actual intent: a join is two
-      // HTTP round trips, and doing N of them one after another would
-      // needlessly multiply startup latency.
-      var results = await Promise.all(rooms.map(function (r) {
-        return r.authorize().then(
-          function () { r.needJoin = false; return true; },
-          function (e) { if (e && e.isRoomGone) r.markDead(); return false; }
-        );
-      }));
-      var joined = results.filter(Boolean).length;
-      if (joined === 0) {
-        setState("dead", "cupsonline: no rooms joined");
-        return;
-      }
-      setState("connected");
-      for (var j = 0; j < rooms.length; j++) rooms[j].run();
-    })();
+    startRooms(ids);
   },
 
   write: function (bytes) {

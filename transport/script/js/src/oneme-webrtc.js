@@ -191,6 +191,11 @@ function onCallSocketMessage(msg, wantCreator) {
 function onCallSocketClose() {
   callConn = null;
   if (!running) return;
+  // Only the caller re-places its call. A receiver has nobody to call: it waits
+  // for the next incoming call event (opcode 137), as the native one does -
+  // letting it fall into connectCallerLoop would start placing calls to an
+  // empty callee id every second.
+  if (role !== "caller") return;
   setState("reconnecting");
   reconnectAttempt++;
   if (reconnectAttempt > 10) reconnectAttempt = 10;
@@ -247,7 +252,7 @@ var Transport = {
   info: function () {
     return {
       name: "oneme-webrtc",
-      version: "1.0.0",
+      version: "1.1.0",
       mtu: 0,
       reliable: false,
       ordered: false,

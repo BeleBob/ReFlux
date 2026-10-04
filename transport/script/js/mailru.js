@@ -343,7 +343,7 @@ var Transport = {
   info: function () {
     return {
       name: "mailru",
-      version: "1.0.0",
+      version: "1.1.0",
       cookieDomain: "https://cloud.mail.ru/",
       mtu: 0, // unbounded - native mailru never fragments either
       reliable: false,

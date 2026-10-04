@@ -456,6 +456,10 @@ func doFetch(client *http.Client, method, reqURL, body string, headers map[strin
 
 // ---- ws.open ----
 
+// wsWriteTimeout bounds one WebSocket write from a script (the native
+// transports use 15-20 s).
+const wsWriteTimeout = 20 * time.Second
+
 func registerWS(vm *goja.Runtime, t *ScriptTransport) {
 	wsObj := vm.NewObject()
 	wsObj.Set("open", func(call goja.FunctionCall) goja.Value {
@@ -523,6 +527,12 @@ func newSocket(vm *goja.Runtime, t *ScriptTransport, conn *websocket.Conn, readT
 	// frame with no text conversion, for a transport with its own binary
 	// wire protocol.
 	s.obj.Set("send", func(call goja.FunctionCall) goja.Value {
+		// send runs on the script's event loop: a write into a half-open
+		// connection (a dead NAT binding, a network change) must not block it
+		// - and with it every timer, callback and Stop - until the kernel
+		// gives up, minutes later. The native transports bound each write the
+		// same way.
+		_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 		arg := call.Argument(0)
 		if _, isObj := arg.(*goja.Object); isObj {
 			b, err := bytesArg(vm, arg)
@@ -543,6 +553,7 @@ func newSocket(vm *goja.Runtime, t *ScriptTransport, conn *websocket.Conn, readT
 		return goja.Undefined()
 	})
 
+	t.addCloser(func() { _ = conn.Close() })
 	utils.SafeGo("script."+t.name+".ws-read", func() { s.readLoop(t) })
 	return s
 }
@@ -696,6 +707,11 @@ func hostRaise(t *ScriptTransport) func(goja.FunctionCall) goja.Value {
 		if obj, ok := call.Argument(1).(*goja.Object); ok {
 			for _, k := range obj.Keys() {
 				payload[k] = obj.Get(k).Export()
+			}
+		}
+		if kind == "roomList" {
+			if rooms, _ := payload["rooms"].(string); rooms != "" {
+				t.setRoomList(rooms)
 			}
 		}
 		if h := t.eventHandler(); h != nil {
@@ -854,6 +870,7 @@ func newDatagramSocket(vm *goja.Runtime, t *ScriptTransport, conn net.Conn, read
 		return goja.Undefined()
 	})
 
+	t.addCloser(func() { _ = conn.Close() })
 	utils.SafeGo("script."+t.name+".udp-read", func() { s.readLoop(t) })
 	return s
 }

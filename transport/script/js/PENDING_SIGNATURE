@@ -1,0 +1,9 @@
+The bundled transports here were changed after their .sig files were made (JS
+ports brought in step with the native transports, see
+docs/plans/2026-10-04-native-js-parity.md). The signatures are stale until the
+holder of the official key runs:
+
+    transport/script/js/build.sh ~/oflx-keys/script-signing.key
+
+which rebuilds, signs and deletes this file. Until then the apps must not ship
+these bundles as "official" (they would fail the signature check).

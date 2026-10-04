@@ -5,6 +5,29 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed (JS transports brought in step with the native ones)
+
+- The seven bundled JS transports are now 1.1.0 and follow the natives: the
+  saveChanges "editor activity" stream (yandex, mailru); every cursor entry of a
+  batched mailru message; boards' modify-objects wire (a JS boards client's
+  packets were ignored by a current exit) without the client ping that dropped
+  the socket every 20 s; a login wall reaches the app as `captchaRequired` with
+  reason `login`; cupsonline sends one batch at a time (packets over ~1 KB from
+  a JS side never reached a native peer), keeps a receive buffer per sender and
+  can run as an exit that creates its rooms (`raise("roomList", {rooms})`,
+  `ScriptTransport.RoomList/OnRoomList`); a oneme receiver no longer places calls
+  after its call socket closes. Details and what still differs:
+  `docs/plans/2026-10-04-native-js-parity.md`. Their signatures are pending
+  (`transport/script/js/PENDING_SIGNATURE`, `js/build.sh <key>`).
+- `ScriptTransport.Stop()` calls the script's `close()`, closes every socket
+  the host opened for it, and interrupts JS that does not return (it used to
+  leave sockets open, so a participant stayed in the document, and could hang).
+- `ws.send` has a 20 s write deadline: a half-open socket no longer blocks the
+  script's event loop.
+- The core passes `params.exit` (its role) to every script transport.
+- Manifest reading (`Inspect`) runs the script with a restricted host API and a
+  3 s budget, and `.flux` archives are read with size limits.
+
 ### Added
 
 - Script transports can now ask for a setup/login page the same way the
