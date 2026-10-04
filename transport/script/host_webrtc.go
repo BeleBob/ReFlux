@@ -2,7 +2,7 @@ package script
 
 import (
 	"github.com/dop251/goja"
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
 // registerWebRTC exposes a minimal PeerConnection/DataChannel surface backed
