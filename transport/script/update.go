@@ -86,7 +86,11 @@ type UpdateReport struct {
 	Wire      int    `json:"wire,omitempty"`
 	WireBreak bool   `json:"wireBreak,omitempty"`
 	Notes     string `json:"notes,omitempty"`
-	// Official: signed by the first-party key. AutoOK: the app may install
+	// NewKey is set when the update was signed by another of the project's own
+	// keys than the one the install was pinned to (a key rotation): the app
+	// pins the install to it from now on.
+	NewKey string `json:"newKey,omitempty"`
+	// Official: signed by a first-party key. AutoOK: the app may install
 	// without asking (official, same wire, same key). Everything else asks.
 	Official bool `json:"official,omitempty"`
 	AutoOK   bool `json:"autoOk,omitempty"`
@@ -187,7 +191,7 @@ func CheckUpdate(ctx context.Context, inst Installed, channel string, get Fetche
 		}
 	}
 	rep.Latest, rep.Wire, rep.Notes = ch.Version, effWire(ch.Wire), ch.Notes
-	rep.Official = strings.EqualFold(inst.PubkeyHex, OfficialKeyHex)
+	rep.Official = IsOfficialKey(inst.PubkeyHex)
 	if !validVersion(ch.Version) {
 		return fail(CodeBadIndex)
 	}
@@ -202,7 +206,8 @@ func CheckUpdate(ctx context.Context, inst Installed, channel string, get Fetche
 	switch {
 	case ch.API > APIVersion:
 		rep.Status, rep.Code = UpdateBlocked, CodeNeedsNewerApp
-	case ch.PublicKey != "" && !strings.EqualFold(strings.ReplaceAll(ch.PublicKey, " ", ""), inst.PubkeyHex):
+	case ch.PublicKey != "" && !strings.EqualFold(strings.ReplaceAll(ch.PublicKey, " ", ""), inst.PubkeyHex) &&
+		!(rep.Official && IsOfficialKey(ch.PublicKey)): // a rotation between the project's own keys is not a new trust decision
 		rep.Status, rep.Code = UpdateBlocked, CodeKeyChanged
 	case rep.WireBreak:
 		rep.Code = CodeWireBreak
@@ -241,9 +246,11 @@ func ApplyUpdate(ctx context.Context, inst Installed, channel, dir string, allow
 	if data == nil {
 		return fail(CodeFetchFailed)
 	}
-	if code := verifyDownload(data, inst, rep); code != "" {
+	code, newKey := verifyDownload(data, inst, rep)
+	if code != "" {
 		return fail(code)
 	}
+	rep.NewKey = newKey
 	if err := InstallPackage(dir, inst.FileName(), data); err != nil {
 		return fail(CodeInstallFailed)
 	}
@@ -252,36 +259,56 @@ func ApplyUpdate(ctx context.Context, inst Installed, channel, dir string, allow
 }
 
 // verifyDownload is every check a downloaded package passes before it
-// replaces anything; "" means it may be installed.
-func verifyDownload(data []byte, inst Installed, rep UpdateReport) string {
+// replaces anything; "" means it may be installed. The second result is the
+// key that signed it when that is another of the project's own keys than the
+// pinned one (a rotation), "" otherwise.
+func verifyDownload(data []byte, inst Installed, rep UpdateReport) (string, string) {
 	if rep.sha != "" {
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != rep.sha {
-			return CodeBadHash
+			return CodeBadHash, ""
 		}
 	}
 	pkg, err := ReadPackage(data)
 	if err != nil {
-		return CodeBadPackage
+		return CodeBadPackage, ""
 	}
-	pub, err := DecodePublicKeyHex(strings.ReplaceAll(inst.PubkeyHex, " ", ""))
-	if err != nil || pkg.Verify(pub) != nil {
-		return CodeBadSignature
+	pinned := strings.ReplaceAll(inst.PubkeyHex, " ", "")
+	signedBy := ""
+	if pub, err := DecodePublicKeyHex(pinned); err == nil && pkg.Verify(pub) == nil {
+		signedBy = pinned
+	} else if IsOfficialKey(pinned) {
+		// An official transport may move to another official key.
+		for _, k := range officialKeys {
+			if strings.EqualFold(k, pinned) {
+				continue
+			}
+			if pub, err := DecodePublicKeyHex(k); err == nil && pkg.Verify(pub) == nil {
+				signedBy = k
+				break
+			}
+		}
+	}
+	if signedBy == "" {
+		return CodeBadSignature, ""
 	}
 	m := pkg.Manifest
 	if m.EffectiveID() != inst.ID {
-		return CodeIDMismatch
+		return CodeIDMismatch, ""
 	}
 	if m.Version != rep.Latest || m.EffectiveWire() != rep.Wire {
-		return CodeVersionMismatch
+		return CodeVersionMismatch, ""
 	}
 	if m.EffectiveAPI() > APIVersion {
-		return CodeNeedsNewerApp
+		return CodeNeedsNewerApp, ""
 	}
 	if CompareVersions(m.Version, inst.Version) <= 0 {
-		return CodeNotNewer
+		return CodeNotNewer, ""
 	}
-	return ""
+	if !strings.EqualFold(signedBy, pinned) {
+		return "", strings.ToLower(signedBy)
+	}
+	return "", ""
 }
 
 // InstallPackage writes data as dir/<file> atomically, moving the file it
@@ -318,7 +345,8 @@ func RollbackPackage(dir, file, pubkeyHex string) UpdateReport {
 	cur := filepath.Join(dir, filepath.Base(file))
 	prev := cur + ".prev"
 	rep := UpdateReport{Status: UpdateError}
-	pub, err := DecodePublicKeyHex(strings.ReplaceAll(pubkeyHex, " ", ""))
+	pinned := strings.ReplaceAll(pubkeyHex, " ", "")
+	pub, err := DecodePublicKeyHex(pinned)
 	if err != nil {
 		rep.Code = CodeBadSignature
 		return rep
@@ -328,6 +356,16 @@ func RollbackPackage(dir, file, pubkeyHex string) UpdateReport {
 		return rep
 	}
 	p, err := LoadSignedPackage(prev, pub)
+	if err != nil && IsOfficialKey(pinned) {
+		// The previous version may predate a rotation of the project's keys.
+		for _, k := range officialKeys {
+			if other, kerr := DecodePublicKeyHex(k); kerr == nil {
+				if p, err = LoadSignedPackage(prev, other); err == nil {
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		rep.Code = CodeBadSignature
 		return rep

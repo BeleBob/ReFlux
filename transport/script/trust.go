@@ -13,6 +13,31 @@ import (
 // nothing secret crosses that boundary.
 const OfficialKeyHex = "d8bf9c958b994c2faab886cade5f28213f254911f87abe5e34756a289ae91354"
 
+// officialKeys are every key the core treats as the OpenFlux project's own.
+// OfficialKeyHex (the first) is the one packages are signed with today. A
+// rotation is two releases: the first adds the next key here (so every
+// installed app learns to trust it), and only once that has been out for a
+// while is the second one's signing key switched - an app that missed the
+// first would reject the new signatures. An update of an official transport
+// signed by another official key is accepted and re-pins the install to it
+// (see UpdateReport.NewKey). A compromised key is retired by dropping it from
+// this list in a release; installs pinned to it then stop being "official".
+var officialKeys = []string{OfficialKeyHex}
+
+// IsOfficialKey reports whether keyHex is one of the project's own keys.
+func IsOfficialKey(keyHex string) bool {
+	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(keyHex), " ", ""))
+	for _, o := range officialKeys {
+		if k == strings.ToLower(o) {
+			return true
+		}
+	}
+	return false
+}
+
+// OfficialKeys returns the project's keys, the signing one first.
+func OfficialKeys() []string { return append([]string(nil), officialKeys...) }
+
 // TrustReport is what an app shows in its "trust this transport?" dialog
 // before installing a downloaded script, and what it stores alongside the
 // file afterwards (name, fingerprint, params). See InspectTrust.
@@ -60,7 +85,7 @@ func InspectTrust(data, sig []byte, pubkeyHex, officialKeyHex string) TrustRepor
 		pub = p
 		sum := sha256.Sum256(pub)
 		report.Fingerprint = hex.EncodeToString(sum[:])
-		if officialKeyHex != "" && strings.EqualFold(pubkeyHex, officialKeyHex) {
+		if (officialKeyHex != "" && strings.EqualFold(pubkeyHex, officialKeyHex)) || (officialKeyHex == OfficialKeyHex && IsOfficialKey(pubkeyHex)) {
 			report.Official = true
 			report.Author = "OpenFlux"
 		}

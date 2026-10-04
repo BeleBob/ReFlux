@@ -309,3 +309,81 @@ func TestManifestDefaults(t *testing.T) {
 		t.Fatalf("defaults: %q %d %d", m.EffectiveID(), m.EffectiveWire(), m.EffectiveAPI())
 	}
 }
+
+// A rotation of the project's own keys: official transports move to the new
+// key, third-party ones never change key through an update.
+func TestOfficialKeyRotation(t *testing.T) {
+	a, b, c := newRig(t), newRig(t), newRig(t)
+	saved := officialKeys
+	officialKeys = []string{a.pubHex(), b.pubHex()}
+	defer func() { officialKeys = saved }()
+
+	publish := func(signer *updateRig, version string) (url string, idx UpdateIndex) {
+		pkg := signer.publish(PackageManifest{ID: "demo", Name: "demo", Version: version}, signer.priv)
+		a.body["https://example.test/demo/rot.flux"] = pkg
+		return "rot.flux", UpdateIndex{Format: 1, ID: "demo", Channels: map[string]IndexChannel{
+			"stable": {Version: version, URL: "rot.flux", SHA256: sha(pkg)},
+		}}
+	}
+	installed := func(pin *updateRig) Installed {
+		return Installed{ID: "demo", Version: "1.0.0", PubkeyHex: pin.pubHex(), Update: []string{idxURL}}
+	}
+
+	// official A -> package signed by official B: installed, re-pinned, no question asked
+	_, idx := publish(b, "1.1.0")
+	a.setIndex(idxURL, idx)
+	dir := t.TempDir()
+	rep := ApplyUpdate(context.Background(), installed(a), "stable", dir, false, a.get)
+	if rep.Status != UpdateInstalled || rep.NewKey != b.pubHex() || !rep.Official {
+		t.Fatalf("rotation A->B: %+v", rep)
+	}
+	if rep2 := CheckUpdate(context.Background(), installed(a), "stable", a.get); !rep2.AutoOK {
+		t.Fatalf("a rotation between official keys should need no question: %+v", rep2)
+	}
+
+	// signed by a key that is not the project's: refused
+	_, idx = publish(c, "1.2.0")
+	a.setIndex(idxURL, idx)
+	if rep := ApplyUpdate(context.Background(), installed(a), "stable", t.TempDir(), false, a.get); rep.Status != UpdateError || rep.Code != CodeBadSignature {
+		t.Fatalf("foreign key for an official install: %+v", rep)
+	}
+
+	// a third-party install never hops to another key, even an official one
+	_, idx = publish(b, "1.3.0")
+	a.setIndex(idxURL, idx)
+	if rep := ApplyUpdate(context.Background(), installed(c), "stable", t.TempDir(), false, a.get); rep.Code != CodeBadSignature {
+		t.Fatalf("a third-party install must stay on its pinned key: %+v", rep)
+	}
+
+	// the index announcing an official key for an official install is not a key change; a foreign one is
+	_, idx = publish(b, "1.4.0")
+	ch := idx.Channels["stable"]
+	ch.PublicKey = b.pubHex()
+	idx.Channels["stable"] = ch
+	a.setIndex(idxURL, idx)
+	if rep := CheckUpdate(context.Background(), installed(a), "stable", a.get); rep.Code == CodeKeyChanged {
+		t.Fatalf("A->B announced: %+v", rep)
+	}
+	ch.PublicKey = c.pubHex()
+	idx.Channels["stable"] = ch
+	a.setIndex(idxURL, idx)
+	if rep := CheckUpdate(context.Background(), installed(a), "stable", a.get); rep.Code != CodeKeyChanged {
+		t.Fatalf("a foreign announced key must be blocked: %+v", rep)
+	}
+}
+
+// After a rotation the previous version is still signed by the old official key.
+func TestRollbackAfterOfficialRotation(t *testing.T) {
+	a, b := newRig(t), newRig(t)
+	saved := officialKeys
+	officialKeys = []string{a.pubHex(), b.pubHex()}
+	defer func() { officialKeys = saved }()
+
+	dir := t.TempDir()
+	_ = InstallPackage(dir, "demo.flux", a.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"}, a.priv))
+	_ = InstallPackage(dir, "demo.flux", b.publish(PackageManifest{ID: "demo", Name: "demo", Version: "1.1.0"}, b.priv))
+	// pinned to B now, the previous (1.0.0) is A's
+	if rep := RollbackPackage(dir, "demo.flux", b.pubHex()); rep.Status != UpdateInstalled || rep.Latest != "1.0.0" {
+		t.Fatalf("%+v", rep)
+	}
+}
