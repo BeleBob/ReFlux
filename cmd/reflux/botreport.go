@@ -267,7 +267,7 @@ func (b *bot) sendReport(now time.Time) {
 	}
 	from, to := lastWeek(now)
 	title := b.tr("rep.title", from.Format("02.01"), to.AddDate(0, 0, -1).Format("02.01"))
-	if _, err := b.t.send(b.chat, weeklyReport(b.s, b.lang, title, from, to, now)); err != nil {
+	if _, err := b.t.Send(b.chat, weeklyReport(b.s, b.lang, title, from, to, now)); err != nil {
 		return // the next run tries again
 	}
 	b.s.reportSent(now)

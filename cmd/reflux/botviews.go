@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // Screens that summarize many things: checks, clients, gateway. They show
@@ -147,7 +149,7 @@ func (b *bot) clientsScreen() screen {
 		t.WriteString("\n" + b.tr("ui.clients.none") + "\n")
 	}
 	kb := keyboard{}
-	var row []tgButton
+	var row []telegram.Button
 	now := time.Now()
 	for _, v := range b.clientViews(clients) {
 		fmt.Fprintf(&t, "\n%s <b>%s</b>%s\n", v.mark(), html.EscapeString(v.c.Name), owner(v.c))
@@ -160,7 +162,7 @@ func (b *bot) clientsScreen() screen {
 			detail += " · " + b.tr(p.id, p.args...)
 		}
 		t.WriteString("      " + detail + "\n")
-		row = append(row, tgButton{Text: v.mark() + " " + v.c.Name, Data: "c:" + v.c.Name})
+		row = append(row, telegram.Button{Text: v.mark() + " " + v.c.Name, Data: "c:" + v.c.Name})
 		if len(row) == 2 {
 			kb, row = append(kb, row), nil
 		}
@@ -172,9 +174,9 @@ func (b *bot) clientsScreen() screen {
 		t.WriteString("\n<i>" + b.tr("ui.clients.hint") + "</i>")
 	}
 	if b.clientBot != nil {
-		kb = append(kb, []tgButton{b.btn("b.bc", "bc")})
+		kb = append(kb, []telegram.Button{b.btn("b.bc", "bc")})
 	}
-	kb = append(kb, []tgButton{b.btn("b.add", "add"), b.btn("b.home", "home")})
+	kb = append(kb, []telegram.Button{b.btn("b.add", "add"), b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
 
@@ -214,7 +216,7 @@ func (b *bot) gatewayScreen() screen {
 		b.tr("ui.gw.carrier", carrier) + "\n\n" + b.tr("ui.gw.hint"))
 
 	kb := keyboard{}
-	var row []tgButton
+	var row []telegram.Button
 	for _, w := range b.s.worldConfigs() {
 		label := strings.TrimSuffix(w, ".conf")
 		if stErr == nil && w == st.World {
@@ -222,7 +224,7 @@ func (b *bot) gatewayScreen() screen {
 		} else if w == chosen {
 			label = "⏳ " + label
 		}
-		row = append(row, tgButton{Text: label, Data: "gws:" + w})
+		row = append(row, telegram.Button{Text: label, Data: "gws:" + w})
 		if len(row) == 3 {
 			kb, row = append(kb, row), nil
 		}
@@ -230,24 +232,24 @@ func (b *bot) gatewayScreen() screen {
 	if row != nil {
 		kb = append(kb, row)
 	}
-	kb = append(kb, []tgButton{b.btn("b.auto", "gws:auto")})
-	var ru []tgButton
+	kb = append(kb, []telegram.Button{b.btn("b.auto", "gws:auto")})
+	var ru []telegram.Button
 	for _, m := range russiaModes {
 		label := b.tr("b.ru." + m)
 		if m == b.s.russiaMode() {
 			label = "✅ " + label
 		}
-		ru = append(ru, tgButton{Text: label, Data: "gwr:" + m})
+		ru = append(ru, telegram.Button{Text: label, Data: "gwr:" + m})
 	}
-	var carrierRow []tgButton
+	var carrierRow []telegram.Button
 	for _, m := range []string{"direct", "tunnel"} {
 		label := b.tr("b.carrier." + m)
 		if (m == "direct") == b.s.carrierDirect() {
 			label = "✅ " + label
 		}
-		carrierRow = append(carrierRow, tgButton{Text: label, Data: "gwc:" + m})
+		carrierRow = append(carrierRow, telegram.Button{Text: label, Data: "gwc:" + m})
 	}
-	kb = append(kb, ru, carrierRow, []tgButton{b.btn("b.refresh", "gw"), b.btn("b.home", "home")})
+	kb = append(kb, ru, carrierRow, []telegram.Button{b.btn("b.refresh", "gw"), b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
 

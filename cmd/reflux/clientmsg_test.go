@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 func TestSOSFromTheClientBot(t *testing.T) {
@@ -42,7 +44,7 @@ func TestSOSFromTheClientBot(t *testing.T) {
 		t.Error("a second report within ten minutes")
 	}
 	// Someone without a channel gets the intro.
-	cb.handle(personPress(6, tgUser{ID: 202}, "sos"))
+	cb.handle(personPress(6, telegram.User{ID: 202}, "sos"))
 	if !strings.Contains(f.lastEditText(), "попросить доступ") {
 		t.Errorf("no channel:\n%s", f.lastEditText())
 	}

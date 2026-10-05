@@ -6,15 +6,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
-func personMsg(id int64, u tgUser, text string) tgUpdate {
-	return tgUpdate{UpdateID: id, Message: &tgMessage{From: &u, Chat: tgChat{ID: u.ID, Type: "private"}, Text: text}}
+func personMsg(id int64, u telegram.User, text string) telegram.Update {
+	return telegram.Update{UpdateID: id, Message: &telegram.Message{From: &u, Chat: telegram.Chat{ID: u.ID, Type: "private"}, Text: text}}
 }
 
-func personPress(id int64, u tgUser, data string) tgUpdate {
-	return tgUpdate{UpdateID: id, Callback: &tgCallback{ID: "cb", From: &u, Data: data,
-		Message: &tgMessage{MessageID: 9, Chat: tgChat{ID: u.ID, Type: "private"}}}}
+func personPress(id int64, u telegram.User, data string) telegram.Update {
+	return telegram.Update{UpdateID: id, Callback: &telegram.Callback{ID: "cb", From: &u, Data: data,
+		Message: &telegram.Message{MessageID: 9, Chat: telegram.Chat{ID: u.ID, Type: "private"}}}}
 }
 
 // to is what the bots sent to one chat.
@@ -49,7 +51,7 @@ func bots(t *testing.T) (Store, *fakeTG, *bot, *clientBot) {
 	return s, f, owner, newClientBot(s, clientBotConfig{Token: testToken}, owner)
 }
 
-var dima = tgUser{ID: 101, Username: "dima", FirstName: "Dima", LanguageCode: "ru"}
+var dima = telegram.User{ID: 101, Username: "dima", FirstName: "Dima", LanguageCode: "ru"}
 
 func TestClientBotFromRequestToLink(t *testing.T) {
 	s, f, owner, cb := bots(t)
@@ -74,7 +76,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	}
 	// Group chats and other people get nothing of it.
 	n := len(f.messages())
-	cb.handle(tgUpdate{UpdateID: 4, Message: &tgMessage{From: &dima, Chat: tgChat{ID: -5, Type: "group"}, Text: "/start"}})
+	cb.handle(telegram.Update{UpdateID: 4, Message: &telegram.Message{From: &dima, Chat: telegram.Chat{ID: -5, Type: "group"}, Text: "/start"}})
 	if len(f.messages()) != n {
 		t.Error("answered a group")
 	}
@@ -113,7 +115,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 		t.Error("the link was not sent again")
 	}
 	// Somebody else gets only the intro.
-	cb.handle(personMsg(9, tgUser{ID: 202, Username: "x"}, "/qr"))
+	cb.handle(personMsg(9, telegram.User{ID: 202, Username: "x"}, "/qr"))
 	if m := f.to(202); len(m) != 1 || strings.Contains(m[0].Text, key) || !strings.Contains(m[0].Text, "попросить доступ") {
 		t.Errorf("a stranger's /qr: %+v", m)
 	}
@@ -211,7 +213,7 @@ func TestClientBotRejectsAndBlocks(t *testing.T) {
 func TestClientBotLanguageAndHelp(t *testing.T) {
 	s, f, _, cb := bots(t)
 	writeFile(t, s.clientHelpPath(), "App: <https://example.org/app.apk>\n")
-	en := tgUser{ID: 303, Username: "ann", LanguageCode: "en-GB"}
+	en := telegram.User{ID: 303, Username: "ann", LanguageCode: "en-GB"}
 	cb.handle(personMsg(1, en, "/help"))
 	m := f.to(303)
 	if len(m) != 1 || !strings.Contains(m[0].Text, "How to connect") || !strings.Contains(m[0].Text, "&lt;https://example.org/app.apk&gt;") {

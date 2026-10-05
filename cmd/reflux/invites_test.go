@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 func TestInvites(t *testing.T) {
@@ -24,23 +26,23 @@ func TestInvites(t *testing.T) {
 		t.Error("an invite for a bad access time")
 	}
 	// Someone who cannot use it leaves it be.
-	s.newRequest(tgUser{ID: 9}, reqAccess, "", now)
+	s.newRequest(telegram.User{ID: 9}, reqAccess, "", now)
 	s.decideRequest(9, reqBlocked, now)
-	if _, _, _, err := s.useInvite(inv.Code, tgUser{ID: 9}, now); !errors.Is(err, errBlocked) {
+	if _, _, _, err := s.useInvite(inv.Code, telegram.User{ID: 9}, now); !errors.Is(err, errBlocked) {
 		t.Errorf("blocked: %v", err)
 	}
 	if len(s.listInvites(now)) != 1 {
 		t.Fatal("a blocked account spent the invite")
 	}
 	// The one it is for gets a channel at once.
-	r, c, used, err := s.useInvite(inv.Code, tgUser{ID: 101, Username: "oleg"}, now)
+	r, c, used, err := s.useInvite(inv.Code, telegram.User{ID: 101, Username: "oleg"}, now)
 	if err != nil || r.State != reqApproved || c.Name != "oleg" || c.Telegram == nil || c.Note != "for Oleg" || used.Code != inv.Code {
 		t.Fatalf("used: %+v %+v %v", r, c, err)
 	}
 	if d := c.Expires.Sub(now); d < 89*24*time.Hour {
 		t.Errorf("access for %v, want 90 days", d)
 	}
-	if _, _, _, err := s.useInvite(inv.Code, tgUser{ID: 102}, now); !errors.Is(err, errNoInvite) {
+	if _, _, _, err := s.useInvite(inv.Code, telegram.User{ID: 102}, now); !errors.Is(err, errNoInvite) {
 		t.Errorf("used twice: %v", err)
 	}
 	// Expired ones go; revoked ones go; junk is no invite.
@@ -48,7 +50,7 @@ func TestInvites(t *testing.T) {
 	if len(s.listInvites(now)) != 0 {
 		t.Error("an expired invite listed")
 	}
-	if _, _, _, err := s.useInvite(old.Code, tgUser{ID: 103}, now); !errors.Is(err, errNoInvite) {
+	if _, _, _, err := s.useInvite(old.Code, telegram.User{ID: 103}, now); !errors.Is(err, errNoInvite) {
 		t.Errorf("expired: %v", err)
 	}
 	inv2, _ := s.newInvite("never", "", now)
@@ -58,7 +60,7 @@ func TestInvites(t *testing.T) {
 	// The pool used up: the person's request waits for the owner.
 	s.Add("x1", "mailru", docC)
 	inv3, _ := s.newInvite("+30", "", now)
-	r, _, _, err = s.useInvite(inv3.Code, tgUser{ID: 104, Username: "late"}, now)
+	r, _, _, err = s.useInvite(inv3.Code, telegram.User{ID: 104, Username: "late"}, now)
 	if err == nil || r.State != reqPending || len(s.listInvites(now)) != 0 {
 		t.Errorf("no documents: %+v %v", r, err)
 	}
@@ -88,7 +90,7 @@ func TestInviteInTheBots(t *testing.T) {
 		t.Error("the delivered request stays")
 	}
 	// A spent or made-up code.
-	cb.handle(personMsg(4, tgUser{ID: 202, Username: "x"}, "/start "+invs[0].Code))
+	cb.handle(personMsg(4, telegram.User{ID: 202, Username: "x"}, "/start "+invs[0].Code))
 	if m := f.to(202); !strings.Contains(m[0].Text, "не действует") {
 		t.Errorf("spent: %q", m[0].Text)
 	}

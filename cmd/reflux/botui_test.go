@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 var fileExt = map[string]bool{"conf": true, "yml": true, "json": true, "sock": true, "service": true, "log": true, "stat": true}
@@ -186,7 +188,7 @@ func TestLinkAClientToTheOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	up := press(1, 42, "tgme:phone", time.Now())
-	up.Callback.From = &tgUser{ID: 42, FirstName: "Дмитрий", Username: "dima"}
+	up.Callback.From = &telegram.User{ID: 42, FirstName: "Дмитрий", Username: "dima"}
 	b.handle(up)
 	c, _ := s.Get("phone")
 	if c.Telegram == nil || c.Telegram.ID != 42 || c.Telegram.String() != "Дмитрий (@dima)" {

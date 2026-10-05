@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // Messages between the owner and the clients: a person's "it does not
@@ -16,7 +18,7 @@ import (
 const sosEvery = 10 * time.Minute
 
 // sosAsk asks the person what does not work. The caller holds cb.mu.
-func (cb *clientBot) sosAsk(u *tgUser) screen {
+func (cb *clientBot) sosAsk(u *telegram.User) screen {
 	l := langOf(u.LanguageCode)
 	if _, ok := cb.s.clientOf(u.ID); !ok {
 		return cb.home(u)
@@ -30,7 +32,7 @@ func (cb *clientBot) sosAsk(u *tgUser) screen {
 
 // sos tells the owner a person's channel does not work for them, with
 // what the server sees of it. The caller holds cb.mu.
-func (cb *clientBot) sos(u *tgUser, text string) screen {
+func (cb *clientBot) sos(u *telegram.User, text string) screen {
 	l := langOf(u.LanguageCode)
 	delete(cb.reporting, u.ID)
 	c, ok := cb.s.clientOf(u.ID)
@@ -46,7 +48,7 @@ func (cb *clientBot) sos(u *tgUser, text string) screen {
 	if o := cb.owner; o != nil {
 		report := cb.sosReport(o.lang, u, c, text)
 		o.mu.Lock()
-		o.t.sendKeyboard(o.chat, report, keyboard{{o.btn("b.client", "c:"+c.Name, c.Name), o.btn("b.logs", "lg:"+c.Name)}})
+		o.t.SendKeyboard(o.chat, report, keyboard{{o.btn("b.client", "c:"+c.Name, c.Name), o.btn("b.logs", "lg:"+c.Name)}})
 		o.mu.Unlock()
 	}
 	sc := cb.home(u)
@@ -56,7 +58,7 @@ func (cb *clientBot) sos(u *tgUser, text string) screen {
 
 // sosReport is what the owner gets: who, what they wrote, and the
 // channel as the server sees it.
-func (cb *clientBot) sosReport(l lang, u *tgUser, c Client, text string) string {
+func (cb *clientBot) sosReport(l lang, u *telegram.User, c Client, text string) string {
 	e := html.EscapeString
 	now := time.Now()
 	who := accessRequest{ID: u.ID, Username: u.Username, Name: u.FirstName}.Who()
@@ -108,7 +110,7 @@ func (cb *clientBot) broadcast(text string) (sent, failed int) {
 			continue
 		}
 		l := langOf(st.Lang[c.Telegram.ID])
-		if _, err := cb.t.send(c.Telegram.ID, tr(l, "cb.broadcast", html.EscapeString(text))); err != nil {
+		if _, err := cb.t.Send(c.Telegram.ID, tr(l, "cb.broadcast", html.EscapeString(text))); err != nil {
 			log.Printf("client bot: message to %s: %v", c.Name, err)
 			failed++
 			continue

@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // Invites: a one-time link to the client bot that gives access at once,
@@ -100,7 +102,7 @@ func (s Store) revokeInvite(code string) error {
 // approved at once, as the owner would. An account that cannot use it
 // (blocked, with a channel or a request already) leaves it for the one
 // it was meant for. The caller holds the lock and starts the node.
-func (s Store) useInvite(code string, u tgUser, now time.Time) (accessRequest, Client, invite, error) {
+func (s Store) useInvite(code string, u telegram.User, now time.Time) (accessRequest, Client, invite, error) {
 	var inv invite
 	if !inviteCodeRe.MatchString(code) {
 		return accessRequest{}, Client{}, inv, errNoInvite
@@ -136,7 +138,7 @@ func (s Store) inviteLink(code string) string {
 		return code
 	}
 	if c.Username == "" {
-		if me, err := newTelegram(c.Token).getMe(); err == nil {
+		if me, err := telegram.New(c.Token).GetMe(); err == nil {
 			c.Username = me.Username
 			writeJSON(s.clientBotPath(), c)
 		}

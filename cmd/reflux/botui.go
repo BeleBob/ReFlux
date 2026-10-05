@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/share"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // The bot's screens live in one message each: a button press edits the
@@ -18,7 +20,7 @@ import (
 // the chat does not fill up. Button data is "action" or "action:name",
 // plus a time for the buttons that destroy something.
 
-type keyboard [][]tgButton
+type keyboard [][]telegram.Button
 
 // screen is a message's text and buttons.
 type screen struct {
@@ -37,8 +39,8 @@ const awaitFor = 10 * time.Minute
 
 func (b *bot) tr(id string, args ...any) string { return tr(b.lang, id, args...) }
 
-func (b *bot) btn(id, data string, args ...any) tgButton {
-	return tgButton{Text: b.tr(id, args...), Data: data}
+func (b *bot) btn(id, data string, args ...any) telegram.Button {
+	return telegram.Button{Text: b.tr(id, args...), Data: data}
 }
 
 // botCommands fill the bot's command menu; the descriptions are messages.
@@ -51,13 +53,13 @@ func (b *bot) setMenu() {
 	for _, c := range botCommands {
 		cmds = append(cmds, [2]string{c, b.tr("cmd." + c)})
 	}
-	if err := b.t.setCommands(cmds); err != nil {
+	if err := b.t.SetCommands(cmds); err != nil {
 		log.Printf("bot: command menu: %v", err)
 	}
 }
 
 // handle answers the owner's chat; anyone else is ignored.
-func (b *bot) handle(u tgUpdate) {
+func (b *bot) handle(u telegram.Update) {
 	if cb := u.Callback; cb != nil {
 		if cb.Message != nil && cb.Message.Chat.ID == b.chat {
 			b.press(cb)
@@ -74,7 +76,7 @@ func (b *bot) handle(u tgUpdate) {
 	if sc.text == "" {
 		return
 	}
-	if _, err := b.t.sendKeyboard(b.chat, sc.text, sc.kb); err != nil {
+	if _, err := b.t.SendKeyboard(b.chat, sc.text, sc.kb); err != nil {
 		log.Printf("bot: reply not sent: %v", err)
 	}
 }
@@ -178,15 +180,15 @@ func (b *bot) message(text string) screen {
 }
 
 // press handles a button: it edits the screen it belongs to.
-func (b *bot) press(cb *tgCallback) {
+func (b *bot) press(cb *telegram.Callback) {
 	action, arg, _ := strings.Cut(cb.Data, ":")
 	if action == "sp" {
 		// The test takes a while: say so before the spinner times out.
-		b.t.answer(cb.ID, b.tr("ui.speed.wait"))
+		b.t.Answer(cb.ID, b.tr("ui.speed.wait"))
 		b.mu.Lock()
 		sc := b.speed()
 		b.mu.Unlock()
-		if _, err := b.t.sendKeyboard(b.chat, sc.text, sc.kb); err != nil {
+		if _, err := b.t.SendKeyboard(b.chat, sc.text, sc.kb); err != nil {
 			log.Printf("bot: speed test: %v", err)
 		}
 		return
@@ -197,11 +199,11 @@ func (b *bot) press(cb *tgCallback) {
 	}
 	sc, toast := b.button(action, arg)
 	b.mu.Unlock()
-	b.t.answer(cb.ID, toast)
+	b.t.Answer(cb.ID, toast)
 	if sc.text == "" {
 		return
 	}
-	if err := b.t.editKeyboard(b.chat, cb.Message.MessageID, sc.text, sc.kb); err != nil && !isNotModified(err) {
+	if err := b.t.EditKeyboard(b.chat, cb.Message.MessageID, sc.text, sc.kb); err != nil && !isNotModified(err) {
 		log.Printf("bot: %v", err)
 	}
 }
@@ -223,7 +225,7 @@ func (b *bot) button(action, arg string) (screen, string) {
 		b.show(arg)
 		return screen{}, b.tr("ui.sent")
 	case "lg":
-		if _, err := b.t.send(b.chat, b.logs(arg)); err != nil {
+		if _, err := b.t.Send(b.chat, b.logs(arg)); err != nil {
 			log.Printf("bot: logs: %v", err)
 		}
 		return screen{}, ""
@@ -338,7 +340,7 @@ func fresh(s string) bool {
 // isNotModified: Telegram refuses an edit that changes nothing (Refresh
 // with nothing new).
 func isNotModified(err error) bool {
-	var te *tgError
+	var te *telegram.Error
 	return errors.As(err, &te) && strings.Contains(te.Desc, "not modified")
 }
 
@@ -535,7 +537,7 @@ func (b *bot) settingsScreen() screen {
 			mark = "🔕"
 		}
 		fmt.Fprintf(&t, "%s %s\n", mark, b.tr("alerts."+c+".about"))
-		kb = append(kb, []tgButton{{Text: mark + " " + b.tr("alerts."+c), Data: "mute:" + c}})
+		kb = append(kb, []telegram.Button{{Text: mark + " " + b.tr("alerts."+c), Data: "mute:" + c}})
 	}
 	lim := b.s.hostLimits()
 	temp := b.tr("ui.limit.sensor")
@@ -546,9 +548,9 @@ func (b *bot) settingsScreen() screen {
 	}
 	t.WriteString("\n" + b.tr("ui.limits", temp, lim.CPUWarn) + "\n")
 	kb = append(kb,
-		[]tgButton{b.btn("b.temp.down", "lim:t-"), b.btn("b.temp.up", "lim:t+")},
-		[]tgButton{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")},
-		[]tgButton{b.btn("b.home", "home")})
+		[]telegram.Button{b.btn("b.temp.down", "lim:t-"), b.btn("b.temp.up", "lim:t+")},
+		[]telegram.Button{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")},
+		[]telegram.Button{b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
 
@@ -634,7 +636,7 @@ func (b *bot) help() screen {
 // ---- actions ----
 
 // failed shows an error on screen, with a way back.
-func (b *bot) failed(err error, back tgButton) screen {
+func (b *bot) failed(err error, back telegram.Button) screen {
 	return screen{"⚠️ " + html.EscapeString(err.Error()), keyboard{{back, b.btn("b.home", "home")}}}
 }
 
@@ -684,9 +686,9 @@ func (b *bot) accessScreen(name string) screen {
 		t.WriteString(" · " + b.tr("ui.access.left", durationIn(b.lang, c.Expires.Sub(now))))
 	}
 	t.WriteString("\n\n" + b.tr("ui.access.hint"))
-	var plus []tgButton
+	var plus []telegram.Button
 	for _, d := range accessDays {
-		plus = append(plus, tgButton{Text: b.tr(fmt.Sprintf("b.plus%d", d)), Data: fmt.Sprintf("ax:%s:+%d", c.Name, d)})
+		plus = append(plus, telegram.Button{Text: b.tr(fmt.Sprintf("b.plus%d", d)), Data: fmt.Sprintf("ax:%s:+%d", c.Name, d)})
 	}
 	return screen{t.String(), keyboard{
 		plus[:3], plus[3:],
@@ -742,11 +744,11 @@ func (b *bot) telegramScreen(name string) screen {
 	kb := keyboard{{b.btn("b.tg.me", "tgme:"+c.Name)}}
 	if c.Telegram != nil {
 		if n := nick(*c.Telegram); n != "" && n != c.Name {
-			kb = append(kb, []tgButton{b.btn("b.tg.rename", "rnk:"+c.Name, n)})
+			kb = append(kb, []telegram.Button{b.btn("b.tg.rename", "rnk:"+c.Name, n)})
 		}
-		kb = append(kb, []tgButton{b.btn("b.tg.off", "tgoff:"+c.Name)})
+		kb = append(kb, []telegram.Button{b.btn("b.tg.off", "tgoff:"+c.Name)})
 	}
-	kb = append(kb, []tgButton{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")})
+	kb = append(kb, []telegram.Button{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")})
 	return screen{b.tr("ui.tg.title", html.EscapeString(c.Name)) + "\n" + b.tr("ui.client.telegram", now) + "\n\n" + b.tr("ui.tg.hint"), kb}
 }
 
@@ -911,7 +913,7 @@ func (b *bot) setLang(l lang) screen {
 // show sends what a client's app needs: the QR code and the fields for
 // manual entry. Both are secrets, so they are deleted after showKeep.
 func (b *bot) show(name string) {
-	fail := func(err error) { b.t.send(b.chat, "⚠️ "+html.EscapeString(err.Error())) }
+	fail := func(err error) { b.t.Send(b.chat, "⚠️ "+html.EscapeString(err.Error())) }
 	c, err := b.s.Get(name)
 	if err != nil {
 		fail(err)
@@ -934,7 +936,7 @@ func (b *bot) show(name string) {
 	}
 	e := html.EscapeString
 	mins := int(showKeep.Minutes())
-	photo, err := b.t.sendPhoto(b.chat, png, b.tr("ui.show.photo", e(c.Name), mins))
+	photo, err := b.t.SendPhoto(b.chat, png, b.tr("ui.show.photo", e(c.Name), mins))
 	if err != nil {
 		log.Printf("bot: show: %v", err)
 		fail(errors.New(b.tr("ui.show.failed")))
@@ -949,14 +951,14 @@ func (b *bot) show(name string) {
 		}
 		msg = b.tr("ui.show.session", e(c.Name), mins, b.tr(p.id, p.args...), docs.String(), e(c.context()), e(key), e(link))
 	}
-	text, err := b.t.send(b.chat, msg)
+	text, err := b.t.Send(b.chat, msg)
 	if err != nil {
 		log.Printf("bot: show: %v", err)
 	}
 	time.AfterFunc(showKeep, func() {
 		for _, id := range []int64{photo, text} {
 			if id != 0 {
-				if err := b.t.deleteMessage(b.chat, id); err != nil {
+				if err := b.t.DeleteMessage(b.chat, id); err != nil {
 					log.Printf("bot: deleting access data: %v", err)
 				}
 			}
