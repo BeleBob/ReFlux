@@ -23,6 +23,8 @@ import (
 const usage = `reflux — manage ReFlux exit nodes (one per client) on this host.
 
 USAGE
+  reflux setup [--check]   install this server step by step (safe to run again;
+                           --check only says what is missing)
   reflux version           the release, the commit and the images in use
   reflux add <name> --transport <type> --url <document-url> [--expires <when>] [--note <text>]
   reflux list
@@ -199,6 +201,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
+	case "setup":
+		return cmdSetup(s, rest, stdin, stdout)
 	case "requests":
 		return cmdRequests(s, rest, stdout)
 	case "invite":
