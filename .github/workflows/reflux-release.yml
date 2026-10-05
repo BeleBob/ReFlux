@@ -1,8 +1,10 @@
 name: ReFlux release
 
 # A reflux-v<version> tag builds the reflux manager for Linux and publishes
-# it as a GitHub release with SHA256SUMS. (Upstream's release.yml reacts to
-# v* tags only, so the two never collide.)
+# it as a GitHub release with SHA256SUMS, the installer and the notes from
+# docs/reflux/CHANGELOG.md. (Upstream's release.yml reacts to v* tags only,
+# so the two never collide.) reflux-images.yml tags the images <version>
+# and latest for the same tag; a release build uses the latest ones.
 on:
   push:
     tags: ['reflux-v*']
@@ -23,14 +25,33 @@ jobs:
 
       - run: go test ./cmd/reflux -count=1
 
+      - name: Notes
+        # The version's section of the changelog; no section, no release.
+        run: |
+          version="${GITHUB_REF_NAME#reflux-v}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' docs/reflux/CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "docs/reflux/CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          cat notes.md
+
       - name: Build
         run: |
+          version="${GITHUB_REF_NAME#reflux-v}"
           mkdir -p dist
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
-              go build -trimpath -ldflags "-s -w" -o "dist/reflux-linux-$arch" ./cmd/reflux
+              go build -trimpath -ldflags "-s -w -X main.releaseVersion=$version -X main.imageTag=latest" \
+              -o "dist/reflux-linux-$arch" ./cmd/reflux
           done
-          cd dist && sha256sum reflux-linux-* > SHA256SUMS && cat SHA256SUMS
+          test -f deploy/reflux/install.sh && cp deploy/reflux/install.sh dist/
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          "./reflux-linux-amd64" version
 
       - name: Publish
         env:
@@ -38,5 +59,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "ReFlux manager ${GITHUB_REF_NAME#reflux-v}" \
-            --notes "reflux, the exit-node manager. Check the download against SHA256SUMS."
+            --title "ReFlux ${GITHUB_REF_NAME#reflux-v}" \
+            --notes-file notes.md
