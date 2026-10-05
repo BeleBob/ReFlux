@@ -24,14 +24,6 @@ ReFlux — набор инструментов для развёртывания
 - [Источники](#источники)
 - [Лицензия](#лицензия)
 
-## Технологии
-- [Go](https://go.dev/)
-- [Docker](https://www.docker.com/) и Docker Compose
-- [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)
-- [nftables](https://netfilter.org/projects/nftables/) и [Unbound](https://nlnetlabs.nl/projects/unbound/)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [GitHub Actions](https://docs.github.com/actions) и [GitHub Container Registry](https://docs.github.com/packages)
-
 ## Возможности
 - **Изоляция клиентов.** Для каждого клиента запускается отдельный контейнер
   с собственным ключом и документом. Доступ выдаётся, приостанавливается,
