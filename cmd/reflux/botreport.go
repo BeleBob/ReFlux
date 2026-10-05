@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // The weekly report: from Monday 10:00 the bot sends what last week was —
@@ -250,7 +252,7 @@ func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string
 			server = append(server, t("rep.disk", d.Percent()))
 		}
 	}
-	if up, err := readUptime(); err == nil {
+	if up, err := host.ReadUptime(); err == nil {
 		server = append(server, t("rep.uptime", durationIn(l, up)))
 	}
 	if len(server) > 0 {

@@ -13,6 +13,8 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/share"
 
 	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // The bot's screens live in one message each: a button press edits the
@@ -543,7 +545,7 @@ func (b *bot) settingsScreen() screen {
 	temp := b.tr("ui.limit.sensor")
 	if lim.TempWarn > 0 {
 		temp = b.tr("ui.limit.deg", lim.TempWarn)
-	} else if ts := readTemps(); len(ts) > 0 {
+	} else if ts := host.ReadTemps(); len(ts) > 0 {
 		temp = b.tr("ui.limit.deg.sensor", int(lim.tempWarnAt(ts[0])))
 	}
 	t.WriteString("\n" + b.tr("ui.limits", temp, lim.CPUWarn) + "\n")
@@ -567,7 +569,7 @@ func (b *bot) setLimit(arg string) screen {
 		at := lim.TempWarn
 		if at == 0 {
 			at = defaultTemp
-			if ts := readTemps(); len(ts) > 0 {
+			if ts := host.ReadTemps(); len(ts) > 0 {
 				at = int(lim.tempWarnAt(ts[0]))
 			}
 		}

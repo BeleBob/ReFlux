@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // The event log: what the bot reported (a tunnel down or back, a
@@ -63,7 +65,7 @@ func (s Store) logEvents(evs []event) error {
 	if err != nil {
 		return err
 	}
-	lines, _ := readLines(s.eventsPath())
+	lines, _ := host.ReadLines(s.eventsPath())
 	if len(lines) >= eventsMax {
 		keep := []byte{}
 		for _, l := range lines[len(lines)-eventsKeep:] {

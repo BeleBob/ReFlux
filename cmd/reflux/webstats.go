@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // The web panel's sampler: every sampleEvery it reads the host (CPU,
@@ -51,12 +53,12 @@ type containerLive struct {
 type hostNow struct {
 	Point      hostPoint
 	Load       [3]float64
-	Mem        memory
+	Mem        host.Memory
 	Uptime     time.Duration
 	CPUs       int
-	Temps      []sensor
+	Temps      []host.Sensor
 	Disks      []disk
-	Top        []procUse
+	Top        []host.ProcUse
 	Containers []containerLive
 }
 
@@ -93,8 +95,8 @@ type sampler struct {
 	dirty   map[string]bool
 
 	// previous readings
-	cpu       cpuTimes
-	procs     map[int]proc
+	cpu       host.CPUTimes
+	procs     map[int]host.Proc
 	lan, eg   [2]uint64
 	at        time.Time
 	ctrIDs    map[string]string
@@ -129,14 +131,14 @@ func (m *sampler) run(stop <-chan struct{}) {
 
 // tick takes one sample.
 func (m *sampler) tick(now time.Time) {
-	cpu, cpuErr := readCPU()
-	procs := readProcs()
-	mem, _ := readMemory()
-	load, _ := readLoad()
-	up, _ := readUptime()
-	temps := readTemps()
-	lanRx, lanTx, _ := ifaceBytes(lanIface)
-	egRx, egTx, _ := egressBytes()
+	cpu, cpuErr := host.ReadCPU()
+	procs := host.ReadProcs()
+	mem, _ := host.ReadMemory()
+	load, _ := host.ReadLoad()
+	up, _ := host.ReadUptime()
+	temps := host.ReadTemps()
+	lanRx, lanTx, _ := host.IfaceBytes(host.LANIface)
+	egRx, egTx, _ := host.EgressBytes()
 
 	if now.Sub(m.ctrAt) > time.Minute || m.ctrIDs == nil {
 		m.docker.Lock()
@@ -158,7 +160,7 @@ func (m *sampler) tick(now time.Time) {
 		}
 		live := containerLive{Name: n, MemBytes: c.MemBytes}
 		if prev, ok := m.ctrPrev[n]; ok && dt > 0 && c.CPUUsec >= prev {
-			live.CPU = 100 * float64(c.CPUUsec-prev) / 1e6 / dt / float64(cpuCount())
+			live.CPU = 100 * float64(c.CPUUsec-prev) / 1e6 / dt / float64(host.CPUCount())
 		}
 		m.ctrPrev[n] = c.CPUUsec
 		ctrs = append(ctrs, live)
@@ -168,11 +170,11 @@ func (m *sampler) tick(now time.Time) {
 	if len(temps) > 0 {
 		p.TempC = temps[0].C
 	}
-	var top []procUse
+	var top []host.ProcUse
 	if !m.at.IsZero() && dt > 0 {
 		if cpuErr == nil {
-			p.CPU = m.cpu.percent(cpu)
-			top = topProcs(m.procs, procs, m.cpu, cpu, 6)
+			p.CPU = m.cpu.Percent(cpu)
+			top = host.TopProcs(m.procs, procs, m.cpu, cpu, 6)
 		}
 		p.LanRx, p.LanTx = rate(m.lan[0], lanRx, dt), rate(m.lan[1], lanTx, dt)
 		p.EgRx, p.EgTx = rate(m.eg[0], egRx, dt), rate(m.eg[1], egTx, dt)
@@ -187,7 +189,7 @@ func (m *sampler) tick(now time.Time) {
 			m.minutes = appendCapped(m.minutes, avg, minutesLen)
 		}
 	}
-	m.now = hostNow{Point: p, Load: load, Mem: mem, Uptime: up, CPUs: cpuCount(), Temps: temps,
+	m.now = hostNow{Point: p, Load: load, Mem: mem, Uptime: up, CPUs: host.CPUCount(), Temps: temps,
 		Disks: m.now.Disks, Top: top, Containers: ctrs}
 	m.mu.Unlock()
 

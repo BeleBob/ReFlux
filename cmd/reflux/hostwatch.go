@@ -3,6 +3,8 @@ package main
 import (
 	"sync"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // Warnings about the server itself: the CPU temperature, and a CPU busy
@@ -33,7 +35,7 @@ func (s Store) hostLimits() hostLimits {
 }
 
 // tempWarnAt is where a warning starts for t.
-func (l hostLimits) tempWarnAt(t sensor) float64 {
+func (l hostLimits) tempWarnAt(t host.Sensor) float64 {
 	switch {
 	case l.TempWarn > 0:
 		return float64(l.TempWarn)
@@ -45,7 +47,7 @@ func (l hostLimits) tempWarnAt(t sensor) float64 {
 
 // tempFailAt is where it becomes a problem: near the sensor's critical
 // point, where the CPU slows itself down or shuts off.
-func (l hostLimits) tempFailAt(t sensor) float64 {
+func (l hostLimits) tempFailAt(t host.Sensor) float64 {
 	at := 95.0
 	if t.Crit > 0 {
 		at = t.Crit - 5
@@ -55,8 +57,8 @@ func (l hostLimits) tempFailAt(t sensor) float64 {
 
 var hostWatch struct {
 	sync.Mutex
-	prevCPU   cpuTimes
-	prevProcs map[int]proc
+	prevCPU   host.CPUTimes
+	prevProcs map[int]host.Proc
 	prevAt    time.Time
 	measured  bool      // percent covers an interval
 	percent   float64   // over the last interval
@@ -68,19 +70,19 @@ var hostWatch struct {
 // sampleCPU measures the CPU since the last call (the bot calls it before
 // each check) and tracks how long it has been at or over limit percent.
 func sampleCPU(now time.Time, limit int) {
-	cpu, err := readCPU()
+	cpu, err := host.ReadCPU()
 	if err != nil {
 		return
 	}
-	procs := readProcs()
+	procs := host.ReadProcs()
 	w := &hostWatch
 	w.Lock()
 	defer w.Unlock()
 	if !w.prevAt.IsZero() && now.After(w.prevAt) {
 		w.measured = true
-		w.percent = w.prevCPU.percent(cpu)
+		w.percent = w.prevCPU.Percent(cpu)
 		w.top = ""
-		if top := topProcs(w.prevProcs, procs, w.prevCPU, cpu, 1); len(top) > 0 {
+		if top := host.TopProcs(w.prevProcs, procs, w.prevCPU, cpu, 1); len(top) > 0 {
 			w.top = top[0].Name
 		}
 		switch {
@@ -99,7 +101,7 @@ func (d *doctor) heat(s Store) {
 	w := &hostWatch
 	w.Lock()
 	defer w.Unlock()
-	if temps := readTemps(); len(temps) > 0 {
+	if temps := host.ReadTemps(); len(temps) > 0 {
 		t := temps[0]
 		warnAt, failAt := lim.tempWarnAt(t), lim.tempFailAt(t)
 		switch {
