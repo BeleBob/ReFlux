@@ -94,7 +94,7 @@ func speedLines(l lang, rs []speedResult) []string {
 			case "world":
 				way = st.World
 			case "russia":
-				way = tr(l, ruMode(st).id)
+				way = tr(l, ruMode(st).ID)
 			}
 		}
 		if r.Err != nil {

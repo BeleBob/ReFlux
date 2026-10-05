@@ -24,7 +24,7 @@ func (b *bot) requestText(r accessRequest) string {
 		t.WriteString(b.tr("ui.rq.extend", e(r.Who()), e(r.Client)))
 		if c, err := b.s.Get(r.Client); err == nil {
 			p := accessPhrase(c, time.Now())
-			t.WriteString("\n" + b.tr("ui.client.access", b.tr(p.id, p.args...)))
+			t.WriteString("\n" + b.tr("ui.client.access", b.tr(p.ID, p.Args...)))
 		}
 	} else {
 		t.WriteString(b.tr("ui.rq.access", e(r.Who())))
@@ -121,7 +121,7 @@ func (b *bot) requestPress(action, arg string) screen {
 			return err
 		}
 		p := accessPhrase(c, now)
-		note = b.tr("ui.rq.approved", html.EscapeString(c.Name), b.tr(p.id, p.args...))
+		note = b.tr("ui.rq.approved", html.EscapeString(c.Name), b.tr(p.ID, p.Args...))
 		return apply(b.s, io.Discard)
 	})
 	if err != nil {

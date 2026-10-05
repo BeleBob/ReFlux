@@ -136,5 +136,5 @@ func durationPhrase(d time.Duration) phrase {
 // durationIn is durationPhrase in l.
 func durationIn(l lang, d time.Duration) string {
 	p := durationPhrase(d)
-	return tr(l, p.id, p.args...)
+	return tr(l, p.ID, p.Args...)
 }

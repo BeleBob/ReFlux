@@ -167,7 +167,7 @@ func weeklyReport(s Store, l lang, title string, from, to, now time.Time) string
 		state := ""
 		if !c.Active(now) {
 			p := accessPhrase(c, now)
-			state = " (" + t(p.id, p.args...) + ")"
+			state = " (" + t(p.ID, p.Args...) + ")"
 		}
 		switch {
 		case w.Down+w.Up == 0:

@@ -72,7 +72,7 @@ func (cb *clientBot) sosReport(l lang, u *telegram.User, c Client, text string) 
 	}
 	v := viewClients(cb.s, []Client{c})[0]
 	p := accessPhrase(c, now)
-	t.WriteString("\n\n" + tr(l, "ui.client.access", tr(l, p.id, p.args...)))
+	t.WriteString("\n\n" + tr(l, "ui.client.access", tr(l, p.ID, p.Args...)))
 	t.WriteString("\n" + tr(l, "ui.sos.node", stateText(l, v)))
 	if c.session() && v.status != nil && v.status.doc >= 0 {
 		t.WriteString("\n" + tr(l, "ui.sos.doc", v.status.doc+1, len(c.Docs())))

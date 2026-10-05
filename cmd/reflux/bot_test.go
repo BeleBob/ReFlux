@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/i18n"
 	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
@@ -214,7 +215,7 @@ func TestBotAnswersOnlyItsOwner(t *testing.T) {
 	}
 }
 
-func init() { messages["test.raw"] = [2]string{"%s", "%s"} }
+func init() { i18n.Messages["test.raw"] = [2]string{"%s", "%s"} }
 
 func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 	m := monitor{confirm: 2}

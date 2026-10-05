@@ -68,7 +68,7 @@ func shortText(s Store, l lang, f finding) string {
 			return ""
 		}
 		if p, ok := a[i].(phrase); ok {
-			return t(p.id, p.args...)
+			return t(p.ID, p.Args...)
 		}
 		return fmt.Sprint(a[i])
 	}
@@ -159,7 +159,7 @@ func (b *bot) clientsScreen() screen {
 		detail := b.state(v)
 		if v.active {
 			p := accessPhrase(v.c, now)
-			detail += " · " + b.tr(p.id, p.args...)
+			detail += " · " + b.tr(p.ID, p.Args...)
 		}
 		t.WriteString("      " + detail + "\n")
 		row = append(row, telegram.Button{Text: v.mark() + " " + v.c.Name, Data: "c:" + v.c.Name})
@@ -197,9 +197,9 @@ func (b *bot) gatewayScreen() screen {
 			mark = "❌"
 		}
 		t.WriteString(b.tr("ui.gw.world", mark+" "+html.EscapeString(st.World)) + "\n")
-		russia := "✅ " + b.tr(ruMode(st).id)
+		russia := "✅ " + b.tr(ruMode(st).ID)
 		if !st.RUOK {
-			russia = "❌ " + b.tr(ruMode(st).id)
+			russia = "❌ " + b.tr(ruMode(st).ID)
 		}
 		t.WriteString(b.tr("ui.russia", russia) + "\n")
 	} else {

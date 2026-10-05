@@ -267,7 +267,7 @@ func (cb *clientBot) home(u *telegram.User) screen {
 				state = v.onlineText(l)
 			}
 		}
-		text := tr(l, "cb.channel", e(c.Name), tr(l, p.id, p.args...), state)
+		text := tr(l, "cb.channel", e(c.Name), tr(l, p.ID, p.Args...), state)
 		if _, month, ok := cb.s.trafficNow(c.Name, now); ok {
 			text += "\n" + tr(l, "cb.traffic", humanBytes(month.Down), humanBytes(month.Up))
 		}
@@ -340,7 +340,7 @@ func (cb *clientBot) access(u *telegram.User) screen {
 	now := time.Now()
 	if !c.Active(now) {
 		p := accessPhrase(c, now)
-		return screen{tr(l, "cb.qr.off", tr(l, p.id, p.args...)), keyboard{{cb.btn(l, "b.refresh", "home")}}}
+		return screen{tr(l, "cb.qr.off", tr(l, p.ID, p.Args...)), keyboard{{cb.btn(l, "b.refresh", "home")}}}
 	}
 	if at, ok := cb.qrAt[u.ID]; ok && now.Sub(at) < clientQREvery {
 		return screen{tr(l, "cb.qr.wait", int(clientQREvery.Minutes())), keyboard{{cb.btn(l, "b.refresh", "home")}}}
@@ -423,8 +423,8 @@ func (cb *clientBot) deliver(now time.Time) {
 			}
 			p := accessPhrase(c, now)
 			if r.Kind == reqExtend {
-				_, err = cb.t.Send(r.ID, tr(l, "cb.extended", html.EscapeString(c.Name), tr(l, p.id, p.args...)))
-			} else if _, err = cb.t.SendKeyboard(r.ID, tr(l, "cb.welcome", html.EscapeString(c.Name), tr(l, p.id, p.args...)),
+				_, err = cb.t.Send(r.ID, tr(l, "cb.extended", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)))
+			} else if _, err = cb.t.SendKeyboard(r.ID, tr(l, "cb.welcome", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)),
 				keyboard{{cb.btn(l, "b.cb.help", "help"), cb.btn(l, "b.refresh", "home")}}); err == nil {
 				err = cb.sendAccess(r.ID, c, l)
 				cb.qrAt[r.ID] = now
@@ -548,7 +548,7 @@ func (cb *clientBot) redeem(u *telegram.User, code string) screen {
 	cb.s.logEvents([]event{ev})
 	if o := cb.owner; o != nil {
 		o.mu.Lock()
-		text := o.tr("ui.invite.used", html.EscapeString(who), html.EscapeString(c.Name), o.tr(p.id, p.args...))
+		text := o.tr("ui.invite.used", html.EscapeString(who), html.EscapeString(c.Name), o.tr(p.ID, p.Args...))
 		if note != "" {
 			text += "\n«" + html.EscapeString(note) + "»"
 		}

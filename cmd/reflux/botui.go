@@ -420,7 +420,7 @@ func stateText(l lang, v clientView) string {
 	switch {
 	case !v.active:
 		p := accessPhrase(v.c, time.Now())
-		return tr(l, p.id, p.args...)
+		return tr(l, p.ID, p.Args...)
 	case !v.running:
 		return tr(l, "ui.node.down")
 	case v.status == nil:
@@ -439,12 +439,12 @@ func (b *bot) home() screen {
 		if !st.WorldOK {
 			world = "❌ " + html.EscapeString(st.World)
 		}
-		russia := "✅ " + b.tr(ruMode(st).id)
+		russia := "✅ " + b.tr(ruMode(st).ID)
 		switch {
 		case !st.RUOK:
-			russia = "❌ " + b.tr(ruMode(st).id)
+			russia = "❌ " + b.tr(ruMode(st).ID)
 		case st.RUFallback:
-			russia = "⚠️ " + b.tr(ruMode(st).id)
+			russia = "⚠️ " + b.tr(ruMode(st).ID)
 		}
 		t.WriteString(b.tr("ui.world", world) + "\n" + b.tr("ui.russia", russia) + "\n" + b.tr("ui.killswitch", st.Dropped) + "\n")
 	}
@@ -485,7 +485,7 @@ func (b *bot) clientScreen(name string) screen {
 	if c.Note != "" {
 		t.WriteString(b.tr("ui.client.note", html.EscapeString(c.Note)) + "\n")
 	}
-	t.WriteString(b.tr("ui.client.access", b.tr(p.id, p.args...)) + "\n")
+	t.WriteString(b.tr("ui.client.access", b.tr(p.ID, p.Args...)) + "\n")
 	switch {
 	case !v.active:
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.stopped")) + "\n")
@@ -681,7 +681,7 @@ func (b *bot) accessScreen(name string) screen {
 	now := time.Now()
 	p := accessPhrase(c, now)
 	var t strings.Builder
-	fmt.Fprintf(&t, "%s\n%s", b.tr("ui.access.title", html.EscapeString(c.Name)), b.tr("ui.client.access", b.tr(p.id, p.args...)))
+	fmt.Fprintf(&t, "%s\n%s", b.tr("ui.access.title", html.EscapeString(c.Name)), b.tr("ui.client.access", b.tr(p.ID, p.Args...)))
 	if !c.Expires.IsZero() && now.Before(c.Expires) {
 		t.WriteString(" · " + b.tr("ui.access.left", durationIn(b.lang, c.Expires.Sub(now))))
 	}
@@ -943,13 +943,13 @@ func (b *bot) show(name string) {
 		return
 	}
 	p := accessPhrase(c, time.Now())
-	msg := b.tr("ui.show.text", e(c.Name), mins, b.tr(p.id, p.args...), e(c.Transport), e(c.URL), e(key), e(link))
+	msg := b.tr("ui.show.text", e(c.Name), mins, b.tr(p.ID, p.Args...), e(c.Transport), e(c.URL), e(key), e(link))
 	if c.session() {
 		var docs strings.Builder
 		for i, d := range c.Docs() {
 			docs.WriteString(b.tr("ui.show.doc", i+1, e(d.Transport), docPriority(i), e(d.URL)) + "\n")
 		}
-		msg = b.tr("ui.show.session", e(c.Name), mins, b.tr(p.id, p.args...), docs.String(), e(c.context()), e(key), e(link))
+		msg = b.tr("ui.show.session", e(c.Name), mins, b.tr(p.ID, p.Args...), docs.String(), e(c.context()), e(key), e(link))
 	}
 	text, err := b.t.Send(b.chat, msg)
 	if err != nil {
