@@ -51,6 +51,7 @@ type DocSession struct {
 	WriteQueue chan []byte
 	UserID     string
 	writeMu    sync.Mutex
+	lastWrite  atomic.Int64 // unix nanoseconds of the last successful write
 }
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
@@ -59,7 +60,17 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	// A write into a half-open connection (NAT dropped it, the network
 	// changed) would otherwise block until the kernel gives up, minutes.
 	_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
-	return s.Conn.WriteMessage(messageType, data)
+	err := s.Conn.WriteMessage(messageType, data)
+	if err == nil {
+		s.lastWrite.Store(time.Now().UnixNano())
+	}
+	return err
+}
+
+// writtenWithin reports whether something went out on the connection in
+// the last d.
+func (s *DocSession) writtenWithin(d time.Duration) bool {
+	return time.Since(time.Unix(0, s.lastWrite.Load())) < d
 }
 
 // docWriteTimeout bounds one WebSocket write to the document.
@@ -394,8 +405,14 @@ func (t *MailruDocsTransport) writerLoop() {
 	}
 }
 
+// keepAliveLoop writes a keep-alive only into a quiet connection: any
+// write (tunnel data, a Session ping, a Socket.IO pong) does its job. Each
+// keep-alive is relayed to every editor of the document, so one sent
+// regardless of traffic woke both peers' radios every interval: on a
+// phone the cellular modem then never went idle.
 func (t *MailruDocsTransport) keepAliveLoop() {
-	ticker := time.NewTicker(t.GetConfig().KeepAliveInterval)
+	interval := t.GetConfig().KeepAliveInterval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`
 
@@ -405,7 +422,7 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 		session := t.session
 		t.Mu.Unlock()
 
-		if session != nil && session.Conn != nil {
+		if session != nil && session.Conn != nil && !session.writtenWithin(interval) {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
 				utils.Debugf("[M-DOCS] Keep-alive failed, closing the connection to reconnect: %v", err)
 				t.SetConnected(false)
