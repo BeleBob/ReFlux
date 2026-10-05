@@ -8,11 +8,13 @@ import (
 
 // fastKeepalive pings every 20 ms and lets a carrier be silent for 300 ms
 // (15 pings) before it is down: with 100 ms a goroutine stalled under
-// -race on a busy CI runner made a live carrier look dead.
+// -race on a busy CI runner made a live carrier look dead. Idle pacing is
+// off: these tests are about the active pace.
 func fastKeepalive(sessions ...*Session) {
 	for _, s := range sessions {
 		s.keepaliveInterval = 20 * time.Millisecond
 		s.linkTimeout = 300 * time.Millisecond
+		s.idleAfter = 0
 	}
 }
 
