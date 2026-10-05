@@ -42,7 +42,9 @@ func TestSettingsPageIsBuiltFromTheDeclaration(t *testing.T) {
 
 	for _, want := range []string{
 		`<html lang="ru">`, `<h1>Demo &lt;b&gt;</h1>`, `Настройки · v1.2.0`,
-		// the profile's own param (the first) is not in the wizard
+		// the profile's own param (the first) also gets a field here: the
+		// wizard and the profile editor edit the one saved value.
+		`Board URL`,
 		`API token`, `Retries`, `Mode`, `Debug log`,
 		`<h2 class="group">Account</h2>`,
 		`type="password"`, `data-show=`, `inputmode="decimal"`, `<select id=`, `type="checkbox" id=`, `<textarea id=`,
@@ -56,9 +58,6 @@ func TestSettingsPageIsBuiltFromTheDeclaration(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page lacks %q", want)
 		}
-	}
-	if strings.Contains(page, `Board URL`) {
-		t.Error("the first param is the profile's input and does not belong in the wizard")
 	}
 	// What a script declares is data: nothing of it may become markup.
 	if strings.Contains(page, "<b>") || strings.Contains(page, `tok"en<script>`) {
@@ -77,7 +76,7 @@ func TestSettingsPageIsBuiltFromTheDeclaration(t *testing.T) {
 	if err := json.Unmarshal([]byte(page[i+len("var DATA="):i+j]), &data); err != nil {
 		t.Fatalf("DATA is not JSON: %v", err)
 	}
-	if len(data.Params) != 6 || data.Values["token"] != `tok"en<script>` {
+	if len(data.Params) != 7 || data.Values["token"] != `tok"en<script>` {
 		t.Errorf("DATA = %+v", data)
 	}
 	if strings.Contains(page[i:i+j], "<") {
@@ -94,7 +93,7 @@ func TestSettingsPageLanguageAndEmpty(t *testing.T) {
 	if got := SettingsPage(info, nil, PageOptions{Lang: "xx"}); !strings.Contains(got, `lang="ru"`) {
 		t.Error("an unknown language falls back to Russian")
 	}
-	none := SettingsPage(infoOf(t, `var Transport={info:function(){return{name:"x",params:[{key:"url",type:"url"}]}},open:function(){}}`), nil, PageOptions{})
+	none := SettingsPage(infoOf(t, `var Transport={info:function(){return{name:"x",params:[]}},open:function(){}}`), nil, PageOptions{})
 	if !strings.Contains(none, "нет настроек") {
 		t.Error("a script with nothing to set says so")
 	}
@@ -129,7 +128,7 @@ func TestBuildSettings(t *testing.T) {
 	if !rep.OK || rep.Signature != "valid" || rep.Name != "Demo <b>" || rep.Custom || rep.HTML == "" {
 		t.Fatalf("report = %+v", rep)
 	}
-	if len(rep.Params) != 6 || rep.Params[0].Key != "token" {
+	if len(rep.Params) != 7 || rep.Params[0].Key != "url" {
 		t.Errorf("params = %+v", rep.Params)
 	}
 	if rep.Values["retries"] != "x" || rep.Values["mode"] != "fast" || rep.Values["debug"] != "false" {
@@ -152,7 +151,7 @@ func TestBuildSettings(t *testing.T) {
 	}
 
 	// nothing to set
-	d2, s2, k2 := signedFile(t, `var Transport={info:function(){return{name:"x",params:[{key:"url",type:"url"}]}},open:function(){}}`)
+	d2, s2, k2 := signedFile(t, `var Transport={info:function(){return{name:"x",params:[]}},open:function(){}}`)
 	if r := BuildSettings(d2, s2, k2, nil, "ru"); r.OK || r.Code != CodeSettingsNoSettings {
 		t.Errorf("no settings: %+v", r)
 	}

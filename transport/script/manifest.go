@@ -29,10 +29,13 @@ type Param struct {
 	Type     string `json:"type"` // ParamURL | ParamText | ParamSecret | ParamNumber | ParamBoolean | ParamSelect | ParamTextarea
 	Required bool   `json:"required"`
 
-	// Scope says where the app asks for it: "profile" (the profile editor's
-	// one value field, delivered as cfg.url) or "settings" (the wizard page,
-	// delivered in cfg.params). Left empty, the first param is the profile's
-	// and the rest are settings, as the apps always treated them.
+	// Scope marks which one param (at most one) is also the profile editor's
+	// value field, delivered as cfg.url: "profile" for that one, "settings" for
+	// every other. The settings wizard shows and saves ALL of them regardless -
+	// a "profile" param is just the one that also gets a quick field at profile
+	// creation time, both ends reading/writing the one saved value. Left empty,
+	// the first param is the profile's and the rest are settings, as the apps
+	// always treated them.
 	Scope string `json:"scope,omitempty"`
 	// Default is what cfg.params carries until the user sets something; a
 	// boolean's is "true" or "false". Declared as a string, number or boolean.

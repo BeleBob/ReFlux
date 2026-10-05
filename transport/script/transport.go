@@ -505,11 +505,23 @@ func (t *ScriptTransport) bootstrap(vm *goja.Runtime) error {
 		return fmt.Errorf("Transport.open is not a function")
 	}
 	cfg := vm.NewObject()
-	cfg.Set("url", t.cfgURL)
 	params := vm.NewObject()
-	// Declared defaults stand in for what the user has not set (the script
-	// need not repeat them in code), see Param.Default.
-	for k, v := range WithDefaults(t.info.SettingParams(), t.cfgParams) {
+	// Every declared param gets a default for what the caller left unset (the
+	// script need not repeat them in code, see Param.Default) - the profile
+	// param included, so cfg.params[key] and cfg.url always agree: an app can
+	// hand the profile value over either channel (or both) and the script
+	// reads either the same way.
+	resolved := WithDefaults(t.info.ResolvedParams(), t.cfgParams)
+	cfgURL := t.cfgURL
+	if cfgURL == "" {
+		if pp := t.info.ProfileParam(); pp != nil {
+			if v, ok := resolved[pp.Key].(string); ok {
+				cfgURL = v
+			}
+		}
+	}
+	cfg.Set("url", cfgURL)
+	for k, v := range resolved {
 		params.Set(k, v)
 	}
 	cfg.Set("params", params)

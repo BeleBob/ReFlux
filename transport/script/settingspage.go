@@ -51,16 +51,18 @@ var pageTexts = map[string]pageText{
 	},
 }
 
-// SettingsPage renders the settings wizard for info's setting params (the ones
-// the profile editor does not ask for), prefilled from values (a missing value
-// shows the declared default).
+// SettingsPage renders the settings wizard for every param info declares,
+// profile param included: the profile editor's value field and this page edit
+// the same value, so a script with only a profile param still gets a page,
+// and one with both kinds shows all of them here. Prefilled from values (a
+// missing value shows the declared default).
 func SettingsPage(info Info, values map[string]string, o PageOptions) string {
 	tx, ok := pageTexts[o.Lang]
 	if !ok {
 		tx = pageTexts["ru"]
 		o.Lang = "ru"
 	}
-	params := info.SettingParams()
+	params := info.ResolvedParams()
 
 	var body strings.Builder
 	var plain, advanced []int
@@ -310,8 +312,9 @@ const (
 // BuildSettings is the apps' entry: it verifies the script against the key the
 // user pinned (a swapped file fails closed, like loading it does), reads its
 // declaration, and returns the settings page (the script's own, else the
-// generated wizard) for the current values. A script with nothing to set
-// reports CodeSettingsNoSettings (and no page) unless it brings its own.
+// generated wizard, covering every declared param including the profile one)
+// for the current values. A script with no params at all reports
+// CodeSettingsNoSettings (and no page) unless it brings its own.
 func BuildSettings(data, sig []byte, pubkeyHex string, values map[string]string, lang string) SettingsReport {
 	rep := SettingsReport{Signature: "unverified", Params: []Param{}}
 	if strings.TrimSpace(pubkeyHex) == "" {
@@ -346,7 +349,7 @@ func BuildSettings(data, sig []byte, pubkeyHex string, values map[string]string,
 		return rep
 	}
 	rep.Name, rep.Version = info.Name, info.Version
-	rep.Params = info.SettingParams()
+	rep.Params = info.ResolvedParams()
 	if rep.Params == nil {
 		rep.Params = []Param{}
 	}

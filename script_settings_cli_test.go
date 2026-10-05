@@ -53,7 +53,7 @@ var Transport = {
 	if !rep.OK || rep.Name != "cli-demo" || rep.Version != "2.0.0" || rep.Signature != "valid" {
 		t.Fatalf("report = %+v", rep)
 	}
-	if len(rep.Params) != 2 || rep.Values["token"] != "abc" || rep.Values["n"] != "4" {
+	if len(rep.Params) != 3 || rep.Values["token"] != "abc" || rep.Values["n"] != "4" {
 		t.Errorf("params %v values %v", rep.Params, rep.Values)
 	}
 	if !strings.Contains(rep.HTML, `lang="en"`) || !strings.Contains(rep.HTML, `value="abc"`) {
