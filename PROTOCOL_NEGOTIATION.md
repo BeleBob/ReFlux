@@ -105,6 +105,14 @@ that never answers predates keepalive, and liveness stays the carrier's own
 connection state. Data and control use the highest-priority live carrier; flows
 are hashed across carriers only when they share that priority.
 
+With no IPv4 either way for a minute the session is idle: a carrier is pinged
+once quiet for 25 seconds and live if heard within 80 seconds, so a phone's
+radio can sleep between pings. The first IPv4 after an idle spell pings every
+quiet carrier at once, and the 80-second limit holds for one more 30-second
+timeout, so a carrier heard at the idle pace is not taken for lost before it
+can answer. Each side paces itself; nothing about it is negotiated. A peer that
+predates idle pacing keeps pinging every 10 seconds, which is still answered.
+
 ## Control messages
 
 | Subtype | Direction | Payload |

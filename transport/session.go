@@ -39,6 +39,15 @@ type Session struct {
 	peerKeepalive     bool
 	noPong            bool
 
+	// Idle pacing (see pacingLocked): after idleAfter without IPv4 either
+	// way, carriers are pinged every keepaliveIdle and count as lost after
+	// linkTimeoutIdle. idleAfter 0 turns it off.
+	idleAfter       time.Duration
+	keepaliveIdle   time.Duration
+	linkTimeoutIdle time.Duration
+	lastData        time.Time // the last IPv4 sent or received
+	activeSince     time.Time // when IPv4 resumed after an idle spell
+
 	candidate     *candidatePeer
 	candidateLast time.Time
 
@@ -220,6 +229,10 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 
 		keepaliveInterval: 10 * time.Second,
 		linkTimeout:       30 * time.Second,
+
+		idleAfter:       time.Minute,
+		keepaliveIdle:   25 * time.Second,
+		linkTimeoutIdle: 80 * time.Second,
 	}
 	if _, err := rand.Read(s.local[:]); err != nil {
 		return nil, err
@@ -611,33 +624,80 @@ func (s *Session) keepaliveLoop() {
 		case <-tick.C:
 		}
 		s.mu.Lock()
+		ping, timeout := s.pacingLocked(time.Now())
 		if !s.exit && s.ready && s.peerKeepalive && s.peerSilentLocked() {
 			s.resetLocked()
-			utils.Infof("[SESSION] exit silent on every carrier for %v: handshaking again", s.linkTimeout)
-		}
-		var quiet []*transportLink
-		if s.ready {
-			for _, name := range s.order {
-				l := s.links[name]
-				if l.started && !l.dead && time.Since(l.lastHeard) >= s.keepaliveInterval {
-					quiet = append(quiet, l)
-				}
-			}
+			utils.Infof("[SESSION] exit silent on every carrier for %v: handshaking again", timeout)
 		}
 		s.mu.Unlock()
-		for _, l := range quiet {
-			if err := s.sendControlVia(l, control.SubtypeLinkPing, nil); err != nil {
-				utils.Debugf("[SESSION] LinkPing via %q: %v", l.name, err)
-			} else {
-				utils.Debugf("[SESSION] LinkPing -> %q", l.name)
+		s.pingQuiet(ping)
+	}
+}
+
+// pingQuiet pings every carrier the peer has not been heard on for quiet.
+func (s *Session) pingQuiet(quiet time.Duration) {
+	var links []*transportLink
+	s.mu.Lock()
+	if s.ready {
+		for _, name := range s.order {
+			l := s.links[name]
+			if l.started && !l.dead && time.Since(l.lastHeard) >= quiet {
+				links = append(links, l)
 			}
+		}
+	}
+	s.mu.Unlock()
+	for _, l := range links {
+		if err := s.sendControlVia(l, control.SubtypeLinkPing, nil); err != nil {
+			utils.Debugf("[SESSION] LinkPing via %q: %v", l.name, err)
+		} else {
+			utils.Debugf("[SESSION] LinkPing -> %q", l.name)
 		}
 	}
 }
 
+// pacingLocked returns how long a carrier may stay quiet before it is
+// pinged, and how long silent before it counts as lost. With no IPv4 for
+// idleAfter the session is idle: pings every keepaliveIdle instead of
+// keepaliveInterval, so a phone's radio can sleep between them (each one
+// is relayed to the peer, which answers). Nobody waits on a failover then,
+// so a lost carrier may take linkTimeoutIdle to notice. When IPv4 resumes,
+// the quiet carriers are pinged at once (markDataLocked) and keep the idle
+// timeout for one linkTimeout more: a carrier last heard in the idle pace
+// gets a full timeout to answer before it is taken for lost, instead of
+// failing over or handshaking again on the first packet.
+// Caller holds s.mu.
+func (s *Session) pacingLocked(now time.Time) (ping, timeout time.Duration) {
+	switch {
+	case s.idleLocked(now):
+		return s.keepaliveIdle, s.linkTimeoutIdle
+	case s.idleAfter > 0 && now.Sub(s.activeSince) < s.linkTimeout:
+		return s.keepaliveInterval, s.linkTimeoutIdle
+	}
+	return s.keepaliveInterval, s.linkTimeout
+}
+
+// idleLocked: no IPv4 either way for idleAfter. Caller holds s.mu.
+func (s *Session) idleLocked(now time.Time) bool {
+	return s.idleAfter > 0 && now.Sub(s.lastData) >= s.idleAfter
+}
+
+// markDataLocked notes IPv4 sent or received. It reports whether the
+// session was idle until now: the caller then pings the quiet carriers
+// (pingQuiet with keepaliveInterval) outside the lock. Caller holds s.mu.
+func (s *Session) markDataLocked(now time.Time) (woke bool) {
+	woke = s.idleLocked(now)
+	if woke {
+		s.activeSince = now
+	}
+	s.lastData = now
+	return woke
+}
+
 func (s *Session) peerSilentLocked() bool {
+	_, timeout := s.pacingLocked(time.Now())
 	for _, l := range s.links {
-		if time.Since(l.lastHeard) < s.linkTimeout {
+		if time.Since(l.lastHeard) < timeout {
 			return false
 		}
 	}
@@ -780,7 +840,8 @@ func (s *Session) sessionActiveLocked() bool {
 	if !s.ready {
 		return false
 	}
-	window := s.keepaliveInterval * 3 / 2
+	ping, _ := s.pacingLocked(time.Now())
+	window := ping * 3 / 2
 	for _, l := range s.links {
 		if s.connectedLocked(l) && time.Since(l.lastHeard) < window {
 			return true
@@ -823,7 +884,8 @@ func (s *Session) connectedLocked(l *transportLink) bool {
 // linkTimeout: the carrier is known to work both ways, not just to be
 // attached to its document on this side. Caller holds s.mu.
 func (s *Session) heardLocked(l *transportLink) bool {
-	return s.connectedLocked(l) && time.Since(l.lastHeard) < s.linkTimeout
+	_, timeout := s.pacingLocked(time.Now())
+	return s.connectedLocked(l) && time.Since(l.lastHeard) < timeout
 }
 
 func (s *Session) ActiveTransport() string {
@@ -997,8 +1059,12 @@ func (s *Session) Send(p []byte) error {
 		Peer:  s.peer,
 		Data:  &control.DataTail{Sequence: seq},
 	}
+	woke := s.markDataLocked(time.Now())
 	links := s.liveLinksLocked()
 	s.mu.Unlock()
+	if woke {
+		go s.pingQuiet(s.keepaliveInterval)
+	}
 
 	if len(links) == 0 {
 		return errors.New("session: no live transport")
@@ -1439,8 +1505,12 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 		return
 	}
 	link.lastHeard = time.Now()
+	woke := s.markDataLocked(link.lastHeard)
 	cb := s.dataCallback
 	s.mu.Unlock()
+	if woke {
+		go s.pingQuiet(s.keepaliveInterval)
+	}
 	n := s.cntDataRecv.Add(1)
 	if n == 1 || n%100 == 0 {
 		utils.Debugf("[SESSION] recv IPv4 #%d seq=%d from %q size=%d proto=%d",

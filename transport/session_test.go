@@ -19,6 +19,7 @@ type negotiationWire struct {
 	peer    *negotiationWire
 	packets [][]byte
 	drop    bool
+	delay   time.Duration // deliver this late, like a relaying document
 }
 
 func (w *negotiationWire) Start() error            { return nil }
@@ -30,14 +31,21 @@ func (w *negotiationWire) Send(p []byte) error {
 	p = append([]byte(nil), p...)
 	w.mu.Lock()
 	w.packets = append(w.packets, p)
-	drop := w.drop
+	drop, delay := w.drop, w.delay
 	w.mu.Unlock()
 	if w.peer != nil && !drop {
-		w.peer.mu.Lock()
-		cb := w.peer.cb
-		w.peer.mu.Unlock()
-		if cb != nil {
-			cb(p)
+		deliver := func() {
+			w.peer.mu.Lock()
+			cb := w.peer.cb
+			w.peer.mu.Unlock()
+			if cb != nil {
+				cb(p)
+			}
+		}
+		if delay > 0 {
+			time.AfterFunc(delay, deliver)
+		} else {
+			deliver()
 		}
 	}
 	return nil
