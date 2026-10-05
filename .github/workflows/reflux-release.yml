@@ -33,31 +33,34 @@ jobs:
             index($0, "## [" v "]") == 1 { on = 1; next }
             on && /^## \[/ { exit }
             on { print }
-          ' docs/reflux/CHANGELOG.md > notes.md
-          if ! grep -q '[^[:space:]]' notes.md; then
+          ' docs/reflux/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
             echo "docs/reflux/CHANGELOG.md has no section for $version" >&2
             exit 1
           fi
-          cat notes.md
+          cat "$RUNNER_TEMP/notes.md"
 
       - name: Build
         run: |
           version="${GITHUB_REF_NAME#reflux-v}"
-          mkdir -p dist
+          # Outside the checkout: files in it would mark the build as
+          # modified ("commit abc1234+" in reflux version).
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
               go build -trimpath -ldflags "-s -w -X main.releaseVersion=$version -X main.imageTag=latest" \
-              -o "dist/reflux-linux-$arch" ./cmd/reflux
+              -o "$dist/reflux-linux-$arch" ./cmd/reflux
           done
-          test -f deploy/reflux/install.sh && cp deploy/reflux/install.sh dist/
-          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          test -f deploy/reflux/install.sh && cp deploy/reflux/install.sh "$dist/"
+          cd "$dist" && sha256sum * > SHA256SUMS && cat SHA256SUMS
           "./reflux-linux-amd64" version
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "ReFlux ${GITHUB_REF_NAME#reflux-v}" \
-            --notes-file notes.md
+            --notes-file "$RUNNER_TEMP/notes.md"
