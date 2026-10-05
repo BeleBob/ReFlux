@@ -148,21 +148,27 @@ this is the engine's side of it.
 description, placeholder, options, min, max, pattern, group, advanced`
 (`manifest.go`, `Param`). The first param is the profile's one input (`cfg.url`)
 unless `scope` says otherwise; the rest are settings (`params.go`: `scopes`,
-`SettingParams`). `SettingsPage` (`settingspage.go`) generates one
-self-contained wizard page from them; a script may bring its own with
-`Transport.settings(values)` (`InspectSettings`: run like `Inspect`, no I/O,
-3 s, sync). `BuildSettings` is the apps' entry point: it verifies the script
-against the pinned key first, then returns the page, the settings params and the
-values with defaults filled in as a `SettingsReport` (CLI `--script-settings`,
-gomobile `ScriptSettings`). The app keeps what the page submits with the
-script; at start it reaches the core as `Params = <base64url JSON>` in the
-`.conf` (a `.conf` value is cut at `#`/`;`; `EncodeSettings`/`DecodeSettings`)
-or as `params.settings` in a mobile session spec; `registry` flattens it into
+`SettingParams`, `ResolvedParams`). `SettingsPage` (`settingspage.go`) generates
+one self-contained wizard page from **every** param `ResolvedParams` returns,
+the profile one included - the field in the profile editor and the one in the
+wizard edit the same saved value, so an app can offer either, or both, for it;
+a script may bring its own page with `Transport.settings(values)`
+(`InspectSettings`: run like `Inspect`, no I/O, 3 s, sync). `BuildSettings` is
+the apps' entry point: it verifies the script against the pinned key first,
+then returns the page, the resolved params and the values with defaults filled
+in as a `SettingsReport` (CLI `--script-settings`, gomobile `ScriptSettings`).
+The app keeps what the page submits (an app with a profile field for one of
+these params usually also updates it there, from the same submission); at
+start it reaches the core as `Params = <base64url JSON>` in the `.conf` (a
+`.conf` value is cut at `#`/`;`; `EncodeSettings`/`DecodeSettings`) or as
+`params.settings` in a mobile session spec; `registry` flattens it into
 `cfg.params` (never over `path`/`pubkey`/`name`/`exit`/`settings`) and
-`WithDefaults` fills what was never set. `NormalizeSettings` is the one place
-that says what a valid value is (the generated page mirrors it in JS);
-`Info.CheckParams` lists a declaration's mistakes for its author
-(`--inspect-script` reports them as `paramProblems`).
+`WithDefaults` fills what was never set - over every param now, so
+`cfg.params[profileKey]` is there too, and `cfg.url` falls back to it if a
+caller left `url` empty. `NormalizeSettings` is the one place that says what a
+valid value is (the generated page mirrors it in JS); `Info.CheckParams` lists
+a declaration's mistakes for its author (`--inspect-script` reports them as
+`paramProblems`).
 
 **Setup pages (run time).** `raise("needsSetup" | "captchaRequired", {html |
 url, reason})`. `checkSetupPayload` (`setuppage.go`) lets through an `https`

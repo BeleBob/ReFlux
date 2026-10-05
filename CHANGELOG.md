@@ -17,6 +17,11 @@ All notable changes to the OpenFlux core. Format loosely follows
   script gets it as `cfg.params` (declared defaults filled in; the `.conf` carries
   it as one `Params = <base64url JSON>` line). `--inspect-script` reports each
   param's resolved scope, `settingsPage` and `paramProblems`.
+- The wizard page (and `cfg.params`) now cover **every** declared param, the
+  profile one included: a script with only one param still gets a wizard, and
+  an app can let the profile editor's field and the wizard edit the same saved
+  value (`cfg.url` falls back to `cfg.params[profileKey]` if a caller sends
+  only the latter).
 - Script transports: **setup pages**. `raise("needsSetup" | "captchaRequired")`
   is checked in the core and throws a `TypeError` into the script for anything
   but an `https` site, an inline page, or the loopback address of the script's
