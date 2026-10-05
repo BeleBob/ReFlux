@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/charts"
 )
 
 func TestClientDays(t *testing.T) {
@@ -25,14 +27,14 @@ func TestClientDays(t *testing.T) {
 
 func TestBarChart(t *testing.T) {
 	base := time.Date(2026, 9, 2, 0, 0, 0, 0, time.Local)
-	c := barChart{Unit: func(v float64) string { return humanBytes(uint64(v)) }, Least: 1e6}
+	c := charts.Bars{Unit: func(v float64) string { return humanBytes(uint64(v)) }, Least: 1e6}
 	down, up := make([]float64, 30), make([]float64, 30)
 	for i := range 30 {
 		c.Days = append(c.Days, base.AddDate(0, 0, i))
 	}
 	down[29], up[29], down[10] = 2e9, 1e8, 5e8
-	c.Series = []chartSeries{{Name: "↓ down", Values: down}, {Name: "↑ up", Values: up}}
-	svg := string(c.render())
+	c.Series = []charts.Series{{Name: "↓ down", Values: down}, {Name: "↑ up", Values: up}}
+	svg := string(c.Render())
 	if n := strings.Count(svg, `class="col k1"`); n != 2 {
 		t.Errorf("%d received bars, want 2 (empty days have none)", n)
 	}
@@ -51,7 +53,7 @@ func TestBarChart(t *testing.T) {
 	for i := range down {
 		down[i], up[i] = 0, 0
 	}
-	if svg := string(c.render()); strings.Contains(svg, `class="col`) || !strings.Contains(svg, ">1.0 MB<") {
+	if svg := string(c.Render()); strings.Contains(svg, `class="col`) || !strings.Contains(svg, ">1.0 MB<") {
 		t.Errorf("empty chart:\n%s", svg)
 	}
 }

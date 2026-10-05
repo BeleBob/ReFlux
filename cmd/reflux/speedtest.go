@@ -62,7 +62,7 @@ func speedTest() []speedResult {
 
 // download reads up to speedBytes of u in the egress container.
 func download(key, u string) speedResult {
-	r := speedResult{Key: key, Source: host(u)}
+	r := speedResult{Key: key, Source: urlHost(u)}
 	var b strings.Builder
 	start := time.Now()
 	err := quiet(&b, "exec", "reflux-egress", "sh", "-c",
@@ -77,7 +77,7 @@ func download(key, u string) speedResult {
 	return r
 }
 
-func host(u string) string {
+func urlHost(u string) string {
 	h := strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
 	h, _, _ = strings.Cut(h, "/")
 	return h
@@ -94,7 +94,7 @@ func speedLines(l lang, rs []speedResult) []string {
 			case "world":
 				way = st.World
 			case "russia":
-				way = tr(l, ruMode(st).id)
+				way = tr(l, ruMode(st).ID)
 			}
 		}
 		if r.Err != nil {

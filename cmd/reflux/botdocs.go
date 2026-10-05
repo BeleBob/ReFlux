@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // The bot's documents screen: a client's documents, which one carries the
@@ -44,20 +46,20 @@ func (b *bot) docsScreen(name string) screen {
 	t.WriteString(b.tr("ui.docs.pool", free))
 	var kb keyboard
 	if len(docs) < maxDocs {
-		var row []tgButton
+		var row []telegram.Button
 		if free > 0 {
 			row = append(row, b.btn("b.docs.pool", "dp:"+name))
 		}
 		kb = append(kb, append(row, b.btn("b.docs.url", "du:"+name)))
 	}
 	if len(docs) > 1 {
-		var row []tgButton
+		var row []telegram.Button
 		for i := range docs {
 			row = append(row, b.btn("b.docs.remove", "dr:"+name+":"+strconv.Itoa(i), i+1))
 		}
 		kb = append(kb, row)
 	}
-	return screen{t.String(), append(kb, []tgButton{b.btn("b.qr", "qr:"+name), b.btn("b.back", "c:"+name)})}
+	return screen{t.String(), append(kb, []telegram.Button{b.btn("b.qr", "qr:"+name), b.btn("b.back", "c:"+name)})}
 }
 
 // changeDocs runs fn on a client's documents under the lock and restarts

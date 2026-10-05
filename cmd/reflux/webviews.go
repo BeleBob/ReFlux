@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 // measureWindow is how long measureHost watches the host.
@@ -16,22 +18,22 @@ var measureWindow = time.Second
 // measureHost reads the host twice, d apart, for the rates: what the bot
 // and the CLI show, having no sampler of their own.
 func measureHost(d time.Duration) hostNow {
-	cpu, _ := readCPU()
-	procs := readProcs()
-	lanRx, lanTx, _ := ifaceBytes(lanIface)
-	egRx, egTx, _ := egressBytes()
+	cpu, _ := host.ReadCPU()
+	procs := host.ReadProcs()
+	lanRx, lanTx, _ := host.IfaceBytes(host.LANIface)
+	egRx, egTx, _ := host.EgressBytes()
 	time.Sleep(d)
-	cpu2, _ := readCPU()
-	procs2 := readProcs()
-	lanRx2, lanTx2, _ := ifaceBytes(lanIface)
-	egRx2, egTx2, _ := egressBytes()
-	mem, _ := readMemory()
-	load, _ := readLoad()
-	up, _ := readUptime()
+	cpu2, _ := host.ReadCPU()
+	procs2 := host.ReadProcs()
+	lanRx2, lanTx2, _ := host.IfaceBytes(host.LANIface)
+	egRx2, egTx2, _ := host.EgressBytes()
+	mem, _ := host.ReadMemory()
+	load, _ := host.ReadLoad()
+	up, _ := host.ReadUptime()
 	secs := d.Seconds()
-	h := hostNow{Load: load, Mem: mem, Uptime: up, CPUs: cpuCount(), Temps: readTemps(), Disks: readDisks(),
-		Top: topProcs(procs, procs2, cpu, cpu2, 5)}
-	h.Point = hostPoint{At: time.Now(), CPU: cpu.percent(cpu2), Mem: mem.Percent(), Load1: load[0],
+	h := hostNow{Load: load, Mem: mem, Uptime: up, CPUs: host.CPUCount(), Temps: host.ReadTemps(), Disks: readDisks(),
+		Top: host.TopProcs(procs, procs2, cpu, cpu2, 5)}
+	h.Point = hostPoint{At: time.Now(), CPU: cpu.Percent(cpu2), Mem: mem.Percent(), Load1: load[0],
 		LanRx: rate(lanRx, lanRx2, secs), LanTx: rate(lanTx, lanTx2, secs),
 		EgRx: rate(egRx, egRx2, secs), EgTx: rate(egTx, egTx2, secs)}
 	if len(h.Temps) > 0 {
@@ -150,17 +152,6 @@ func spark(values []float64, top float64) template.HTML {
 
 // pct is a percentage for a bar's width, 0 to 100.
 func pct(v float64) int { return int(min(max(v, 0), 100)) }
-
-// barLevel colours a usage bar.
-func barLevel(v float64) string {
-	switch {
-	case v >= 95:
-		return "FAIL"
-	case v >= 85:
-		return "warn"
-	}
-	return "ok"
-}
 
 // mbit formats a rate in bytes per second as megabits.
 func mbit(l lang, bytesPerSec float64) string {

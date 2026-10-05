@@ -7,31 +7,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/i18n"
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 var fileExt = map[string]bool{"conf": true, "yml": true, "json": true, "sock": true, "service": true, "log": true, "stat": true}
-
-var verbRe = regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z]`)
-
-// Both languages of a message take the same arguments.
-func TestMessagesHaveBothLanguages(t *testing.T) {
-	for id, m := range messages {
-		if m[0] == "" || m[1] == "" {
-			t.Errorf("%s: missing a language: %q", id, m)
-			continue
-		}
-		en, ru := verbRe.FindAllString(strings.ReplaceAll(m[0], "%%", ""), -1), verbRe.FindAllString(strings.ReplaceAll(m[1], "%%", ""), -1)
-		if strings.Join(en, " ") != strings.Join(ru, " ") {
-			t.Errorf("%s: arguments differ: en %v, ru %v", id, en, ru)
-		}
-	}
-}
 
 // Every message id in the code is in the catalog: tr prints a missing id
 // as is, which a test of the screens would not always catch.
 func TestEveryMessageIDExists(t *testing.T) {
 	prefixes := map[string]bool{}
-	for id := range messages {
+	for id := range i18n.Messages {
 		p, _, _ := strings.Cut(id, ".")
 		prefixes[p] = true
 	}
@@ -51,14 +38,14 @@ func TestEveryMessageIDExists(t *testing.T) {
 				continue // node.conf, compose.yml
 			}
 			if prefixes[m[1]] && !strings.HasSuffix(id, ".") {
-				if _, ok := messages[id]; !ok {
+				if _, ok := i18n.Messages[id]; !ok {
 					t.Errorf("%s: message %q is not in the catalog", f, id)
 				}
 			}
 		}
 	}
 	for _, c := range botCommands {
-		if _, ok := messages["cmd."+c]; !ok {
+		if _, ok := i18n.Messages["cmd."+c]; !ok {
 			t.Errorf("command %s has no description", c)
 		}
 	}
@@ -186,7 +173,7 @@ func TestLinkAClientToTheOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	up := press(1, 42, "tgme:phone", time.Now())
-	up.Callback.From = &tgUser{ID: 42, FirstName: "Дмитрий", Username: "dima"}
+	up.Callback.From = &telegram.User{ID: 42, FirstName: "Дмитрий", Username: "dima"}
 	b.handle(up)
 	c, _ := s.Get("phone")
 	if c.Telegram == nil || c.Telegram.ID != 42 || c.Telegram.String() != "Дмитрий (@dima)" {

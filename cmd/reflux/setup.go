@@ -566,7 +566,7 @@ func locked(s Store, f func() error) error {
 }
 
 func ruModeName(st egressStatus) string {
-	return tr(langEN, ruMode(st).id)
+	return tr(langEN, ruMode(st).ID)
 }
 
 // ---- what else the owner wants ----

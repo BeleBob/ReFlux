@@ -13,6 +13,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/i18n"
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 const testToken = "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
@@ -21,8 +24,8 @@ const testToken = "123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
 // getUpdates call after the first, as if sent while the bot waits.
 type fakeTG struct {
 	mu      sync.Mutex
-	pending []tgUpdate
-	arrive  []tgUpdate
+	pending []telegram.Update
+	arrive  []telegram.Update
 	calls   int
 	sent    []sentMsg
 	failing bool     // sendMessage fails
@@ -81,7 +84,7 @@ func newFakeTG(t *testing.T) *fakeTG {
 		case "answerCallbackQuery", "setMyCommands":
 			reply(true)
 		case "getMe":
-			reply(tgUser{ID: 1, FirstName: "ReFlux", Username: "reflux_test_bot"})
+			reply(telegram.User{ID: 1, FirstName: "ReFlux", Username: "reflux_test_bot"})
 		case "getUpdates":
 			var p struct{ Offset int64 }
 			json.NewDecoder(r.Body).Decode(&p)
@@ -89,7 +92,7 @@ func newFakeTG(t *testing.T) *fakeTG {
 				f.pending = append(f.pending, f.arrive[0])
 				f.arrive = f.arrive[1:]
 			}
-			var out []tgUpdate
+			var out []telegram.Update
 			for _, u := range f.pending {
 				if u.UpdateID >= p.Offset || p.Offset < 0 {
 					out = append(out, u)
@@ -112,9 +115,9 @@ func newFakeTG(t *testing.T) *fakeTG {
 			w.Write([]byte(`{"ok":false,"error_code":404,"description":"Not Found"}`))
 		}
 	}))
-	old := tgAPI
-	tgAPI = srv.URL
-	t.Cleanup(func() { tgAPI = old; srv.Close() })
+	old := telegram.API
+	telegram.API = srv.URL
+	t.Cleanup(func() { telegram.API = old; srv.Close() })
 	return f
 }
 
@@ -124,18 +127,18 @@ func (f *fakeTG) messages() []sentMsg {
 	return append([]sentMsg(nil), f.sent...)
 }
 
-func msg(id, chat int64, text string) tgUpdate {
-	return tgUpdate{UpdateID: id, Message: &tgMessage{
-		From: &tgUser{ID: chat, FirstName: "Owner", Username: "owner"},
-		Chat: tgChat{ID: chat, Type: "private"}, Text: text,
+func msg(id, chat int64, text string) telegram.Update {
+	return telegram.Update{UpdateID: id, Message: &telegram.Message{
+		From: &telegram.User{ID: chat, FirstName: "Owner", Username: "owner"},
+		Chat: telegram.Chat{ID: chat, Type: "private"}, Text: text,
 	}}
 }
 
 func TestBotSetupLinksTheOwnersChat(t *testing.T) {
 	s := Store{Root: t.TempDir()}
 	f := newFakeTG(t)
-	f.pending = []tgUpdate{msg(5, 666, "/start")} // sent before setup: not the owner's answer
-	f.arrive = []tgUpdate{msg(6, 42, "/start")}
+	f.pending = []telegram.Update{msg(5, 666, "/start")} // sent before setup: not the owner's answer
+	f.arrive = []telegram.Update{msg(6, 42, "/start")}
 	var out strings.Builder
 	if err := botSetup(s, strings.NewReader(testToken+"\nyes\n"), &out, 0); err == nil {
 		t.Fatal("setup with no time to wait succeeded")
@@ -172,10 +175,10 @@ func TestBotSetupRefusesWhatIsNotAToken(t *testing.T) {
 // The token is in every request URL, and the HTTP client quotes the URL in
 // its errors; the bot logs errors to the journal.
 func TestTelegramErrorsHideTheToken(t *testing.T) {
-	old := tgAPI
-	tgAPI = "http://127.0.0.1:1"
-	defer func() { tgAPI = old }()
-	_, err := newTelegram(testToken).getMe()
+	old := telegram.API
+	telegram.API = "http://127.0.0.1:1"
+	defer func() { telegram.API = old }()
+	_, err := telegram.New(testToken).GetMe()
 	if err == nil {
 		t.Fatal("no error from a closed port")
 	}
@@ -212,7 +215,7 @@ func TestBotAnswersOnlyItsOwner(t *testing.T) {
 	}
 }
 
-func init() { messages["test.raw"] = [2]string{"%s", "%s"} }
+func init() { i18n.Messages["test.raw"] = [2]string{"%s", "%s"} }
 
 func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 	m := monitor{confirm: 2}
@@ -345,10 +348,10 @@ func TestBotHomeScreen(t *testing.T) {
 	}
 }
 
-func press(id, chat int64, data string, sent time.Time) tgUpdate {
-	return tgUpdate{UpdateID: id, Callback: &tgCallback{
-		ID: "cb", From: &tgUser{ID: chat}, Data: data,
-		Message: &tgMessage{MessageID: 77, Date: sent.Unix(), Chat: tgChat{ID: chat, Type: "private"}},
+func press(id, chat int64, data string, sent time.Time) telegram.Update {
+	return telegram.Update{UpdateID: id, Callback: &telegram.Callback{
+		ID: "cb", From: &telegram.User{ID: chat}, Data: data,
+		Message: &telegram.Message{MessageID: 77, Date: sent.Unix(), Chat: telegram.Chat{ID: chat, Type: "private"}},
 	}}
 }
 

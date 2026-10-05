@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/share"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/charts"
 )
 
 // The web panel: the bot's screens as pages, for the home network. It
@@ -65,7 +67,7 @@ func webFuncs(l lang) template.FuncMap {
 		"bytes": humanBytes,
 		"spark": spark,
 		"pct":   pct,
-		"bar":   barLevel,
+		"bar":   charts.Level,
 		"uplevel": func(v float64) string { // availability: 99.5% and up is fine
 			switch {
 			case v >= 99.5:
@@ -339,7 +341,7 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 	d := homeData{Tiles: w.tiles(), Events: w.s.readEvents(5)}
 	if st, err := readEgressStatus(); err == nil {
 		d.Egress = &st
-		d.Russia = tr(l, ruMode(st).id)
+		d.Russia = tr(l, ruMode(st).ID)
 	}
 	clients, err := w.s.List()
 	now := time.Now()
@@ -351,7 +353,7 @@ func (w *webServer) home(r *http.Request) (string, pageData, error) {
 		p := accessPhrase(v.c, now)
 		ct := w.stats.clientTraffic(v.c.Name, now)
 		row := clientRow{Name: v.c.Name, Mark: v.mark(), Owner: owner, State: stateText(l, v),
-			Access: tr(l, p.id, p.args...), Today: ct.Today, Note: v.c.Note}
+			Access: tr(l, p.ID, p.Args...), Today: ct.Today, Note: v.c.Note}
 		// Keepalives are not traffic worth a figure: from 50 kbit/s on.
 		if n := len(ct.Rates); n > 0 && ct.Rates[n-1].Down+ct.Rates[n-1].Up >= 6250 {
 			row.Down, row.Up = ct.Rates[n-1].Down, ct.Rates[n-1].Up
@@ -371,7 +373,7 @@ type clientData struct {
 	// Days is the traffic of the last days as bars, Rate the speed over
 	// the last hour (webbars.go).
 	Days, Rate             template.HTML
-	DaysLegend, RateLegend []legendEntry
+	DaysLegend, RateLegend []charts.LegendEntry
 	Node                   string
 	Created                string
 	Transport              string
@@ -398,7 +400,7 @@ func (w *webServer) clientData(name string) (clientData, error) {
 	v := viewClients(w.s, []Client{c})[0]
 	p := accessPhrase(c, time.Now())
 	d := clientData{
-		Row:       clientRow{Name: c.Name, Mark: v.mark(), State: stateText(l, v), Access: tr(l, p.id, p.args...), Note: c.Note},
+		Row:       clientRow{Name: c.Name, Mark: v.mark(), State: stateText(l, v), Access: tr(l, p.ID, p.Args...), Note: c.Note},
 		Created:   c.Created.Local().Format(time.DateOnly),
 		Transport: c.Transport,
 		Paused:    c.Paused,
@@ -688,7 +690,7 @@ func (w *webServer) gateway(r *http.Request) (string, pageData, error) {
 	d.Uptime, d.UptimeWorld, d.UptimeRussia, d.UptimeChecked = days, world.percent(), russia.percent(), world[1] > 0
 	if st, err := readEgressStatus(); err == nil {
 		d.Egress = &st
-		d.Russia = tr(l, ruMode(st).id)
+		d.Russia = tr(l, ruMode(st).ID)
 		d.Carriers = len(st.Carriers)
 	}
 	return "gateway", pageData{Title: tr(l, "web.nav.gateway"), Active: "gateway", Refresh: 30, Body: d}, nil

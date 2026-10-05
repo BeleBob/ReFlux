@@ -5,8 +5,9 @@ import (
 	"html/template"
 	"net/http"
 	"slices"
-	"strconv"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/charts"
 )
 
 // The server page as a dashboard: up/down/total blocks, big figures,
@@ -26,7 +27,7 @@ type bigStat struct {
 type chartView struct {
 	Title  string
 	SVG    template.HTML
-	Legend []legendEntry
+	Legend []charts.LegendEntry
 }
 
 type dial struct {
@@ -98,10 +99,10 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 		temp, tempSub = fmt.Sprintf("%.0f °C", h.Temps[0].C), h.Temps[0].Label
 	}
 	d.Stats = []bigStat{
-		{tr(l, "web.tile.cpu"), fmt.Sprintf("%.0f%%", p.CPU), tr(l, "web.cores", h.CPUs), barLevel(p.CPU)},
-		{tr(l, "web.stat.load"), fmt.Sprintf("%.2f", p.Load1), tr(l, "web.stat.load.sub", fmt.Sprintf("%.2f", p.Load5), fmt.Sprintf("%.2f", p.Load15)), barLevel(100 * p.Load1 / float64(max(h.CPUs, 1)))},
-		{tr(l, "web.tile.mem"), fmt.Sprintf("%.0f%%", p.Mem), tr(l, "web.of", humanBytes(h.Mem.Used()), humanBytes(h.Mem.Total)), barLevel(p.Mem)},
-		{tr(l, "web.tile.temp"), temp, tempSub, barLevel(p.TempC)},
+		{tr(l, "web.tile.cpu"), fmt.Sprintf("%.0f%%", p.CPU), tr(l, "web.cores", h.CPUs), charts.Level(p.CPU)},
+		{tr(l, "web.stat.load"), fmt.Sprintf("%.2f", p.Load1), tr(l, "web.stat.load.sub", fmt.Sprintf("%.2f", p.Load5), fmt.Sprintf("%.2f", p.Load15)), charts.Level(100 * p.Load1 / float64(max(h.CPUs, 1)))},
+		{tr(l, "web.tile.mem"), fmt.Sprintf("%.0f%%", p.Mem), tr(l, "web.of", humanBytes(h.Mem.Used()), humanBytes(h.Mem.Total)), charts.Level(p.Mem)},
+		{tr(l, "web.tile.temp"), temp, tempSub, charts.Level(p.TempC)},
 		{tr(l, "web.tile.uptime"), durationIn(l, h.Uptime), "", "ok"},
 	}
 
@@ -122,20 +123,20 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 	// A gap: the panel was down (the minutes are a minute apart).
 	gap := max(4*span/chartPoints, 150*time.Second)
 	pctUnit := func(v float64) string { return fmt.Sprintf("%.0f%%", v) }
-	add := func(id, title string, c lineChart) {
+	add := func(id, title string, c charts.Line) {
 		c.ID, c.Times, c.From, c.To, c.Gap = id, times, now.Add(-span), now, gap
-		v := chartView{Title: title, SVG: c.render(), Legend: c.Legend()}
+		v := chartView{Title: title, SVG: c.Render(), Legend: c.Legend()}
 		if d.Main.SVG == "" {
 			d.Main = v
 		} else {
 			d.Charts = append(d.Charts, v)
 		}
 	}
-	add("cpu", tr(l, "web.chart.cpu"), lineChart{Wide: true, Max: 100, Threshold: 80, Fill: true, Unit: pctUnit,
-		Series: []chartSeries{{Name: tr(l, "web.tile.cpu"), Values: col(func(q hostPoint) float64 { return q.CPU })}}})
-	add("load", tr(l, "web.chart.load"), lineChart{Unit: func(v float64) string { return fmt.Sprintf("%.1f", v) },
+	add("cpu", tr(l, "web.chart.cpu"), charts.Line{Wide: true, Max: 100, Threshold: 80, Fill: true, Unit: pctUnit,
+		Series: []charts.Series{{Name: tr(l, "web.tile.cpu"), Values: col(func(q hostPoint) float64 { return q.CPU })}}})
+	add("load", tr(l, "web.chart.load"), charts.Line{Unit: func(v float64) string { return fmt.Sprintf("%.1f", v) },
 		Threshold: float64(h.CPUs),
-		Series: []chartSeries{
+		Series: []charts.Series{
 			{Name: tr(l, "web.load.1"), Values: col(func(q hostPoint) float64 { return q.Load1 })},
 			{Name: tr(l, "web.load.5"), Values: col(func(q hostPoint) float64 { return q.Load5 })},
 			{Name: tr(l, "web.load.15"), Values: col(func(q hostPoint) float64 { return q.Load15 })},
@@ -143,11 +144,11 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 	// Traffic in Mbit/s, so the scale's steps are round in those; at
 	// least up to 1 Mbit/s, so keepalives stay at the bottom.
 	mb := func(v float64) float64 { return v * 8 / 1e6 }
-	add("eg", tr(l, "web.chart.egress"), lineChart{Fill: true, Unit: mbitAxis, Least: 1, Series: []chartSeries{
+	add("eg", tr(l, "web.chart.egress"), charts.Line{Fill: true, Unit: charts.MbitAxis, Least: 1, Series: []charts.Series{
 		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return mb(q.EgRx) })},
 		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return mb(q.EgTx) })},
 	}})
-	add("lan", tr(l, "web.chart.lan"), lineChart{Fill: true, Unit: mbitAxis, Least: 1, Series: []chartSeries{
+	add("lan", tr(l, "web.chart.lan"), charts.Line{Fill: true, Unit: charts.MbitAxis, Least: 1, Series: []charts.Series{
 		{Name: tr(l, "web.rx"), Values: col(func(q hostPoint) float64 { return mb(q.LanRx) })},
 		{Name: tr(l, "web.tx"), Values: col(func(q hostPoint) float64 { return mb(q.LanTx) })},
 	}})
@@ -156,37 +157,26 @@ func (w *webServer) server(r *http.Request) (string, pageData, error) {
 	if len(h.Temps) > 0 {
 		tempWarn = w.s.hostLimits().tempWarnAt(h.Temps[0])
 	}
-	add("temp", tr(l, "web.chart.temp"), lineChart{Min: 20, Max: 100, Threshold: tempWarn, Unit: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
-		Series: []chartSeries{{Name: tr(l, "web.tile.temp"), Values: col(func(q hostPoint) float64 { return q.TempC }), Color: "k3"}}})
-	add("mem", tr(l, "web.chart.mem"), lineChart{Max: 100, Threshold: 90, Fill: true, Unit: pctUnit,
-		Series: []chartSeries{{Name: tr(l, "web.tile.mem"), Values: col(func(q hostPoint) float64 { return q.Mem }), Color: "k2"}}})
+	add("temp", tr(l, "web.chart.temp"), charts.Line{Min: 20, Max: 100, Threshold: tempWarn, Unit: func(v float64) string { return fmt.Sprintf("%.0f°", v) },
+		Series: []charts.Series{{Name: tr(l, "web.tile.temp"), Values: col(func(q hostPoint) float64 { return q.TempC }), Color: "k3"}}})
+	add("mem", tr(l, "web.chart.mem"), charts.Line{Max: 100, Threshold: 90, Fill: true, Unit: pctUnit,
+		Series: []charts.Series{{Name: tr(l, "web.tile.mem"), Values: col(func(q hostPoint) float64 { return q.Mem }), Color: "k2"}}})
 
 	// Dials.
 	d.Dials = append(d.Dials,
-		dial{tr(l, "web.tile.cpu"), gauge(p.CPU, fmt.Sprintf("%.0f%%", p.CPU))},
-		dial{tr(l, "web.tile.mem"), gauge(p.Mem, fmt.Sprintf("%.0f%%", p.Mem))})
+		dial{tr(l, "web.tile.cpu"), charts.Gauge(p.CPU, fmt.Sprintf("%.0f%%", p.CPU))},
+		dial{tr(l, "web.tile.mem"), charts.Gauge(p.Mem, fmt.Sprintf("%.0f%%", p.Mem))})
 	if h.Mem.SwapTotal > 0 {
 		sw := 100 * float64(h.Mem.SwapTotal-h.Mem.SwapFree) / float64(h.Mem.SwapTotal)
-		d.Dials = append(d.Dials, dial{"Swap", gauge(sw, fmt.Sprintf("%.0f%%", sw))})
+		d.Dials = append(d.Dials, dial{"Swap", charts.Gauge(sw, fmt.Sprintf("%.0f%%", sw))})
 	}
 	if len(h.Temps) > 0 {
-		d.Dials = append(d.Dials, dial{tr(l, "web.tile.temp"), gauge(h.Temps[0].C, fmt.Sprintf("%.0f°", h.Temps[0].C))})
+		d.Dials = append(d.Dials, dial{tr(l, "web.tile.temp"), charts.Gauge(h.Temps[0].C, fmt.Sprintf("%.0f°", h.Temps[0].C))})
 	}
 	for _, dk := range h.Disks {
 		if dk.Mount == "/" {
-			d.Dials = append(d.Dials, dial{tr(l, "web.tile.disk", "/"), gauge(dk.Percent(), fmt.Sprintf("%.0f%%", dk.Percent()))})
+			d.Dials = append(d.Dials, dial{tr(l, "web.tile.disk", "/"), charts.Gauge(dk.Percent(), fmt.Sprintf("%.0f%%", dk.Percent()))})
 		}
 	}
 	return "server", pageData{Title: tr(l, "web.nav.server"), Active: "server", Refresh: 15, Body: d}, nil
-}
-
-// mbitAxis labels a rate in Mbit/s.
-func mbitAxis(m float64) string {
-	if m < 0.001 { // keepalives
-		return "0"
-	}
-	if m >= 100 {
-		return strconv.FormatFloat(m, 'f', 0, 64)
-	}
-	return strconv.FormatFloat(m, 'g', 3, 64)
 }

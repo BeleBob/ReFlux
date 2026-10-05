@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 func gatewayStore(t *testing.T) Store {
@@ -112,7 +114,7 @@ func TestNameAClientAfterItsTelegramNick(t *testing.T) {
 		t.Fatal(err)
 	}
 	up := press(1, 42, "tgme:phone", time.Now())
-	up.Callback.From = &tgUser{ID: 42, FirstName: "Дмитрий", Username: "Dima_Kost"}
+	up.Callback.From = &telegram.User{ID: 42, FirstName: "Дмитрий", Username: "Dima_Kost"}
 	b.handle(up)
 	if len(f.edited) != 1 || !strings.Contains(f.edited[0], "Telegram: Дмитрий (@Dima_Kost)") {
 		t.Fatalf("after linking: %q", f.edited)

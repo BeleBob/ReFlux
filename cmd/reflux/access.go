@@ -31,7 +31,7 @@ func accessPhrase(c Client, now time.Time) phrase {
 // accessText is accessPhrase in English: the ACCESS column of the list.
 func accessText(c Client, now time.Time) string {
 	p := accessPhrase(c, now)
-	return tr(langEN, p.id, p.args...)
+	return tr(langEN, p.ID, p.Args...)
 }
 
 var relExpiryRe = regexp.MustCompile(`^([0-9]+)([dw])$`)

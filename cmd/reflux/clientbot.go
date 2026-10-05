@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/share"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // The client bot: the public bot people use to ask for a channel and to
@@ -62,7 +64,7 @@ type clientBotState struct {
 
 type clientBot struct {
 	s     Store
-	t     *telegram
+	t     *telegram.Client
 	owner *bot // told of new requests at once; nil without the owner bot
 	mu    sync.Mutex
 	// asking: people writing a note to their request; qrAt: when each
@@ -77,7 +79,7 @@ type clientBot struct {
 }
 
 func newClientBot(s Store, c clientBotConfig, owner *bot) *clientBot {
-	cb := &clientBot{s: s, t: newTelegram(c.Token), owner: owner,
+	cb := &clientBot{s: s, t: telegram.New(c.Token), owner: owner,
 		asking: map[int64]time.Time{}, qrAt: map[int64]time.Time{},
 		reporting: map[int64]time.Time{}, sosAt: map[int64]time.Time{}}
 	if b, err := os.ReadFile(s.clientBotStatePath()); err == nil {
@@ -112,8 +114,8 @@ func langOf(code string) lang {
 // langFor is the language a person last used with the bot.
 func (cb *clientBot) langFor(id int64) lang { return langOf(cb.st.Lang[id]) }
 
-func (cb *clientBot) btn(l lang, id, data string, a ...any) tgButton {
-	return tgButton{Text: tr(l, id, a...), Data: data}
+func (cb *clientBot) btn(l lang, id, data string, a ...any) telegram.Button {
+	return telegram.Button{Text: tr(l, id, a...), Data: data}
 }
 
 // run answers people until the process stops; delivering runs alongside.
@@ -122,7 +124,7 @@ func (cb *clientBot) run() error {
 	if err != nil {
 		return err
 	}
-	cb.t.setCommands([][2]string{{"start", tr(langRU, "cbcmd.start")}, {"qr", tr(langRU, "cbcmd.qr")}, {"help", tr(langRU, "cbcmd.help")}})
+	cb.t.SetCommands([][2]string{{"start", tr(langRU, "cbcmd.start")}, {"qr", tr(langRU, "cbcmd.qr")}, {"help", tr(langRU, "cbcmd.help")}})
 	go func() {
 		for {
 			cb.mu.Lock()
@@ -133,7 +135,7 @@ func (cb *clientBot) run() error {
 	}()
 	log.Print("client bot: started")
 	for {
-		ups, err := cb.t.getUpdates(offset, 50*time.Second)
+		ups, err := cb.t.GetUpdates(offset, 50*time.Second)
 		if err != nil {
 			log.Printf("client bot: %v", err)
 			time.Sleep(10 * time.Second)
@@ -147,7 +149,7 @@ func (cb *clientBot) run() error {
 }
 
 // handle answers one update from a private chat.
-func (cb *clientBot) handle(u tgUpdate) {
+func (cb *clientBot) handle(u telegram.Update) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	if q := u.Callback; q != nil {
@@ -156,9 +158,9 @@ func (cb *clientBot) handle(u tgUpdate) {
 		}
 		cb.seen(q.From)
 		sc := cb.press(q.From, q.Data)
-		cb.t.answer(q.ID, "")
+		cb.t.Answer(q.ID, "")
 		if sc.text != "" {
-			if err := cb.t.editKeyboard(q.Message.Chat.ID, q.Message.MessageID, sc.text, sc.kb); err != nil && !isNotModified(err) {
+			if err := cb.t.EditKeyboard(q.Message.Chat.ID, q.Message.MessageID, sc.text, sc.kb); err != nil && !isNotModified(err) {
 				log.Printf("client bot: %v", err)
 			}
 		}
@@ -171,19 +173,19 @@ func (cb *clientBot) handle(u tgUpdate) {
 	cb.seen(m.From)
 	sc := cb.message(m.From, strings.TrimSpace(m.Text))
 	if sc.text != "" {
-		cb.t.sendKeyboard(m.Chat.ID, sc.text, sc.kb)
+		cb.t.SendKeyboard(m.Chat.ID, sc.text, sc.kb)
 	}
 }
 
 // seen remembers a person's language for the messages the bot starts.
-func (cb *clientBot) seen(u *tgUser) {
+func (cb *clientBot) seen(u *telegram.User) {
 	if u.LanguageCode != "" && cb.st.Lang[u.ID] != u.LanguageCode {
 		cb.st.Lang[u.ID] = u.LanguageCode
 		cb.save()
 	}
 }
 
-func (cb *clientBot) message(u *tgUser, text string) screen {
+func (cb *clientBot) message(u *telegram.User, text string) screen {
 	l := langOf(u.LanguageCode)
 	if at, ok := cb.reporting[u.ID]; ok && !strings.HasPrefix(text, "/") {
 		delete(cb.reporting, u.ID)
@@ -211,7 +213,7 @@ func (cb *clientBot) message(u *tgUser, text string) screen {
 	return cb.home(u)
 }
 
-func (cb *clientBot) press(u *tgUser, data string) screen {
+func (cb *clientBot) press(u *telegram.User, data string) screen {
 	l := langOf(u.LanguageCode)
 	switch data {
 	case "home":
@@ -248,7 +250,7 @@ func (cb *clientBot) press(u *tgUser, data string) screen {
 }
 
 // home is what a person sees: their channel, their request, or how to ask.
-func (cb *clientBot) home(u *tgUser) screen {
+func (cb *clientBot) home(u *telegram.User) screen {
 	l := langOf(u.LanguageCode)
 	e := html.EscapeString
 	r, rerr := cb.s.getRequest(u.ID)
@@ -265,7 +267,7 @@ func (cb *clientBot) home(u *tgUser) screen {
 				state = v.onlineText(l)
 			}
 		}
-		text := tr(l, "cb.channel", e(c.Name), tr(l, p.id, p.args...), state)
+		text := tr(l, "cb.channel", e(c.Name), tr(l, p.ID, p.Args...), state)
 		if _, month, ok := cb.s.trafficNow(c.Name, now); ok {
 			text += "\n" + tr(l, "cb.traffic", humanBytes(month.Down), humanBytes(month.Up))
 		}
@@ -274,9 +276,9 @@ func (cb *clientBot) home(u *tgUser) screen {
 		case rerr == nil && r.State == reqPending:
 			text += "\n\n" + tr(l, "cb.extend.waiting")
 		case !c.Expires.IsZero() && c.Expires.Sub(now) < 7*24*time.Hour:
-			kb = append(kb, []tgButton{cb.btn(l, "b.cb.extend", "ext")})
+			kb = append(kb, []telegram.Button{cb.btn(l, "b.cb.extend", "ext")})
 		}
-		return screen{text, append(kb, []tgButton{cb.btn(l, "b.refresh", "home")})}
+		return screen{text, append(kb, []telegram.Button{cb.btn(l, "b.refresh", "home")})}
 	}
 	if rerr == nil {
 		switch r.State {
@@ -292,7 +294,7 @@ func (cb *clientBot) home(u *tgUser) screen {
 }
 
 // ask files a request for a channel, and tells the owner at once.
-func (cb *clientBot) ask(u *tgUser, text string) screen {
+func (cb *clientBot) ask(u *telegram.User, text string) screen {
 	l := langOf(u.LanguageCode)
 	_, err := cb.s.newRequest(*u, reqAccess, text, time.Now())
 	switch {
@@ -306,7 +308,7 @@ func (cb *clientBot) ask(u *tgUser, text string) screen {
 }
 
 // extend asks the owner for more time on the person's channel.
-func (cb *clientBot) extend(u *tgUser) screen {
+func (cb *clientBot) extend(u *telegram.User) screen {
 	l := langOf(u.LanguageCode)
 	if _, err := cb.s.newRequest(*u, reqExtend, "", time.Now()); err != nil {
 		return cb.home(u)
@@ -329,7 +331,7 @@ func (cb *clientBot) tellOwner() {
 // access sends a person their channel's link and QR, deleted after
 // showKeep; at most every clientQREvery. The screen says why not, or is
 // empty when they went out.
-func (cb *clientBot) access(u *tgUser) screen {
+func (cb *clientBot) access(u *telegram.User) screen {
 	l := langOf(u.LanguageCode)
 	c, ok := cb.s.clientOf(u.ID)
 	if !ok {
@@ -338,7 +340,7 @@ func (cb *clientBot) access(u *tgUser) screen {
 	now := time.Now()
 	if !c.Active(now) {
 		p := accessPhrase(c, now)
-		return screen{tr(l, "cb.qr.off", tr(l, p.id, p.args...)), keyboard{{cb.btn(l, "b.refresh", "home")}}}
+		return screen{tr(l, "cb.qr.off", tr(l, p.ID, p.Args...)), keyboard{{cb.btn(l, "b.refresh", "home")}}}
 	}
 	if at, ok := cb.qrAt[u.ID]; ok && now.Sub(at) < clientQREvery {
 		return screen{tr(l, "cb.qr.wait", int(clientQREvery.Minutes())), keyboard{{cb.btn(l, "b.refresh", "home")}}}
@@ -367,7 +369,7 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	}
 	e := html.EscapeString
 	mins := int(showKeep.Minutes())
-	photo, err := cb.t.sendPhoto(chat, png, tr(l, "cb.photo", mins))
+	photo, err := cb.t.SendPhoto(chat, png, tr(l, "cb.photo", mins))
 	if err != nil {
 		return err
 	}
@@ -381,11 +383,11 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	} else {
 		text = tr(l, "cb.show.text", e(c.Name), mins, e(c.Transport), e(c.URL), e(key), e(link))
 	}
-	msg, err := cb.t.send(chat, text)
+	msg, err := cb.t.Send(chat, text)
 	time.AfterFunc(showKeep, func() {
 		for _, id := range []int64{photo, msg} {
 			if id != 0 {
-				cb.t.deleteMessage(chat, id)
+				cb.t.DeleteMessage(chat, id)
 			}
 		}
 	})
@@ -421,8 +423,8 @@ func (cb *clientBot) deliver(now time.Time) {
 			}
 			p := accessPhrase(c, now)
 			if r.Kind == reqExtend {
-				_, err = cb.t.send(r.ID, tr(l, "cb.extended", html.EscapeString(c.Name), tr(l, p.id, p.args...)))
-			} else if _, err = cb.t.sendKeyboard(r.ID, tr(l, "cb.welcome", html.EscapeString(c.Name), tr(l, p.id, p.args...)),
+				_, err = cb.t.Send(r.ID, tr(l, "cb.extended", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)))
+			} else if _, err = cb.t.SendKeyboard(r.ID, tr(l, "cb.welcome", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)),
 				keyboard{{cb.btn(l, "b.cb.help", "help"), cb.btn(l, "b.refresh", "home")}}); err == nil {
 				err = cb.sendAccess(r.ID, c, l)
 				cb.qrAt[r.ID] = now
@@ -433,7 +435,7 @@ func (cb *clientBot) deliver(now time.Time) {
 				log.Printf("client bot: telling %d: %v", r.ID, err)
 			}
 		case r.State == reqRejected && !r.Told:
-			if _, err := cb.t.send(r.ID, tr(l, "cb.rejected.now")); err == nil || unreachable(err) {
+			if _, err := cb.t.Send(r.ID, tr(l, "cb.rejected.now")); err == nil || unreachable(err) {
 				r.Told = true
 				cb.s.saveRequest(r)
 			}
@@ -445,7 +447,7 @@ func (cb *clientBot) deliver(now time.Time) {
 // unreachable: the person blocked the bot or deleted the chat; telling
 // them again will not work either.
 func unreachable(err error) bool {
-	var te *tgError
+	var te *telegram.Error
 	return errors.As(err, &te) && (te.Code == 403 || te.Code == 400)
 }
 
@@ -463,11 +465,11 @@ func (cb *clientBot) remind(now time.Time) {
 		switch {
 		case left > 0 && left < clientRemind && !cb.st.Reminded[c.Name].Equal(c.Expires):
 			text := tr(l, "cb.remind", html.EscapeString(c.Name), c.Expires.Local().Format("02.01 15:04"), durationIn(l, left))
-			if _, err := cb.t.sendKeyboard(c.Telegram.ID, text, ext); err == nil || unreachable(err) {
+			if _, err := cb.t.SendKeyboard(c.Telegram.ID, text, ext); err == nil || unreachable(err) {
 				cb.st.Reminded[c.Name], changed = c.Expires, true
 			}
 		case left <= 0 && -left < clientEndedFor && !cb.st.Ended[c.Name].Equal(c.Expires):
-			if _, err := cb.t.sendKeyboard(c.Telegram.ID, tr(l, "cb.ended", html.EscapeString(c.Name)), ext); err == nil || unreachable(err) {
+			if _, err := cb.t.SendKeyboard(c.Telegram.ID, tr(l, "cb.ended", html.EscapeString(c.Name)), ext); err == nil || unreachable(err) {
 				cb.st.Ended[c.Name], changed = c.Expires, true
 			}
 		}
@@ -502,7 +504,7 @@ func clientBotSetup(s Store, args []string, stdin io.Reader, stdout io.Writer) e
 	if c, err := s.loadBotConfig(); err == nil && c.Token == token {
 		return errors.New("that is your own bot's token: the client bot needs a bot of its own")
 	}
-	me, err := newTelegram(token).getMe()
+	me, err := telegram.New(token).GetMe()
 	if err != nil {
 		return fmt.Errorf("the token does not work: %w", err)
 	}
@@ -515,7 +517,7 @@ func clientBotSetup(s Store, args []string, stdin io.Reader, stdout io.Writer) e
 
 // redeem spends an invite (invites.go) from /start <code>: the channel at
 // once, the owner told. The caller holds cb.mu.
-func (cb *clientBot) redeem(u *tgUser, code string) screen {
+func (cb *clientBot) redeem(u *telegram.User, code string) screen {
 	l := langOf(u.LanguageCode)
 	now := time.Now()
 	unlock, err := cb.s.Lock(lockWait)
@@ -546,11 +548,11 @@ func (cb *clientBot) redeem(u *tgUser, code string) screen {
 	cb.s.logEvents([]event{ev})
 	if o := cb.owner; o != nil {
 		o.mu.Lock()
-		text := o.tr("ui.invite.used", html.EscapeString(who), html.EscapeString(c.Name), o.tr(p.id, p.args...))
+		text := o.tr("ui.invite.used", html.EscapeString(who), html.EscapeString(c.Name), o.tr(p.ID, p.Args...))
 		if note != "" {
 			text += "\n«" + html.EscapeString(note) + "»"
 		}
-		o.t.sendKeyboard(o.chat, text, keyboard{{o.btn("b.client", "c:"+c.Name, c.Name)}})
+		o.t.SendKeyboard(o.chat, text, keyboard{{o.btn("b.client", "c:"+c.Name, c.Name)}})
 		o.mu.Unlock()
 	}
 	cb.deliver(now) // the welcome, the link and the QR

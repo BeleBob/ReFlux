@@ -1,9 +1,12 @@
-package main
+// Package charts draws the web panel's charts as SVG on the server: no
+// scripts in the page.
+package charts
 
 import (
 	"fmt"
 	"html/template"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,18 +17,18 @@ import (
 // seriesColors are the lines' colour classes, in order.
 var seriesColors = []string{"k1", "k2", "k3", "k4"}
 
-type chartSeries struct {
+type Series struct {
 	Name   string
 	Values []float64
 	Color  string // colour class; empty picks from seriesColors
 }
 
-type lineChart struct {
+type Line struct {
 	ID       string // unique on the page, for the gradients
 	Times    []time.Time
 	From, To time.Time     // the time axis; zero: the data's own span
 	Gap      time.Duration // points farther apart are not joined (0: all are)
-	Series   []chartSeries
+	Series   []Series
 	Min, Max float64 // fixed scale; Max 0 scales to the data
 	// Least is the least top of a scale fitted to the data, so a line
 	// near zero stays near the bottom instead of filling the chart.
@@ -39,8 +42,8 @@ type lineChart struct {
 	Wide bool
 }
 
-// legendEntry is a series under its chart: the latest value and the top.
-type legendEntry struct {
+// LegendEntry is a series under its chart: the latest value and the top.
+type LegendEntry struct {
 	Name, Color, Last, Max string
 }
 
@@ -50,7 +53,7 @@ const (
 )
 
 // size is the picture's width and height, and where the plot starts.
-func (c lineChart) size() (w, h, left float64) {
+func (c Line) size() (w, h, left float64) {
 	if c.Wide {
 		return 960, 300, 72
 	}
@@ -78,8 +81,8 @@ func niceNum(x float64, round bool) float64 {
 	return nf * math.Pow(10, exp)
 }
 
-// niceScale spreads [lo, hi] over about n round steps.
-func niceScale(lo, hi float64, n int) (min, max, step float64) {
+// NiceScale spreads [lo, hi] over about n round steps.
+func NiceScale(lo, hi float64, n int) (min, max, step float64) {
 	if hi <= lo {
 		hi = lo + 1
 	}
@@ -87,8 +90,8 @@ func niceScale(lo, hi float64, n int) (min, max, step float64) {
 	return math.Floor(lo/step) * step, math.Ceil(hi/step) * step, step
 }
 
-// render draws the chart.
-func (c lineChart) render() template.HTML {
+// Render draws the chart.
+func (c Line) Render() template.HTML {
 	var b strings.Builder
 	chW, chH, plotL := c.size()
 	plotR, plotB, xLabelY, yLabX := chW-10, chH-32, chH-10, plotL-6
@@ -115,7 +118,7 @@ func (c lineChart) render() template.HTML {
 			hi = 1
 		}
 	}
-	lo, hi, step := niceScale(lo, hi, 4)
+	lo, hi, step := NiceScale(lo, hi, 4)
 	from, to := c.From, c.To
 	if from.IsZero() || !to.After(from) {
 		from, to = c.Times[0], c.Times[n-1]
@@ -189,7 +192,7 @@ func (c lineChart) render() template.HTML {
 }
 
 // segments splits the samples at the gaps: [from, to) index pairs.
-func (c lineChart) segments() [][2]int {
+func (c Line) segments() [][2]int {
 	var out [][2]int
 	start := 0
 	for j := 1; j < len(c.Times); j++ {
@@ -201,7 +204,7 @@ func (c lineChart) segments() [][2]int {
 	return append(out, [2]int{start, len(c.Times)})
 }
 
-func (c lineChart) color(i int, s chartSeries) string {
+func (c Line) color(i int, s Series) string {
 	if s.Color != "" {
 		return s.Color
 	}
@@ -209,10 +212,10 @@ func (c lineChart) color(i int, s chartSeries) string {
 }
 
 // Legend lists the series with their colours, latest values and tops.
-func (c lineChart) Legend() []legendEntry {
-	out := make([]legendEntry, len(c.Series))
+func (c Line) Legend() []LegendEntry {
+	out := make([]LegendEntry, len(c.Series))
 	for i, s := range c.Series {
-		e := legendEntry{Name: s.Name, Color: c.color(i, s), Last: "—", Max: "—"}
+		e := LegendEntry{Name: s.Name, Color: c.color(i, s), Last: "—", Max: "—"}
 		if n := len(s.Values); n > 0 {
 			top := s.Values[0]
 			for _, v := range s.Values {
@@ -248,8 +251,8 @@ func smoothPath(pts [][2]float64, bottom float64) string {
 	return b.String()
 }
 
-// gauge draws a 270° dial for a percentage, coloured by level.
-func gauge(percent float64, value string) template.HTML {
+// Gauge draws a 270° dial for a percentage, coloured by level.
+func Gauge(percent float64, value string) template.HTML {
 	const r, sweep = 40.0, 1.5 * math.Pi
 	length := r * sweep
 	p := math.Min(math.Max(percent, 0), 100) / 100
@@ -260,5 +263,27 @@ func gauge(percent float64, value string) template.HTML {
 	return template.HTML(fmt.Sprintf(`<svg class="gauge" viewBox="0 0 100 92" role="img">`+
 		`<path d="%s" class="track"/><path d="%s" class="level %s" stroke-dasharray="%.2f %.2f"/>`+
 		`<text x="50" y="58" text-anchor="middle" class="gv">%s</text></svg>`,
-		arc, arc, barLevel(percent), p*length, length, template.HTMLEscapeString(value)))
+		arc, arc, Level(percent), p*length, length, template.HTMLEscapeString(value)))
+}
+
+// Level colours a usage bar.
+func Level(v float64) string {
+	switch {
+	case v >= 95:
+		return "FAIL"
+	case v >= 85:
+		return "warn"
+	}
+	return "ok"
+}
+
+// MbitAxis labels a rate in Mbit/s.
+func MbitAxis(m float64) string {
+	if m < 0.001 { // keepalives
+		return "0"
+	}
+	if m >= 100 {
+		return strconv.FormatFloat(m, 'f', 0, 64)
+	}
+	return strconv.FormatFloat(m, 'g', 3, 64)
 }

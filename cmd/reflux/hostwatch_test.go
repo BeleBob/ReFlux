@@ -5,13 +5,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
 func TestMain(m *testing.M) {
 	// No test reads this machine's sensors or processes: a hot or busy
 	// machine must not change what the checks say. Tests that need them
 	// fake them (fakeHostTree).
-	procRoot, sysRoot = "/nonexistent/proc", "/nonexistent/sys"
+	host.ProcRoot, host.SysRoot = "/nonexistent/proc", "/nonexistent/sys"
 	os.Exit(m.Run())
 }
 
@@ -20,7 +22,7 @@ func resetHostWatch(t *testing.T) {
 	t.Helper()
 	clear := func() {
 		hostWatch.Lock()
-		hostWatch.prevCPU, hostWatch.prevProcs, hostWatch.prevAt = cpuTimes{}, nil, time.Time{}
+		hostWatch.prevCPU, hostWatch.prevProcs, hostWatch.prevAt = host.CPUTimes{}, nil, time.Time{}
 		hostWatch.measured, hostWatch.percent, hostWatch.top = false, 0, ""
 		hostWatch.busySince, hostWatch.hot = time.Time{}, false
 		hostWatch.Unlock()

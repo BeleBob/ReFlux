@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // The Telegram bot tells the owner when a check of `reflux doctor` changes
@@ -97,7 +99,7 @@ func cmdBot(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if _, err := newTelegram(c.Token).send(c.Chat, "ReFlux bot test: messages reach you."); err != nil {
+		if _, err := telegram.New(c.Token).Send(c.Chat, "ReFlux bot test: messages reach you."); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "Sent.")
@@ -139,8 +141,8 @@ func botSetup(s Store, stdin io.Reader, stdout io.Writer, wait time.Duration) er
 	if !tokenRe.MatchString(token) {
 		return errors.New("that does not look like a bot token (digits:letters)")
 	}
-	t := newTelegram(token)
-	me, err := t.getMe()
+	t := telegram.New(token)
+	me, err := t.GetMe()
 	if err != nil {
 		return fmt.Errorf("the token does not work: %w", err)
 	}
@@ -152,7 +154,7 @@ func botSetup(s Store, stdin io.Reader, stdout io.Writer, wait time.Duration) er
 	fmt.Fprintf(stdout, "3. Open https://t.me/%s in Telegram and press Start. Waiting...\n", me.Username)
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
-		ups, err := t.getUpdates(offset, min(30*time.Second, time.Until(deadline).Round(time.Second)))
+		ups, err := t.GetUpdates(offset, min(30*time.Second, time.Until(deadline).Round(time.Second)))
 		if err != nil {
 			return err
 		}
@@ -169,11 +171,11 @@ func botSetup(s Store, stdin io.Reader, stdout io.Writer, wait time.Duration) er
 				return errors.New("not linked; run reflux bot setup again")
 			}
 			// Mark it read, or the running bot would see it again.
-			t.getUpdates(offset, 0)
+			t.GetUpdates(offset, 0)
 			if err := s.saveBotConfig(botConfig{Token: token, Chat: m.Chat.ID}); err != nil {
 				return err
 			}
-			t.send(m.Chat.ID, "ReFlux bot linked. It will write when something breaks or changes. /help lists the commands.")
+			t.Send(m.Chat.ID, "ReFlux bot linked. It will write when something breaks or changes. /help lists the commands.")
 			fmt.Fprintln(stdout, "Linked. Next: reflux bot install")
 			return nil
 		}
@@ -183,8 +185,8 @@ func botSetup(s Store, stdin io.Reader, stdout io.Writer, wait time.Duration) er
 
 // skipPending marks every update waiting for the bot as read and returns
 // the offset after them.
-func skipPending(t *telegram) (int64, error) {
-	ups, err := t.getUpdates(-1, 0)
+func skipPending(t *telegram.Client) (int64, error) {
+	ups, err := t.GetUpdates(-1, 0)
 	if err != nil || len(ups) == 0 {
 		return 0, err
 	}
@@ -266,7 +268,7 @@ var (
 
 type bot struct {
 	s    Store
-	t    *telegram
+	t    *telegram.Client
 	chat int64
 	// mu serializes the checks, the commands and the buttons: they run
 	// docker and swap dockerStderr, and share the fields below.
@@ -274,7 +276,7 @@ type bot struct {
 	lang   lang
 	mute   map[string]bool // alert categories switched off
 	await  awaiting        // what the owner's next plain message answers
-	linkTo *tgUser         // who pressed "link to me"
+	linkTo *telegram.User  // who pressed "link to me"
 	mon    monitor
 	outbox []string // alerts not delivered yet
 	// quietUntil: an update the bot ran restarts egress and the nodes;
@@ -303,7 +305,7 @@ func newBot(s Store, c botConfig) *bot {
 	for _, m := range c.Mute {
 		mute[m] = true
 	}
-	return &bot{s: s, t: newTelegram(c.Token), chat: c.Chat, lang: l, mute: mute, mon: monitor{confirm: confirmRuns}}
+	return &bot{s: s, t: telegram.New(c.Token), chat: c.Chat, lang: l, mute: mute, mon: monitor{confirm: confirmRuns}}
 }
 
 // alertCategories are the groups of alerts the owner can switch off.
@@ -336,11 +338,11 @@ func (b *bot) run() error {
 	log.Print("bot: started")
 	go b.watch()
 	for {
-		ups, err := b.t.getUpdates(offset, 50*time.Second)
+		ups, err := b.t.GetUpdates(offset, 50*time.Second)
 		if err != nil {
 			log.Printf("bot: %v", err)
 			wait := 10 * time.Second
-			if te, ok := err.(*tgError); ok && te.RetryAfter > 0 {
+			if te, ok := err.(*telegram.Error); ok && te.RetryAfter > 0 {
 				wait = te.RetryAfter
 			}
 			time.Sleep(wait)
@@ -416,7 +418,7 @@ func (b *bot) deliver(news []string) {
 		b.outbox = b.outbox[len(b.outbox)-20:]
 	}
 	for len(b.outbox) > 0 {
-		if _, err := b.t.send(b.chat, b.outbox[0]); err != nil {
+		if _, err := b.t.Send(b.chat, b.outbox[0]); err != nil {
 			log.Printf("bot: alert not sent, retrying next run: %v", err)
 			return
 		}

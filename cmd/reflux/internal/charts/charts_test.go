@@ -1,4 +1,4 @@
-package main
+package charts
 
 import (
 	"fmt"
@@ -19,29 +19,29 @@ func TestNiceScale(t *testing.T) {
 		{0, 0, 4, 0, 1, 0.2},
 		{0, 37, 4, 0, 40, 10},
 	} {
-		min, max, step := niceScale(c.lo, c.hi, int(c.n))
+		min, max, step := NiceScale(c.lo, c.hi, int(c.n))
 		if fmt.Sprintf("%.4g %.4g %.4g", min, max, step) != fmt.Sprintf("%.4g %.4g %.4g", c.min, c.max, c.step) {
 			t.Errorf("niceScale(%v, %v) = %v %v %v, want %v %v %v", c.lo, c.hi, min, max, step, c.min, c.max, c.step)
 		}
 	}
 }
 
-func chartAt(times ...time.Duration) lineChart {
+func chartAt(times ...time.Duration) Line {
 	base := time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local)
-	c := lineChart{ID: "t", Unit: func(v float64) string { return fmt.Sprintf("%.0f", v) }, Fill: true}
-	s := chartSeries{Name: "a"}
+	c := Line{ID: "t", Unit: func(v float64) string { return fmt.Sprintf("%.0f", v) }, Fill: true}
+	s := Series{Name: "a"}
 	for i, d := range times {
 		c.Times = append(c.Times, base.Add(d))
 		s.Values = append(s.Values, float64(10*i))
 	}
-	c.Series = []chartSeries{s}
+	c.Series = []Series{s}
 	return c
 }
 
 func TestLineChartRender(t *testing.T) {
 	c := chartAt(0, time.Minute, 2*time.Minute, 3*time.Minute)
 	c.Threshold = 25
-	svg := string(c.render())
+	svg := string(c.Render())
 	for _, want := range []string{`class="series k1"`, `fill="url(#g-t-0)"`, `class="zone"`, `class="limit"`, `>12:00<`, `>12:03<`, `>30<`} {
 		if !strings.Contains(svg, want) {
 			t.Errorf("chart lacks %q:\n%s", want, svg)
@@ -52,19 +52,19 @@ func TestLineChartRender(t *testing.T) {
 	}
 	// A fixed axis wider than the data: the line starts in the middle.
 	c.From, c.To = c.Times[0].Add(-3*time.Minute), c.Times[3]
-	if svg := string(c.render()); !strings.Contains(svg, `d="M342.0,`) {
+	if svg := string(c.Render()); !strings.Contains(svg, `d="M342.0,`) {
 		t.Errorf("the line does not start at the data's time:\n%s", svg)
 	}
 	// No data, or one point: no line, no NaN.
-	for _, c := range []lineChart{chartAt(), chartAt(0)} {
-		if svg := string(c.render()); strings.Contains(svg, "series") || strings.Contains(svg, "NaN") {
+	for _, c := range []Line{chartAt(), chartAt(0)} {
+		if svg := string(c.Render()); strings.Contains(svg, "series") || strings.Contains(svg, "NaN") {
 			t.Errorf("an empty chart draws:\n%s", svg)
 		}
 	}
 	// All values zero: still a scale.
 	z := chartAt(0, time.Minute)
 	z.Series[0].Values = []float64{0, 0}
-	if svg := string(z.render()); strings.Contains(svg, "NaN") || !strings.Contains(svg, "series") {
+	if svg := string(z.Render()); strings.Contains(svg, "NaN") || !strings.Contains(svg, "series") {
 		t.Errorf("a flat chart:\n%s", svg)
 	}
 }
@@ -75,7 +75,7 @@ func TestLineChartBreaksAtGaps(t *testing.T) {
 	if got := fmt.Sprint(c.segments()); got != "[[0 3] [3 5] [5 6]]" {
 		t.Errorf("segments = %s", got)
 	}
-	svg := string(c.render())
+	svg := string(c.Render())
 	if n := strings.Count(svg, `class="series k1"`); n != 2 {
 		t.Errorf("%d lines, want 2 (and a dot):\n%s", n, svg)
 	}
@@ -90,9 +90,9 @@ func TestLineChartBreaksAtGaps(t *testing.T) {
 
 func TestLegend(t *testing.T) {
 	c := chartAt(0, time.Minute, 2*time.Minute)
-	c.Series = append(c.Series, chartSeries{Name: "b", Color: "k4"})
+	c.Series = append(c.Series, Series{Name: "b", Color: "k4"})
 	got := c.Legend()
-	if len(got) != 2 || got[0] != (legendEntry{"a", "k1", "20", "20"}) || got[1] != (legendEntry{"b", "k4", "—", "—"}) {
+	if len(got) != 2 || got[0] != (LegendEntry{"a", "k1", "20", "20"}) || got[1] != (LegendEntry{"b", "k4", "—", "—"}) {
 		t.Errorf("legend = %+v", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestGauge(t *testing.T) {
 		p    float64
 		want string
 	}{{-5, `level ok" stroke-dasharray="0.00 `}, {50, `level ok`}, {90, `level warn`}, {130, `level FAIL`}} {
-		if g := string(gauge(c.p, "<x>")); !strings.Contains(g, c.want) || !strings.Contains(g, "&lt;x&gt;") {
+		if g := string(Gauge(c.p, "<x>")); !strings.Contains(g, c.want) || !strings.Contains(g, "&lt;x&gt;") {
 			t.Errorf("gauge(%v) = %s", c.p, g)
 		}
 	}
@@ -114,11 +114,11 @@ var axisLabelRe = regexp.MustCompile(`x="48\.0" y="[^"]+" class="axis" text-anch
 // Nearly idle traffic: the scale goes up to 1 Mbit/s and its labels differ.
 func TestTrafficAxis(t *testing.T) {
 	c := chartAt(0, time.Minute, 2*time.Minute)
-	c.Unit, c.Least = mbitAxis, 1
+	c.Unit, c.Least = MbitAxis, 1
 	c.Series[0].Values = []float64{0, 0.0001, 0.0011} // Mbit/s
 	var labels []string
 	seen := map[string]bool{}
-	for _, m := range axisLabelRe.FindAllStringSubmatch(string(c.render()), -1) {
+	for _, m := range axisLabelRe.FindAllStringSubmatch(string(c.Render()), -1) {
 		if seen[m[1]] {
 			t.Errorf("the label %q twice", m[1])
 		}
@@ -129,8 +129,8 @@ func TestTrafficAxis(t *testing.T) {
 		t.Errorf("labels %q, want 0 up to 1", labels)
 	}
 	for v, want := range map[float64]string{0: "0", 0.0001: "0", 0.0011: "0.0011", 0.6000000000000001: "0.6", 76.757: "76.8", 120.4: "120"} {
-		if got := mbitAxis(v); got != want {
-			t.Errorf("mbitAxis(%v) = %q, want %q", v, got, want)
+		if got := MbitAxis(v); got != want {
+			t.Errorf("MbitAxis(%v) = %q, want %q", v, got, want)
 		}
 	}
 }
@@ -140,7 +140,7 @@ func TestThresholdBandShows(t *testing.T) {
 	c := chartAt(0, time.Minute, 2*time.Minute)
 	c.Series[0].Values = []float64{1.4, 1.8, 1.7}
 	c.Threshold = 2
-	if svg := string(c.render()); !strings.Contains(svg, `class="zone"`) {
+	if svg := string(c.Render()); !strings.Contains(svg, `class="zone"`) {
 		t.Errorf("no threshold band:\n%s", svg)
 	}
 }

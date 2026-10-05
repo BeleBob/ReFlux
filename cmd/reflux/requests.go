@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // Access requests: people who asked the client bot for a channel, or for
@@ -144,7 +146,7 @@ func (s Store) clientOf(id int64) (Client, bool) {
 // refused to a blocked account, one with a channel, one already waiting,
 // one rejected within a day, and when too many wait; more time only to
 // one with a channel.
-func (s Store) newRequest(u tgUser, kind, text string, now time.Time) (accessRequest, error) {
+func (s Store) newRequest(u telegram.User, kind, text string, now time.Time) (accessRequest, error) {
 	if old, err := s.getRequest(u.ID); err == nil {
 		switch {
 		case old.State == reqBlocked:

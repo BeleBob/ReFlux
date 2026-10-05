@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // Image updates: the bot asks the registry every updatesEvery whether the
@@ -197,15 +199,15 @@ func (b *bot) checkUpdates(now time.Time, auto bool) {
 		st.Night = key
 		err := b.update()
 		if err != nil {
-			b.t.send(b.chat, b.tr("ui.upd.night.failed", html.EscapeString(err.Error())))
+			b.t.Send(b.chat, b.tr("ui.upd.night.failed", html.EscapeString(err.Error())))
 		} else {
-			b.t.send(b.chat, b.tr("ui.upd.night.done"))
+			b.t.Send(b.chat, b.tr("ui.upd.night.done"))
 		}
 		st.Offered = key
 		return
 	}
 	if st.Offered != key {
-		if _, err := b.t.sendKeyboard(b.chat, b.tr("ui.upd.offer"), b.updateKeyboard()); err == nil {
+		if _, err := b.t.SendKeyboard(b.chat, b.tr("ui.upd.offer"), b.updateKeyboard()); err == nil {
 			st.Offered = key
 		}
 	}
@@ -257,7 +259,7 @@ func (b *bot) updatesScreen(check bool) screen {
 	if anyNewer(states) {
 		kb = append(keyboard{{b.btn("b.upd.now", "upd!:"+stamp())}}, kb...)
 	}
-	return screen{t.String(), append(kb, []tgButton{b.btn("b.upd.auto", "updauto"), b.btn("b.server", "srv")})}
+	return screen{t.String(), append(kb, []telegram.Button{b.btn("b.upd.auto", "updauto"), b.btn("b.server", "srv")})}
 }
 
 func shortDigest(d string) string {

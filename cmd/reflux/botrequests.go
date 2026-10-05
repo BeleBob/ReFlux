@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
 // The owner bot's side of access requests (requests.go): a message with
@@ -22,7 +24,7 @@ func (b *bot) requestText(r accessRequest) string {
 		t.WriteString(b.tr("ui.rq.extend", e(r.Who()), e(r.Client)))
 		if c, err := b.s.Get(r.Client); err == nil {
 			p := accessPhrase(c, time.Now())
-			t.WriteString("\n" + b.tr("ui.client.access", b.tr(p.id, p.args...)))
+			t.WriteString("\n" + b.tr("ui.client.access", b.tr(p.ID, p.Args...)))
 		}
 	} else {
 		t.WriteString(b.tr("ui.rq.access", e(r.Who())))
@@ -52,7 +54,7 @@ func (b *bot) notifyRequests() {
 		if r.Notified {
 			continue
 		}
-		if _, err := b.t.sendKeyboard(b.chat, "📨 "+b.requestText(r), b.requestKeyboard(r)); err != nil {
+		if _, err := b.t.SendKeyboard(b.chat, "📨 "+b.requestText(r), b.requestKeyboard(r)); err != nil {
 			log.Printf("bot: request of %d: %v", r.ID, err)
 			return // the next run tries again
 		}
@@ -75,12 +77,12 @@ func (b *bot) requestsScreen() screen {
 			kind = "⏳"
 		}
 		fmt.Fprintf(&t, "\n%s %s · %s", kind, html.EscapeString(r.Who()), r.At.Local().Format("02.01 15:04"))
-		kb = append(kb, []tgButton{{Text: kind + " " + r.Who(), Data: "rq1:" + strconv.FormatInt(r.ID, 10)}})
+		kb = append(kb, []telegram.Button{{Text: kind + " " + r.Who(), Data: "rq1:" + strconv.FormatInt(r.ID, 10)}})
 	}
 	if len(pending) == 0 {
 		t.WriteString("\n" + b.tr("ui.rq.none"))
 	}
-	return screen{t.String(), append(kb, []tgButton{b.btn("b.invite", "inv"), b.btn("b.home", "home")})}
+	return screen{t.String(), append(kb, []telegram.Button{b.btn("b.invite", "inv"), b.btn("b.home", "home")})}
 }
 
 // requestPress handles rq1:<id> (one request) and rq:<id>:<decision>.
@@ -99,7 +101,7 @@ func (b *bot) requestPress(action, arg string) screen {
 			return screen{b.requestText(r) + "\n\n" + b.tr("ui.rq.decided", b.tr("rq.state."+r.State)),
 				keyboard{{b.btn("b.rq", "rqs", len(b.s.pendingRequests()))}}}
 		}
-		return screen{"📨 " + b.requestText(r), append(b.requestKeyboard(r), []tgButton{b.btn("b.back", "rqs")})}
+		return screen{"📨 " + b.requestText(r), append(b.requestKeyboard(r), []telegram.Button{b.btn("b.back", "rqs")})}
 	}
 	now := time.Now()
 	var note string
@@ -119,7 +121,7 @@ func (b *bot) requestPress(action, arg string) screen {
 			return err
 		}
 		p := accessPhrase(c, now)
-		note = b.tr("ui.rq.approved", html.EscapeString(c.Name), b.tr(p.id, p.args...))
+		note = b.tr("ui.rq.approved", html.EscapeString(c.Name), b.tr(p.ID, p.Args...))
 		return apply(b.s, io.Discard)
 	})
 	if err != nil {
@@ -151,10 +153,10 @@ func (b *bot) invitesScreen(note string) screen {
 		if inv.Note != "" {
 			t.WriteString("\n«" + html.EscapeString(inv.Note) + "»")
 		}
-		kb = append(kb, []tgButton{b.btn("b.invite.revoke", "inv-:"+inv.Code, inv.Code[:4])})
+		kb = append(kb, []telegram.Button{b.btn("b.invite.revoke", "inv-:"+inv.Code, inv.Code[:4])})
 	}
 	kb = append(keyboard{{b.btn("b.invite.30", "inv:+30"), b.btn("b.invite.90", "inv:+90"), b.btn("b.invite.never", "inv:never")}}, kb...)
-	return screen{t.String(), append(kb, []tgButton{b.btn("b.rq", "rqs", len(b.s.pendingRequests())), b.btn("b.home", "home")})}
+	return screen{t.String(), append(kb, []telegram.Button{b.btn("b.rq", "rqs", len(b.s.pendingRequests())), b.btn("b.home", "home")})}
 }
 
 // howKey names an invite's access for its message id: 30, 90 or never.
