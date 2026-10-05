@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/share"
+
+	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/charts"
 )
 
 // The web panel: the bot's screens as pages, for the home network. It
@@ -65,7 +67,7 @@ func webFuncs(l lang) template.FuncMap {
 		"bytes": humanBytes,
 		"spark": spark,
 		"pct":   pct,
-		"bar":   barLevel,
+		"bar":   charts.Level,
 		"uplevel": func(v float64) string { // availability: 99.5% and up is fine
 			switch {
 			case v >= 99.5:
@@ -371,7 +373,7 @@ type clientData struct {
 	// Days is the traffic of the last days as bars, Rate the speed over
 	// the last hour (webbars.go).
 	Days, Rate             template.HTML
-	DaysLegend, RateLegend []legendEntry
+	DaysLegend, RateLegend []charts.LegendEntry
 	Node                   string
 	Created                string
 	Transport              string

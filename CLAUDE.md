@@ -49,8 +49,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
 
 ## ReFlux components (all new files; no upstream file is changed)
 
-- `cmd/reflux` — host CLI (`setup/add/list/show/pause/resume/expire/revoke/apply/update/
-  restart/status/logs/heal/doctor/bot/web/backup/restore`). `reflux setup`
+- `cmd/reflux` — host CLI, one `package main` plus self-contained packages under
+  `cmd/reflux/internal/` (`telegram` Bot API client, `i18n` texts, `host`
+  /proc and /sys readers, `charts` SVG charts); the rest shares the `Store`
+  methods and test fakes, so it stays in one package. Commands: `setup/add/list/
+  show/pause/resume/expire/revoke/apply/update/restart/status/logs/heal/doctor/
+  bot/web/backup/restore`. `reflux setup`
   (`setup.go`) installs a server as a rerunnable wizard: each step checks first,
   asks before sudo, stops when the owner must act (re-login, kernel module);
   `--check` changes nothing. Its route unit text must match
@@ -62,9 +66,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   the doctor checks every minute and reports findings whose `Sig` changed for
   two runs; it talks to the Bot API from the host, not through egress. It also
   manages clients through screens with inline buttons (`botui.go`; one message per
-  screen, edited on each press) and the same commands. Texts are in `i18n.go`
-  (`messages`: English and Russian with the same arguments, checked by a test); the
-  CLI prints English, the bot the owner's language (`lang` in `telegram.json`).
+  screen, edited on each press) and the same commands. Texts are in
+  `internal/i18n` (`Messages`: English and Russian with the same arguments,
+  checked by a test; `i18n.go` aliases `tr`/`ph`/`lang`); the CLI prints English, the bot the owner's language (`lang` in `telegram.json`).
   Doctor findings carry a message id and arguments; the egress state comes from
   its `/run/reflux-egress/status.json`. `reflux web` is the same panel for the LAN
   (`web.go`, `web/panel.html` embedded; systemd user service `reflux-web`): it
@@ -72,9 +76,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   only, signs in `trusted` addresses or browsers with a one-time link (`/web`
   in the bot, `reflux web login`; token and session hashes in `web-*.json`),
   and takes POSTs from its own origin only. Its sampler (`webstats.go`) reads the
-  host from /proc and /sys (`hostmetrics.go`, roots overridable in tests) every 5 s
+  host from /proc and /sys (`internal/host`, roots overridable in tests; df and
+  docker figures in `hostcmds.go`) every 5 s
   (an hour of samples, plus a day of minute averages in `metrics.json`,
-  `webhistory.go`) for the charts (`webcharts.go`: server-rendered SVG, no
+  `webhistory.go`) for the charts (`internal/charts`: server-rendered SVG, no
   scripts; the server page is `webdash.go`) and the nodes every 10 s
   into per-day traffic in `state/<name>/traffic.json` (survives node and panel
   restarts). The bot logs its alerts to `events.jsonl` in both languages, and

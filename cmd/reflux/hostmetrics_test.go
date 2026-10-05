@@ -13,7 +13,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/host"
 )
 
-// fakeHostTree points procRoot and sysRoot at a temporary tree.
+// fakeHostTree points host.ProcRoot and host.SysRoot at a temporary tree.
 func fakeHostTree(t *testing.T) (proc, sys string) {
 	t.Helper()
 	root := t.TempDir()

@@ -153,17 +153,6 @@ func spark(values []float64, top float64) template.HTML {
 // pct is a percentage for a bar's width, 0 to 100.
 func pct(v float64) int { return int(min(max(v, 0), 100)) }
 
-// barLevel colours a usage bar.
-func barLevel(v float64) string {
-	switch {
-	case v >= 95:
-		return "FAIL"
-	case v >= 85:
-		return "warn"
-	}
-	return "ok"
-}
-
 // mbit formats a rate in bytes per second as megabits.
 func mbit(l lang, bytesPerSec float64) string {
 	return tr(l, "web.mbps", bytesPerSec*8/1e6)

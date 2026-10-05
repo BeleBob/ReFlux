@@ -23,7 +23,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - run: go test ./cmd/reflux -count=1
+      - run: go test ./cmd/reflux/... -count=1
 
       - name: Notes
         # The version's section of the changelog; no section, no release.
