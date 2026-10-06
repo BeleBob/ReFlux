@@ -925,6 +925,9 @@ DEPRECATED (removed in v2)
 			rooms[specs[0].Name] = r
 		}
 
+		// The carrier itself, before the codec and encryption wrap it: the one that raises checks.
+		carrier := inner
+
 		// Persist cookie exchanger for the legacy path.
 		if store != nil {
 			if ce, ok := inner.(transport.CookieExchanger); ok {
@@ -964,6 +967,7 @@ DEPRECATED (removed in v2)
 			}
 			defer srv.Close()
 			statusServer = srv
+			wireCheckNotifier(carrier, srv)
 		}
 	}
 
