@@ -7,6 +7,24 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
+// wireCheckNotifier hands a carrier's own check or login reports (yandex and
+// vyandex raise them) to the app, which opens its browser for the user. On the
+// Session path the manager does this for every transport it holds; the classic
+// path has none, and without this the report stayed a log line repeated every
+// 30 seconds while the app never opened its browser. Reports the carrier makes
+// while no app is connected are dropped, as on the Session path: it reports
+// again on its next attempt. False when the carrier raises no such reports.
+func wireCheckNotifier(carrier transport.Transport, srv *ipc.Server) bool {
+	en, ok := carrier.(transport.ErrorNotifier)
+	if !ok {
+		return false
+	}
+	en.SetErrorNotifier(func(_ error, name, url, reason string) {
+		_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{Transport: name, URL: url, Reason: reason})
+	})
+	return true
+}
+
 // coreIPCHandler is the app-facing side of the IPC bridge.
 //
 // It receives commands and cookies from the mobile app and forwards them

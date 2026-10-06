@@ -870,6 +870,9 @@ DEPRECATED (removed in v2)
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}
 
+		// The carrier itself, before the codec and encryption wrap it: the one that raises checks.
+		carrier := inner
+
 		// Persist cookie exchanger for the legacy path.
 		if store != nil {
 			if ce, ok := inner.(transport.CookieExchanger); ok {
@@ -901,7 +904,8 @@ DEPRECATED (removed in v2)
 		trans = inner
 
 		// The app's IPC bridge works here too: traffic totals for its speed
-		// counters, and cookies it offers go to the carrier.
+		// counters, the carrier's checks go to it, and cookies it offers go
+		// back to the carrier.
 		if *ipcSocketPath != "" {
 			srv := ipc.NewServer(*ipcSocketPath, &coreIPCHandler{exchanger: exchanger})
 			if err := srv.Listen(); err != nil {
@@ -909,6 +913,7 @@ DEPRECATED (removed in v2)
 			}
 			defer srv.Close()
 			statusServer = srv
+			wireCheckNotifier(carrier, srv)
 		}
 	}
 

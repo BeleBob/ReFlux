@@ -5,6 +5,15 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A Yandex check (SmartCaptcha, login) on a profile without a Session (no key)
+  now reaches the app over `--ipc-socket`, as it does with a Session. Before,
+  that path never connected the carrier's report to the IPC bridge, so the
+  transport only logged "external solver required" every 30 seconds and the
+  app never opened its browser; the cookies the app offered back were already
+  taken.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added
