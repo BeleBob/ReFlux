@@ -5,8 +5,23 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-07
+
 ### Added
 
+- **Script (JS) transports**, experimental: a carrier can be a signed JS package (`.flux`, or a
+  bare `.js` with a detached signature) run by an in-process engine (goja), next to the native
+  ones: `Type = script` in a `.conf`, `--transports`, Session only (the carrier sees ciphertext).
+  A package carries its `id`, `wire` and `api` generation, an update address, and a typed `params`
+  schema; the core is the one verifier (`--inspect-script`, `mobile.InspectTransport`, one trust
+  path for the CLI, gomobile and the desktop app) and pins the author's key. Updates are the core's
+  decision too: check, apply and roll back (`--check-script-update`, `--apply-script-update`,
+  `--rollback-script`, `mobile.CheckScriptUpdate/ApplyScriptUpdate/RollbackScript`,
+  `mobile.CompareScriptVersions`); a different wire generation or another key never installs
+  silently. `scriptsign pack` lints and `scriptsign index` writes an author's `update.json`.
+  OpenFlux's own key is a **list** (`officialKeys`): a rotation is two releases. The seven bundled
+  transports (1.1.0) are signed with it. The engine is off in the apps unless the user turns on
+  "Экспериментальные функции". Docs: `docs/scripted-transports.md`.
 - Script transports: **settings the script declares**. `info().params` grows
   the fields a form needs (`type` number/boolean/select/textarea, `default`,
   `description`, `placeholder`, `options`, `min`, `max`, `pattern`, `group`,
@@ -35,10 +50,32 @@ All notable changes to the OpenFlux core. Format loosely follows
   served on `127.0.0.1` with `window.openfluxSubmit` (`transport/script/devhost`).
   The templates and `docs/scripted-transports.md` describe it; the SDK has the
   author's guide.
+- One registry for "type -> transport" (`transport/registry`) replaces four copies that had
+  drifted apart (`main.go` twice, `transport_factory.go`, `mobile`).
+- Script transports can now ask for a setup/login page the same way the
+  native Yandex/mailru transports ask for a captcha: `raise("needsSetup"/
+  "captchaRequired", {url|html, reason})` reaches `ErrorNotifier` with an
+  `html` field alongside `url` (`transport/error_notifier.go`,
+  `transport/manager`, `transport/ipc`, `transport/control`) for a page
+  the script built itself, not just a real site.
+- `httpserver.listen(handler, port?)` - a loopback-only HTTP server a
+  script can run for its own setup mini-app (`transport/script/
+  host_httpserver.go`); handler may be sync or async.
+- `--inspect-script` CLI subcommand and `transport/script.InspectTrust` -
+  one shared signature-verification path for the CLI, gomobile, and the
+  desktop app (`JvmPlatformServices`), replacing duplicated logic.
+- Nightly CLI prerelease channel (`.github/workflows/nightly.yml`),
+  matching the Android/Desktop apps' existing nightly channels.
+- The README is split into focused documents under `docs/`.
 
-### Fixed (JS transports brought in step with the native ones)
+### Fixed
 
-- The seven bundled JS transports are now 1.1.0 and follow the natives: the
+- A Yandex check (SmartCaptcha, login) on a profile without a Session (no key) now reaches the
+  app over `--ipc-socket`, as it does with a Session. Before, that path never connected the
+  carrier's report to the IPC bridge, so the transport only logged "external solver required"
+  every 30 seconds and the app never opened its browser; the cookies the app offered back were
+  already taken.
+- JS transports brought in step with the native ones. The seven bundled transports are now 1.1.0 and follow the natives: the
   saveChanges "editor activity" stream (yandex, mailru); every cursor entry of a
   batched mailru message; boards' modify-objects wire (a JS boards client's
   packets were ignored by a current exit) without the client ping that dropped
@@ -59,23 +96,15 @@ All notable changes to the OpenFlux core. Format loosely follows
 - The core passes `params.exit` (its role) to every script transport.
 - Manifest reading (`Inspect`) runs the script with a restricted host API and a
   3 s budget, and `.flux` archives are read with size limits.
+- yandex and mailru make one reconnect at a time.
 
-### Added
+### Security
 
-- Script transports can now ask for a setup/login page the same way the
-  native Yandex/mailru transports ask for a captcha: `raise("needsSetup"/
-  "captchaRequired", {url|html, reason})` reaches `ErrorNotifier` with an
-  `html` field alongside `url` (`transport/error_notifier.go`,
-  `transport/manager`, `transport/ipc`, `transport/control`) for a page
-  the script built itself, not just a real site.
-- `httpserver.listen(handler, port?)` - a loopback-only HTTP server a
-  script can run for its own setup mini-app (`transport/script/
-  host_httpserver.go`); handler may be sync or async.
-- `--inspect-script` CLI subcommand and `transport/script.InspectTrust` -
-  one shared signature-verification path for the CLI, gomobile, and the
-  desktop app (`JvmPlatformServices`), replacing duplicated logic.
-- Nightly CLI prerelease channel (`.github/workflows/nightly.yml`),
-  matching the Android/Desktop apps' existing nightly channels.
+- Dependencies: Go 1.26.6, x/crypto 0.56, x/text 0.41 (govulncheck: 15 reachable findings down
+  to 1), then pion/webrtc v4 (clean).
+- Manifest reading no longer runs an unverified script with the full host API; `.flux` archives
+  are read with size limits.
+- Every GitHub Action is pinned to a commit SHA.
 
 ## [0.3.0] - 2026-10-01
 
