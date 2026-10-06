@@ -97,6 +97,14 @@ All notable changes to the OpenFlux core. Format loosely follows
 - Manifest reading (`Inspect`) runs the script with a restricted host API and a
   3 s budget, and `.flux` archives are read with size limits.
 - yandex and mailru make one reconnect at a time.
+- oneme: a failed or error-answered start-call request (opcode 78) no longer crashes the
+  process with a nil dereference or loops on `Dial error: malformed ws or wss URL`; the error
+  (or a response without call params) is logged and the call is retried after a second
+  (#145, thanks @choksi2212).
+- A new node install downloads `node-install.sh` from the commit `node-v1.2.0` is tagged on
+  (`provision.PinnedCommit`; the script and its SHA-256 are unchanged).
+- The setup-page dev host (`scripttest`) no longer races between starting and closing its
+  server (found by `go test -race`).
 
 ### Security
 
