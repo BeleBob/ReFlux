@@ -5,6 +5,115 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-07
+
+### Added
+
+- **Script (JS) transports**, experimental: a carrier can be a signed JS package (`.flux`, or a
+  bare `.js` with a detached signature) run by an in-process engine (goja), next to the native
+  ones: `Type = script` in a `.conf`, `--transports`, Session only (the carrier sees ciphertext).
+  A package carries its `id`, `wire` and `api` generation, an update address, and a typed `params`
+  schema; the core is the one verifier (`--inspect-script`, `mobile.InspectTransport`, one trust
+  path for the CLI, gomobile and the desktop app) and pins the author's key. Updates are the core's
+  decision too: check, apply and roll back (`--check-script-update`, `--apply-script-update`,
+  `--rollback-script`, `mobile.CheckScriptUpdate/ApplyScriptUpdate/RollbackScript`,
+  `mobile.CompareScriptVersions`); a different wire generation or another key never installs
+  silently. `scriptsign pack` lints and `scriptsign index` writes an author's `update.json`.
+  OpenFlux's own key is a **list** (`officialKeys`): a rotation is two releases. The seven bundled
+  transports (1.1.0) are signed with it. The engine is off in the apps unless the user turns on
+  "Экспериментальные функции". Docs: `docs/scripted-transports.md`.
+- Script transports: **settings the script declares**. `info().params` grows
+  the fields a form needs (`type` number/boolean/select/textarea, `default`,
+  `description`, `placeholder`, `options`, `min`, `max`, `pattern`, `group`,
+  `advanced`, `scope`); an old script means what it always did. The apps open a
+  wizard page generated from the declaration (`--script-settings`,
+  `mobile.ScriptSettings`; a script may bring its own with
+  `Transport.settings(values)`), keep what it submits with the script, and the
+  script gets it as `cfg.params` (declared defaults filled in; the `.conf` carries
+  it as one `Params = <base64url JSON>` line). `--inspect-script` reports each
+  param's resolved scope, `settingsPage` and `paramProblems`.
+- The wizard page (and `cfg.params`) now cover **every** declared param, the
+  profile one included: a script with only one param still gets a wizard, and
+  an app can let the profile editor's field and the wizard edit the same saved
+  value (`cfg.url` falls back to `cfg.params[profileKey]` if a caller sends
+  only the latter).
+- Script transports: **setup pages**. `raise("needsSetup" | "captchaRequired")`
+  is checked in the core and throws a `TypeError` into the script for anything
+  but an `https` site, an inline page, or the loopback address of the script's
+  own `httpserver.listen()`; the IPC request and the mobile bridge say which
+  pages are the script's own (`Own`, `PendingCaptchaOwn`,
+  `PendingCaptchaTransport`) instead of the apps guessing from the URL. A check
+  an exit reports at a loopback address is no longer forwarded to the client.
+  `SubmitCaptchaData` reads the payload with the core's rules
+  (`script.FlattenSubmission`).
+- `scripttest`: `-settings`, `-open`, `-submit`, `-lang`; a raised setup page is
+  served on `127.0.0.1` with `window.openfluxSubmit` (`transport/script/devhost`).
+  The templates and `docs/scripted-transports.md` describe it; the SDK has the
+  author's guide.
+- One registry for "type -> transport" (`transport/registry`) replaces four copies that had
+  drifted apart (`main.go` twice, `transport_factory.go`, `mobile`).
+- Script transports can now ask for a setup/login page the same way the
+  native Yandex/mailru transports ask for a captcha: `raise("needsSetup"/
+  "captchaRequired", {url|html, reason})` reaches `ErrorNotifier` with an
+  `html` field alongside `url` (`transport/error_notifier.go`,
+  `transport/manager`, `transport/ipc`, `transport/control`) for a page
+  the script built itself, not just a real site.
+- `httpserver.listen(handler, port?)` - a loopback-only HTTP server a
+  script can run for its own setup mini-app (`transport/script/
+  host_httpserver.go`); handler may be sync or async.
+- `--inspect-script` CLI subcommand and `transport/script.InspectTrust` -
+  one shared signature-verification path for the CLI, gomobile, and the
+  desktop app (`JvmPlatformServices`), replacing duplicated logic.
+- Nightly CLI prerelease channel (`.github/workflows/nightly.yml`),
+  matching the Android/Desktop apps' existing nightly channels.
+- The README is split into focused documents under `docs/`.
+
+### Fixed
+
+- A Yandex check (SmartCaptcha, login) on a profile without a Session (no key) now reaches the
+  app over `--ipc-socket`, as it does with a Session. Before, that path never connected the
+  carrier's report to the IPC bridge, so the transport only logged "external solver required"
+  every 30 seconds and the app never opened its browser; the cookies the app offered back were
+  already taken.
+- JS transports brought in step with the native ones. The seven bundled transports are now 1.1.0 and follow the natives: the
+  saveChanges "editor activity" stream (yandex, mailru); every cursor entry of a
+  batched mailru message; boards' modify-objects wire (a JS boards client's
+  packets were ignored by a current exit) without the client ping that dropped
+  the socket every 20 s; a login wall reaches the app as `captchaRequired` with
+  reason `login`; cupsonline sends one batch at a time (packets over ~1 KB from
+  a JS side never reached a native peer), keeps a receive buffer per sender and
+  can run as an exit that creates its rooms (`raise("roomList", {rooms})`,
+  `ScriptTransport.RoomList/OnRoomList`); a oneme receiver no longer places calls
+  after its call socket closes. Details and what still differs:
+  `docs/plans/2026-10-04-native-js-parity.md`. Signed with the official key
+  (`transport/script/js/build.sh <key>` rebuilds and signs; the signature test
+  verifies every shipped signature).
+- `ScriptTransport.Stop()` calls the script's `close()`, closes every socket
+  the host opened for it, and interrupts JS that does not return (it used to
+  leave sockets open, so a participant stayed in the document, and could hang).
+- `ws.send` has a 20 s write deadline: a half-open socket no longer blocks the
+  script's event loop.
+- The core passes `params.exit` (its role) to every script transport.
+- Manifest reading (`Inspect`) runs the script with a restricted host API and a
+  3 s budget, and `.flux` archives are read with size limits.
+- yandex and mailru make one reconnect at a time.
+- oneme: a failed or error-answered start-call request (opcode 78) no longer crashes the
+  process with a nil dereference or loops on `Dial error: malformed ws or wss URL`; the error
+  (or a response without call params) is logged and the call is retried after a second
+  (#145, thanks @choksi2212).
+- A new node install downloads `node-install.sh` from the commit `node-v1.2.0` is tagged on
+  (`provision.PinnedCommit`; the script and its SHA-256 are unchanged).
+- The setup-page dev host (`scripttest`) no longer races between starting and closing its
+  server (found by `go test -race`).
+
+### Security
+
+- Dependencies: Go 1.26.6, x/crypto 0.56, x/text 0.41 (govulncheck: 15 reachable findings down
+  to 1), then pion/webrtc v4 (clean).
+- Manifest reading no longer runs an unverified script with the full host API; `.flux` archives
+  are read with size limits.
+- Every GitHub Action is pinned to a commit SHA.
+
 ## [0.3.0] - 2026-10-01
 
 ### Added

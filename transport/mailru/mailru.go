@@ -87,6 +87,12 @@ type MailruDocsTransport struct {
 
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
+
+	// reconnecting is set while a scheduled reconnect waits out its backoff:
+	// the reader's error and ApplyCookies both schedule one when the cookies
+	// are replaced under a live connection, and two reconnects open two
+	// sessions to the document.
+	reconnecting atomic.Bool
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCdEfGh1/IjKlMnOp2")
@@ -413,6 +419,13 @@ func buildSaveChanges(session *DocSession) []byte {
 	if userID == "" {
 		userID = session.UserID
 	}
+	return BuildSaveChanges(userID)
+}
+
+// BuildSaveChanges is the saveChanges message for one participant: a pure
+// function of the user id, exported so the JS port of this transport can be
+// compared with it byte for byte.
+func BuildSaveChanges(userID string) []byte {
 	short := userID
 	if len(short) > 1 {
 		short = short[:len(short)-1]
@@ -453,7 +466,11 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 // cursorPayloads returns the base64 payload of every cursor entry in a server
 // message, in order, without the keep-alive entries.
-func cursorPayloads(text string) []string {
+func cursorPayloads(text string) []string { return CursorPayloads(text) }
+
+// CursorPayloads is the exported form of cursorPayloads (pure; the JS port is
+// compared with it in tests).
+func CursorPayloads(text string) []string {
 	var out []string
 	for _, m := range cursorPayloadRe.FindAllStringSubmatch(text, -1) {
 		if len(m) > 1 && m[1] != "---KA---" {
@@ -469,9 +486,13 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 		return
 	}
 
+	if !t.reconnecting.CompareAndSwap(false, true) {
+		return // one is already waiting
+	}
 	d := reconnectBackoff(next)
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
 	time.Sleep(d)
+	t.reconnecting.Store(false) // a failed connect schedules the next one itself
 	if !t.IsRunning() {
 		return
 	}
