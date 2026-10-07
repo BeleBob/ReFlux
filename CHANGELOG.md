@@ -5,6 +5,28 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-07
+
+Hotfix for 0.4.0, found testing the release between a Windows client and a Linux L3 exit.
+
+### Fixed
+
+- **Yandex: the check no longer repeats forever for a node with an IPv6 route.** The tunnel is
+  IPv4 (L3 raw sockets, the client's gVisor stack, L4 re-dials), so a Yandex check the node asks
+  the client to pass is shown to the client's browser from the node's IPv4 address, and the
+  `spravka` Yandex issues is bound to that address. The node's own requests (document fetch,
+  captcha PoW, WebSocket, Volga relay, boards) went out dual-stack, over IPv6 first wherever the
+  host has an AAAA route, and Yandex rejected the browser's `spravka` for the node's IPv6 address:
+  SmartCaptcha again after every cookie handoff. All Yandex carrier connections now dial
+  IPv4 first and fall back to IPv6 only when no IPv4 address answers. Measured with the fix
+  through a Linux L3 exit: the node's document opens (200), data runs over Yandex at ~2 MB/s.
+- **L3 exit (Linux): `-d` no longer logs the host's own traffic.** The raw sockets hand over a copy
+  of everything the host receives (its ssh session, DNS answers, the carriers' connections,
+  internet scans) and each packet was logged before the flow lookup; over ssh the log fed on
+  itself (8 500 lines in 3 minutes while idle). Only packets of tunnel flows are logged now;
+  the ignored traffic stays visible as `noct=` in `[L3-STATS]`. Nothing but tunnel flows ever
+  reached the transport.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added
