@@ -5,6 +5,24 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-07
+
+Hotfix for 0.4.1: Mail.ru Docs.
+
+### Fixed
+
+- **Mail.ru Docs: a link that only lets the document be read no longer drops the connection every few
+  seconds.** The transport sends the editor's `saveChanges` now and then; for a link without edit rights
+  (`"edit": false`, what most public links are) the server answered with a close without a close frame,
+  every 0.5 to 5 seconds, so the channel was up for moments between reconnects. `saveChanges` is not sent
+  where the document's permissions forbid editing. Found with the real service: before, 4 drops in 15
+  seconds; now none in 150 seconds, and a packet passes between two peers on the same document.
+- **Mail.ru Docs: the Engine.IO / Socket.IO handshake is completed before the editor auth is sent**
+  (the server's `0{...}` open, our `40{token}`, its `40{sid}`, then the auth; an Engine.IO ping `2` during it
+  is answered). [#147](https://github.com/p1neappleXpress/OpenFlux/pull/147) by Novarg93, rebased onto 0.4.1.
+
+Exit nodes that carry Mail.ru need `node-v1.2.2`.
+
 ## [0.4.1] - 2026-10-07
 
 Hotfix for 0.4.0, found testing the release between a Windows client and a Linux L3 exit.

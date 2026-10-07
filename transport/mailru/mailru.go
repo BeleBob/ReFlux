@@ -480,11 +480,25 @@ func (t *MailruDocsTransport) editorActivityLoop() {
 			continue
 		}
 
+		// A link that only lets the document be read ("edit": false) is not allowed to save: the
+		// server closes the connection (no close frame) on the first saveChanges, over and over.
+		if !canEdit(session.Info.Permissions) {
+			continue
+		}
+
 		msg := buildSaveChanges(session)
 		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
 			utils.Debugf("[M-DOCS] saveChanges write error: %v", err)
 		}
 	}
+}
+
+// canEdit says whether the document may be edited through the link this session joined with.
+// The server reports it in the document's permissions; a document that does not say is treated
+// as editable, as the transport always did.
+func canEdit(permissions map[string]interface{}) bool {
+	edit, ok := permissions["edit"].(bool)
+	return !ok || edit
 }
 
 // buildSaveChanges собирает saveChanges-сообщение под конкретную сессию:
