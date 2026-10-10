@@ -44,11 +44,14 @@ func TestKeepAliveOnlyWhenTheConnectionIsQuiet(t *testing.T) {
 			return
 		}
 		defer c.Close()
-		c.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"ns1"}`))
+		c.WriteMessage(websocket.TextMessage, []byte(`0{"sid":"eio1","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`))
 		for {
 			_, m, err := c.ReadMessage()
 			if err != nil {
 				return
+			}
+			if strings.HasPrefix(string(m), "40{") {
+				c.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"ns1"}`))
 			}
 			if strings.Contains(string(m), "---KA---") {
 				keepAlives.Add(1)
