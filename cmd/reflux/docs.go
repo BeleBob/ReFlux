@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"os"
@@ -87,9 +88,9 @@ func (c Client) docIndex(active string) int {
 	return -1
 }
 
-// docUsers maps every document URL to the client using it, revoked ones
-// included: an old app may still reach for its document, so it is not
-// handed to anyone else unasked.
+// docUsers maps every document URL to the client using it, and to clients
+// revoked less than docQuarantine ago: an old app may still reach for its
+// document for a while, so it is not handed to anyone else that soon.
 func (s Store) docUsers() (map[string]string, error) {
 	users := map[string]string{}
 	clients, err := s.List()
@@ -103,6 +104,9 @@ func (s Store) docUsers() (map[string]string, error) {
 	}
 	revoked, _ := filepath.Glob(filepath.Join(s.Root, "revoked", "*", "client.json"))
 	for _, p := range revoked {
+		if at, ok := revokedAt(filepath.Base(filepath.Dir(p))); ok && time.Since(at) >= docQuarantine {
+			continue
+		}
 		var c Client
 		if b, err := os.ReadFile(p); err == nil && json.Unmarshal(b, &c) == nil {
 			for _, d := range c.Docs() {
@@ -183,6 +187,20 @@ func (s Store) RemoveDoc(name string, i int) (Client, error) {
 	return c, s.Save(c)
 }
 
+// TakeDoc removes the i-th document at the owner's request (RemoveDoc); it
+// goes back to the pool after a quarantine (docstate.go).
+func (s Store) TakeDoc(name string, i int) (Client, error) {
+	c, err := s.Get(name)
+	if err != nil {
+		return Client{}, err
+	}
+	docs := c.Docs()
+	if c, err = s.RemoveDoc(name, i); err != nil {
+		return c, err
+	}
+	return c, s.quarantine([]Doc{docs[i]}, name, time.Now())
+}
+
 // ---- the pool ----
 
 func (s Store) poolPath() string { return filepath.Join(s.Root, "docs-pool.txt") }
@@ -224,11 +242,16 @@ func parseDoc(f []string) (Doc, error) {
 	return Doc{}, errors.New(`expected "type url" or "url"`)
 }
 
-// poolDoc is a pool document and who uses it ("" when free).
+// poolDoc is a pool document and who uses it ("" when free), or why it
+// may not be handed out (State: dead or quarantine, docstate.go).
 type poolDoc struct {
 	Doc
-	User string
+	User  string
+	State *docState
 }
+
+// free: nobody uses it and it may be handed out.
+func (d poolDoc) free() bool { return d.User == "" && d.State == nil }
 
 func (s Store) poolStatus() ([]poolDoc, error) {
 	docs, err := s.pool()
@@ -239,9 +262,17 @@ func (s Store) poolStatus() ([]poolDoc, error) {
 	if err != nil {
 		return nil, err
 	}
+	st, err := s.loadDocsState()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
 	out := make([]poolDoc, len(docs))
 	for i, d := range docs {
 		out[i] = poolDoc{Doc: d, User: users[d.URL]}
+		if st.blocked(d.URL, now) {
+			out[i].State = st.Docs[d.URL]
+		}
 	}
 	return out, nil
 }
@@ -256,7 +287,7 @@ func (s Store) freeDoc(c Client) (Doc, error) {
 	var other *Doc
 	for i := range docs {
 		d := docs[i]
-		if d.User != "" || !transports[d.Transport] || validURL(d.URL) != nil {
+		if !d.free() || !transports[d.Transport] || validURL(d.URL) != nil {
 			continue
 		}
 		if d.Transport == c.Transport {
@@ -360,7 +391,7 @@ func cmdDocs(s Store, args []string, stdout io.Writer) error {
 		if err != nil {
 			return fmt.Errorf("docs remove: %q is not a document number", pos[2])
 		}
-		if c, err = s.RemoveDoc(c.Name, n-1); err != nil {
+		if c, err = s.TakeDoc(c.Name, n-1); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "%s: document %d removed.\n", c.Name, n)
@@ -420,27 +451,88 @@ func cmdPool(s Store, args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "%d document(s) added to %s.\n", n, s.poolPath())
 		return nil
 	}
+	if len(args) > 0 && args[0] == "check" {
+		changes, changed, err := s.checkDocs(time.Now())
+		if changed {
+			if err := apply(s, stdout); err != nil {
+				return err
+			}
+		}
+		for _, ch := range changes {
+			id, a := docChangeMessage(ch)
+			fmt.Fprintln(stdout, stripTags(tr(langEN, id, a...)))
+		}
+		if err == nil && len(changes) == 0 {
+			fmt.Fprintln(stdout, "Checked: no document died (one bad answer is not enough; it takes two checks in a row).")
+		}
+		return err
+	}
+	if len(args) > 0 && args[0] == "recheck" {
+		back, still, err := s.recheckDead(args[1:], time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Back: %d (in the pool after %d h of quarantine), still dead: %d.\n", back, int(docQuarantine.Hours()), still)
+		return nil
+	}
 	if len(args) > 0 {
-		return errors.New("pool: reflux pool [add <url>...]")
+		return errors.New("pool: reflux pool [add <url>... | check | recheck [<url>...]]")
 	}
 	docs, err := s.poolStatus()
 	if err != nil {
 		return err
 	}
+	st, err := s.loadDocsState()
+	if err != nil {
+		return err
+	}
 	if len(docs) == 0 {
 		fmt.Fprintf(stdout, "The pool is empty: reflux pool add <url>... (%s)\n", s.poolPath())
-		return nil
 	}
 	free := 0
 	for _, d := range docs {
 		user := "free"
-		if d.User != "" {
+		switch {
+		case d.User != "":
 			user = d.User
-		} else {
+		case d.State != nil && d.State.State == stateQuarantine:
+			user = "quarantine until " + d.State.Until.Local().Format("02.01 15:04")
+		case d.State != nil:
+			user = d.State.State
+		default:
 			free++
 		}
 		fmt.Fprintf(stdout, "  %-7s %-12s %s\n", d.Transport, user, d.URL)
 	}
-	fmt.Fprintf(stdout, "%d of %d free.\n", free, len(docs))
+	if len(docs) > 0 {
+		fmt.Fprintf(stdout, "%d of %d free.\n", free, len(docs))
+	}
+	if dead := st.deadDocs(); len(dead) > 0 {
+		fmt.Fprintf(stdout, "\nDead (reflux pool recheck [<url>...] to check them again):\n")
+		for _, d := range dead {
+			whose := "from the pool"
+			if d.Client != "" {
+				whose = "was " + d.Client + "'s"
+			}
+			fmt.Fprintf(stdout, "  %-7s %-16s since %s  %s\n    %s\n", d.Transport, whose, d.Since.Local().Format("02.01 15:04"), d.URL, d.Reason)
+		}
+	}
 	return nil
+}
+
+// stripTags drops the HTML tags of a bot message for the terminal.
+func stripTags(s string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range s {
+		switch {
+		case r == '<':
+			in = true
+		case r == '>':
+			in = false
+		case !in:
+			b.WriteRune(r)
+		}
+	}
+	return html.UnescapeString(b.String())
 }

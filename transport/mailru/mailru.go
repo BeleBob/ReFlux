@@ -733,7 +733,7 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return MailruDocsInfo{}, fmt.Errorf("API returned status %d", resp.StatusCode)
+		return MailruDocsInfo{}, &StatusError{Code: resp.StatusCode}
 	}
 
 	bodyBytes, _ := io.ReadAll(resp.Body)

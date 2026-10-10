@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -844,5 +845,38 @@ func TestCarriersGoOutOfTheUplink(t *testing.T) {
 	}
 	if strings.Join(c.carrierAddrs(), ",") != "217.69.139.1,95.163.59.188" {
 		t.Errorf("carriers %v", c.carrierAddrs())
+	}
+}
+
+// check-docs answers by line number, never echoing a document link, and
+// tells a dead document from one it could not check now.
+func TestCheckDocs(t *testing.T) {
+	old := checkDocument
+	t.Cleanup(func() { checkDocument = old })
+	checkDocument = func(transport, url string) (bool, error) {
+		switch {
+		case strings.HasSuffix(url, "/dead"):
+			return true, errors.New("API returned status 404")
+		case strings.HasSuffix(url, "/flaky"):
+			return false, errors.New("timeout")
+		}
+		return false, nil
+	}
+	in := "mailru https://cloud.mail.ru/public/a/ok\n\nhttps://cloud.mail.ru/public/b/dead\nmailru https://cloud.mail.ru/public/c/flaky\nyandex https://disk.yandex.ru/i/x\n"
+	var out strings.Builder
+	if err := checkDocs(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "cloud.mail.ru") {
+		t.Errorf("a link in the answer:\n%s", out.String())
+	}
+	want := []string{
+		`{"line":1,"state":"ok"}`,
+		`{"line":3,"state":"dead","error":"API returned status 404"}`,
+		`{"line":4,"state":"unknown","error":"timeout"}`,
+		`{"line":5,"state":"unknown","error":"no check for yandex documents"}`,
+	}
+	if got := strings.Split(strings.TrimSpace(out.String()), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

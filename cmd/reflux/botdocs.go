@@ -110,7 +110,7 @@ func (b *bot) removeDocAsk(name string, i int) screen {
 
 func (b *bot) removeDoc(name string, i int) screen {
 	return b.changeDocs(name, func() (string, error) {
-		if _, err := b.s.RemoveDoc(name, i); err != nil {
+		if _, err := b.s.TakeDoc(name, i); err != nil {
 			return "", err
 		}
 		return b.tr("ui.docs.removed", i+1), nil
@@ -158,7 +158,7 @@ func (s Store) freeCount() int {
 	}
 	n := 0
 	for _, d := range docs {
-		if d.User == "" && transports[d.Transport] {
+		if d.free() && transports[d.Transport] {
 			n++
 		}
 	}
