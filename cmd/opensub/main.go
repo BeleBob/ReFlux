@@ -50,6 +50,9 @@ func main() {
 	if len(args) == 0 {
 		usage()
 	}
+	if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+		usage()
+	}
 	if args[0] == "config-example" {
 		fmt.Print(exampleConfig)
 		return
@@ -59,6 +62,12 @@ func main() {
 		fatal(err)
 	}
 	cmd, rest := args[0], args[1:]
+	// A flag is never a login or a key's name: "key-add --help" must not make a key called "--help".
+	for _, a := range rest {
+		if strings.HasPrefix(a, "-") {
+			usage()
+		}
+	}
 	switch cmd {
 	case "serve":
 		serve(cfg)
