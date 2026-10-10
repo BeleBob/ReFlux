@@ -58,6 +58,10 @@ func TestInstallOnVDS(t *testing.T) {
 	}
 	script := release("node-v1.0.1", os.Getenv("OPENFLUX_TEST_CORE_SHA"))
 	gh := newFakeReleases(t, os.Getenv("OPENFLUX_TEST_CORE_FILE"), release)
+	// GitHub's paths are this script's repository: the fork follows its own releases.
+	if m := regexp.MustCompile(`(?m)^RELEASE_REPO="([^"]+)"$`).FindSubmatch(body); m != nil {
+		gh.repo = "/" + string(m[1]) + "/"
+	}
 	gh.add("node-v1.0.1", gh.good)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/node-install.sh", func(w http.ResponseWriter, _ *http.Request) { w.Write(script) })
@@ -388,6 +392,8 @@ type fakeReleases struct {
 	cores     map[string][]byte
 	pre       map[string]bool
 	order     []string
+	// repo is the repository's path ("/owner/OpenFlux/") the script asks for.
+	repo string
 }
 
 func newFakeReleases(t *testing.T, coreFile string, script func(version, core string) []byte) *fakeReleases {
@@ -420,7 +426,10 @@ func (f *fakeReleases) prerelease(tag string, core []byte) {
 func (f *fakeReleases) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	const repo = "/p1neappleXpress/OpenFlux/"
+	repo := f.repo
+	if repo == "" {
+		repo = "/p1neappleXpress/OpenFlux/"
+	}
 	p := r.URL.Path
 	switch {
 	case p == "/repos"+repo+"releases":
