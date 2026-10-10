@@ -152,9 +152,11 @@ func (t *DirectTransport) Start() error {
 			utils.Debugf("[DIRECT] exit: listen %s failed: %v", addr, err)
 			return fmt.Errorf("direct: listen %s: %w", addr, err)
 		}
+		t.mu.Lock()
 		t.listener = ln
+		t.mu.Unlock()
 		utils.Debugf("[DIRECT] exit listening on %s (waiting for a client)", ln.Addr().String())
-		go t.acceptLoop()
+		go t.acceptLoop(ln)
 	} else {
 		if t.config.DialAddr == "" {
 			utils.Debugf("[DIRECT] client: DialAddr is empty, refusing to start")
@@ -248,8 +250,10 @@ func (t *DirectTransport) Drops() uint64 { return t.drops.Load() }
 
 // ---- exit mode ----
 
-func (t *DirectTransport) acceptLoop() {
-	utils.Debugf("[DIRECT] acceptLoop: started on %s", t.listener.Addr().String())
+// acceptLoop serves ln, not t.listener: Stop clears that field, and a loop
+// reading it after a Stop dereferenced nil.
+func (t *DirectTransport) acceptLoop(ln net.Listener) {
+	utils.Debugf("[DIRECT] acceptLoop: started on %s", ln.Addr().String())
 	for {
 		select {
 		case <-t.done:
@@ -259,7 +263,7 @@ func (t *DirectTransport) acceptLoop() {
 		}
 
 		utils.Debugf("[DIRECT] acceptLoop: blocking on Accept()")
-		conn, err := t.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-t.done:

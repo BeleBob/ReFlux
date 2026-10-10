@@ -74,3 +74,21 @@ func TestDirectTransportLoopback(t *testing.T) {
 func netListen() (net.Listener, error) { return net.Listen("tcp", "127.0.0.1:0") }
 
 var _ = sync.WaitGroup{}
+
+// Stopping an exit right after Start, before its accept loop reaches
+// Accept, crashed the process: Stop clears the listener field and the loop
+// read it (nil pointer dereference in acceptLoop; a data race under -race).
+func TestDirectExitStopsBeforeAccepting(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		exit := NewDirectTransport(DefaultConfig(), DirectConfig{
+			IsExit:         true,
+			ListenAddr:     "127.0.0.1:0",
+			MaxRecordBytes: 65535,
+		})
+		if err := exit.Start(); err != nil {
+			t.Fatal(err)
+		}
+		_ = exit.Stop()
+	}
+	time.Sleep(50 * time.Millisecond) // let the accept loops run into the closed listeners
+}
