@@ -370,6 +370,7 @@ func (b *bot) watch() {
 			b.checkUpdates(time.Now(), c.AutoUpdate)
 		}
 		b.mu.Unlock()
+		b.docsTick(time.Now())
 		time.Sleep(checkEvery)
 	}
 }

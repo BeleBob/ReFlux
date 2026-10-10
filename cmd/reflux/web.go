@@ -549,7 +549,7 @@ func (w *webServer) clientAction(r *http.Request) (string, error) {
 			return "", err
 		}
 		return back + "?ok=docremoved", change(func() error {
-			if _, err := w.s.RemoveDoc(name, i); err != nil {
+			if _, err := w.s.TakeDoc(name, i); err != nil {
 				return err
 			}
 			return apply(w.s, io.Discard)

@@ -314,9 +314,11 @@ func (s Store) Rename(old, name string) (Client, error) {
 }
 
 // Revoke deletes a channel's key, config and state and keeps its
-// client.json under revoked/ as a record. The caller stops the node first.
+// client.json under revoked/ as a record; its documents go back to the
+// pool after a quarantine (docstate.go). The caller stops the node first.
 func (s Store) Revoke(name string, now time.Time) (string, error) {
-	if _, err := s.Get(name); err != nil {
+	c, err := s.Get(name)
+	if err != nil {
 		return "", err
 	}
 	dir := s.clientDir(name)
@@ -334,6 +336,9 @@ func (s Store) Revoke(name string, now time.Time) (string, error) {
 	}
 	if err := os.Rename(dir, dst); err != nil {
 		return "", err
+	}
+	if err := s.quarantine(c.Docs(), name, now); err != nil {
+		return dst, fmt.Errorf("revoked, but its documents did not go back to the pool: %w", err)
 	}
 	return dst, nil
 }

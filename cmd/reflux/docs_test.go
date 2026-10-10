@@ -155,13 +155,16 @@ func TestDocumentPool(t *testing.T) {
 	if _, err := s.Add("phone", "mailru", testURL); err != nil {
 		t.Fatal(err)
 	}
-	// A revoked client's document is not handed out again.
-	writeFile(t, filepath.Join(s.Root, "revoked", "old-20260901-000000", "client.json"), `{"name":"old","transport":"mailru","url":"`+docC+`"}`)
+	// A client revoked within the quarantine keeps its document; one
+	// revoked longer ago does not (docUsers).
+	recent := "old-" + time.Now().Add(-time.Hour).UTC().Format("20060102-150405")
+	writeFile(t, filepath.Join(s.Root, "revoked", recent, "client.json"), `{"name":"old","transport":"mailru","url":"`+docC+`"}`)
+	writeFile(t, filepath.Join(s.Root, "revoked", "older-20260901-000000", "client.json"), `{"name":"older","transport":"mailru","url":"`+docB+`"}`)
 	docs, err := s.poolStatus()
 	if err != nil || len(docs) != 4 {
 		t.Fatalf("pool %+v %v", docs, err)
 	}
-	if docs[0].Transport != "yandex" || docs[1].User != "phone" || docs[2].Transport != "mailru" || docs[2].User != "" || docs[3].User != "old-20260901-000000" {
+	if docs[0].Transport != "yandex" || docs[1].User != "phone" || docs[2].Transport != "mailru" || docs[2].User != "" || docs[3].User != recent {
 		t.Errorf("pool status %+v", docs)
 	}
 	c, _ := s.Get("phone")

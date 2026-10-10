@@ -184,6 +184,14 @@ func (b *bot) message(text string) screen {
 // press handles a button: it edits the screen it belongs to.
 func (b *bot) press(cb *telegram.Callback) {
 	action, arg, _ := strings.Cut(cb.Data, ":")
+	if action == "pk" || action == "pchk" {
+		b.t.Answer(cb.ID, b.tr("ui.pool.wait"))
+		sc := b.poolPress(action, arg)
+		if err := b.t.EditKeyboard(b.chat, cb.Message.MessageID, sc.text, sc.kb); err != nil && !isNotModified(err) {
+			log.Printf("bot: %v", err)
+		}
+		return
+	}
 	if action == "sp" {
 		// The test takes a while: say so before the spinner times out.
 		b.t.Answer(cb.ID, b.tr("ui.speed.wait"))
@@ -314,6 +322,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.broadcastSend(arg), ""
 	case "rqs":
 		return b.requestsScreen(), ""
+	case "pl":
+		return b.poolScreen(), ""
 	case "inv", "inv-":
 		return b.invitePress(action, arg), ""
 	case "rq", "rq1":
@@ -466,7 +476,8 @@ func (b *bot) home() screen {
 		{b.btn("b.refresh", "home"), b.btn("b.doctor", "doc")},
 		{b.btn("b.clients", "cls"), b.btn("b.add", "add")},
 		{b.btn("b.server", "srv"), b.btn("b.gateway", "gw")},
-		{b.btn("b.speed", "sp"), b.btn("b.settings", "set")},
+		{b.btn("b.pool", "pl"), b.btn("b.speed", "sp")},
+		{b.btn("b.settings", "set")},
 	}
 	if n := len(b.s.pendingRequests()); n > 0 {
 		kb = append(keyboard{{b.btn("b.rq", "rqs", n)}}, kb...)

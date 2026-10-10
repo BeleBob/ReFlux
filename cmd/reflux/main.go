@@ -43,8 +43,11 @@ USAGE
                            access requests from the client bot
   reflux invite [--expires +30|+90|never] [--note <who>] | list | revoke <code>
                            a one-time client bot link that gives access at once
-  reflux pool [add <url>...]
-                           prepared documents (docs-pool.txt): free and taken
+  reflux pool [add <url>... | check | recheck [<url>...]]
+                           prepared documents (docs-pool.txt): free, taken, in
+                           quarantine and dead; check finds and replaces dead
+                           ones now (the bot does it every 15 minutes), recheck
+                           tries dead ones again
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, apply, remove old ReFlux images
