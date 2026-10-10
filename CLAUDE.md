@@ -102,6 +102,14 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   the client's first document (`context` once the main one is removed). Free
   documents come from `docs-pool.txt`; the doctor warns when a client is on a
   backup (IPC status `Active`).
+  Dead documents (`doccheck.go`, `docstate.go`, bot `botpool.go`): every
+  `docCheckEvery` the bot has the egress check clients' and free pool
+  documents (`reflux-egress check-docs`, links on stdin, mail.ru only via
+  `mailru.CheckDocument`); `docDeadAfter` dead answers in a row put one in
+  the dead list of `docs-state.json` and give its client a free pool
+  document (the client bot sends the new link). Documents leaving a client
+  (`TakeDoc`, revoke) sit in quarantine for `docQuarantine` (1 day), then
+  are free; `reflux pool recheck` / the bot's 🔄 bring dead ones back.
   Access requests (`requests.go`; the owner bot `botrequests.go`, the panel
   `webrequests.go`, `reflux requests`): `requests/<telegram id>.json`, pending →
   approved (a client named after the account, a pool document, linked) /
