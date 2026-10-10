@@ -555,7 +555,10 @@ func TestDeleteOwnAccount(t *testing.T) {
 	if code, _ := e.call("DELETE", "/api/v1/account", token, map[string]any{"password": "wrong password!!"}); code != 401 {
 		t.Fatalf("wrong password: %d", code)
 	}
-	if code, _ := e.call("DELETE", "/api/v1/account", token, map[string]any{"password": "correct horse battery"}); code != 200 {
+	if code, _ := e.call("POST", "/api/v1/account/delete", token, map[string]any{"password": "wrong password!!"}); code != 401 {
+		t.Fatalf("wrong password through POST: %d", code)
+	}
+	if code, _ := e.call("POST", "/api/v1/account/delete", token, map[string]any{"password": "correct horse battery"}); code != 200 {
 		t.Fatalf("delete: %d", code)
 	}
 	if code, _ := e.call("GET", "/api/v1/account", token, nil); code != 401 {

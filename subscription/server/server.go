@@ -106,6 +106,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/logout", s.authed(s.handleLogout))
 	mux.HandleFunc("DELETE /api/v1/devices/{id}", s.authed(s.handleRemoveDevice))
 	mux.HandleFunc("DELETE /api/v1/account", s.authed(s.handleDeleteAccount))
+	// The same as DELETE with a body, for HTTP clients that cannot send one.
+	mux.HandleFunc("POST /api/v1/account/delete", s.authed(s.handleDeleteAccount))
 	s.adminRoutes(mux)
 	return http.MaxBytesHandler(noStore(mux), 32<<10)
 }
