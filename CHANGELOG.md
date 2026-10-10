@@ -5,6 +5,34 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.5.1] / node-v1.4.1 - 2026-10-10 (meepo161/OpenFlux)
+
+### Added
+
+- The apps change the documents of a channel already on the server: the node
+  wizard lists the server's channels, "Изменить транспорты" reads one
+  (`node-install.sh show`) and applies the new set in place
+  (`node-install.sh set-transports`). The key, port and encryption context
+  stay, so links handed out keep working; with the channel's profile on the
+  device the wizard builds the new link with the same context, checks the
+  channel and updates the profile. `provision.Conn.Show`,
+  `provision.Conn.SetTransports`, `provision.ShareLinkContext`; the node
+  wizard's `showChannel` / `setTransports`; `mobile.NodeShowChannel`,
+  `mobile.NodeSetTransports`, `mobile.NodeShareLinkContext`.
+
+### Fixed
+
+- Mail.ru Docs: the document server now answers an editor WebSocket that
+  claims to be Chrome with 409 Conflict when the TLS handshake is not
+  Chrome's, so the carrier never joined a document on either side. It
+  presents itself as Firefox, which the server accepts.
+- cups.online: a lost message no longer stalls a member's stream. A part of a
+  packet still waiting after `StreamResyncAfter` (2 s) is given up and the next
+  message starts the stream afresh; before, every later packet of that member
+  (resends too) was lost until a length happened to line the stream up again.
+- `TestInstallOnVDS` (the Node install workflow) answers the fork's own release
+  repository, so the updater steps run against the fake GitHub again.
+
 ## [0.5.0] / node-v1.4.0 - 2026-10-10 (meepo161/OpenFlux)
 
 The fork on p1neappleXpress/OpenFlux 0.4.2: its script (JS) transports, Mail.ru and
