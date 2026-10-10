@@ -33,6 +33,10 @@
 #                                                 channel to this core)
 #        node-install.sh set-cookies CONFIG_FILE  (run as root: replace a
 #                                                 channel's Yandex login)
+#        node-install.sh set-transports CONFIG_FILE (run as root: add or
+#                                                 remove the documents of a
+#                                                 running channel; key, port
+#                                                 and encryption context stay)
 #        node-install.sh update                   (run as root, by the timer:
 #                                                 move every channel to the
 #                                                 newest node-v* release)
@@ -611,7 +615,8 @@ Mode = l4
 EncryptionKeyFile = $CONF_ROOT/$CHANNEL/encryption-key
 CookieStore = $STATE_ROOT/$CHANNEL/cookies.json
 EOF
-    context=$(session_context)
+    # set-transports keeps the channel's context: links already handed out were made with it.
+    if [ "${CONTEXT_KEEP:-}" = 1 ]; then context=$KEPT_CONTEXT; else context=$(session_context); fi
     [ -n "$context" ] && printf 'URL = %s\n' "$context"
     [ -n "$URL" ] && printf '\n[Transport vyandex]\nType = vyandex\nPriority = 100\nURL = %s\n' "$URL"
     [ -n "$YANDEX" ] && printf '\n[Transport yandex]\nType = yandex\nPriority = 95\nURL = %s\n' "$YANDEX"
@@ -931,6 +936,55 @@ cmd_set_cookies() {
     printf '{"ok":true,"channel":"%s"}\n' "$CHANNEL"
 }
 
+# set-transports CONFIG_FILE: changes the transports of a channel that already
+# runs (add or remove a document). The key, the port, the cookies and the
+# encryption context stay, so the links handed out keep working; the node is
+# restarted, and if it does not come back the old node.conf is put back.
+cmd_set_transports() {
+    [ "$(id -u)" = 0 ] || fail set-transports "нужны права root (sudo)"
+    read_config "$@"
+    check_channel
+    dir="$CONF_ROOT/$CHANNEL"
+    [ -f "$dir/node.conf" ] || fail set-transports "канала $CHANNEL нет на сервере"
+    KEY=$(cat "$dir/encryption-key" 2>/dev/null)
+    # The direct transport's listen port is what the node runs on; the port file mirrors it.
+    PORT=$(sed -n 's/^Listen = [^:]*:\([0-9]*\)$/\1/p' "$dir/node.conf" | tail -n 1)
+    valid_key "$KEY" || fail set-transports "ключ канала $CHANNEL не читается"
+    valid_port "$PORT" || fail set-transports "порт канала $CHANNEL не читается"
+    printf '%s\n' "$PORT" > "$dir/port" && chown "root:$NODE_USER" "$dir/port" && chmod 0644 "$dir/port"
+    check_transports
+    [ -n "$URL$YANDEX$MAILRU$BOARDS$CUPS" ] || fail input "нужен хотя бы один документ: без него канал не нужен"
+
+    # The context is the URL line before the first [Transport] section.
+    KEPT_CONTEXT=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
+    CONTEXT_KEEP=1
+    cp -p "$dir/node.conf" "$dir/node.conf.prev" || fail set-transports "не удалось сохранить прежний node.conf"
+    tmp=$(mktemp "$dir/.node.conf.XXXXXX") || fail set-transports "не удалось создать временный файл"
+    write_node_conf > "$tmp" && chown "root:$NODE_USER" "$tmp" && chmod 0640 "$tmp" && mv -f "$tmp" "$dir/node.conf" \
+        || { rm -f "$tmp"; fail set-transports "не удалось записать node.conf"; }
+    [ -n "$COOKIES" ] && { write_cookies || fail set-transports "не удалось сохранить вход в Яндекс на сервере"; }
+
+    if ! systemctl restart "openflux-node@$CHANNEL" >/dev/null 2>&1; then
+        set_transports_rollback
+        fail set-transports "не удалось перезапустить openflux-node@$CHANNEL"
+    fi
+    sleep 4
+    if ! systemctl is-active --quiet "openflux-node@$CHANNEL"; then
+        logs=$(journalctl -u "openflux-node@$CHANNEL" -n 8 -o cat --no-pager 2>/dev/null | tail -n 8)
+        set_transports_rollback
+        fail set-transports "нода не поднялась с новыми транспортами, вернули прежние: $logs"
+    fi
+    rm -f "$dir/node.conf.prev"
+    printf '{"ok":true,"channel":"%s","transports":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")"
+}
+
+# set_transports_rollback: the previous node.conf back, and the node restarted on it.
+set_transports_rollback() {
+    dir="$CONF_ROOT/$CHANNEL"
+    [ -f "$dir/node.conf.prev" ] && mv -f "$dir/node.conf.prev" "$dir/node.conf"
+    systemctl restart "openflux-node@$CHANNEL" >/dev/null 2>&1
+}
+
 # autoupdate on|off: turns the core updater on or off for the whole server,
 # e.g. on channels installed before the wizard offered it.
 cmd_autoupdate() {
@@ -966,7 +1020,8 @@ case "${1:-}" in
     status) cmd_status ;;
     upgrade) cmd_upgrade ;;
     set-cookies) shift; cmd_set_cookies "$@" ;;
+    set-transports) shift; cmd_set_transports "$@" ;;
     update) cmd_update ;;
     autoupdate) shift; cmd_autoupdate "$@" ;;
-    *) fail usage "usage: node-install.sh probe|plan|apply|remove|list|uninstall|status|upgrade|set-cookies|update|autoupdate" ;;
+    *) fail usage "usage: node-install.sh probe|plan|apply|remove|list|uninstall|status|upgrade|set-cookies|set-transports|update|autoupdate" ;;
 esac
