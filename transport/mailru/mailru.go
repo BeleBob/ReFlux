@@ -29,7 +29,11 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
-const mailruUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+// mailruUserAgent is what the carrier tells Mail.ru it is. A Firefox one: the
+// document server answers a WebSocket upgrade that claims to be Chrome (any
+// version) with 409 Conflict when the TLS handshake is not Chrome's, so a
+// Chrome agent from Go never joins the document, while a Firefox one does.
+const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0"
 
 var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 
