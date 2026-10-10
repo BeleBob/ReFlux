@@ -1,6 +1,7 @@
 package mobile
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
@@ -41,6 +42,23 @@ func CurrentTransport() string {
 			return t
 		}
 		return name
+	}
+	if classic != "" && (IsConnected() || ProxyIsConnected() || ExitIsConnected()) {
+		return classic
+	}
+	return ""
+}
+
+// CurrentTransports names every carrier traffic currently goes through,
+// joined by ",": several in Session mode when they share the highest
+// priority. Session carriers go by name ("boards", "boards-2"), a classic
+// connection by its type; "" when nothing is connected.
+func CurrentTransports() string {
+	route.mu.Lock()
+	s, classic := route.session, route.classic
+	route.mu.Unlock()
+	if s != nil {
+		return strings.Join(s.ActiveTransports(), ",")
 	}
 	if classic != "" && (IsConnected() || ProxyIsConnected() || ExitIsConnected()) {
 		return classic

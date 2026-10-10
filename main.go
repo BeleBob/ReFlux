@@ -14,14 +14,14 @@ import (
 
 	"github.com/p1neappleXpress/OpenFlux/netbind"
 	"github.com/p1neappleXpress/OpenFlux/socks5"
+	"github.com/p1neappleXpress/OpenFlux/streamproxy"
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
-	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/ipc"
-	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/manager"
-	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
-	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/transport/phpbox"
+	"github.com/p1neappleXpress/OpenFlux/transport/registry"
+	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/tunnel"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -113,6 +113,18 @@ func transportHasCookies(t string) bool {
 	return false
 }
 
+// sessionCookieKey is cookieKey for a transport of a Session. A script
+// transport keeps what its setup page was given (a token, a pairing) in the
+// same store, so the user is not asked again at the next start; its key names
+// the script, because two scripts may share one URL.
+func sessionCookieKey(spec transportSpec, maxUid string) string {
+	if spec.Type == "script" {
+		name, _ := spec.Params["name"].(string)
+		return "script:" + name + " " + spec.URL
+	}
+	return cookieKey(spec.Type, spec.URL, maxUid)
+}
+
 // cookieKey identifies a session inside the cookie store. For most transports
 // this is the document URL; for oneme it would be maxUid, but oneme does not
 // use the store at all.
@@ -180,6 +192,27 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == "--make-link" {
 		os.Exit(runMakeLink(os.Args[2], os.Stdin, os.Stdout))
 	}
+	// A downloaded script transport's trust report, for an app (desktop) that
+	// cannot call transport/script in-process the way the mobile gomobile
+	// bindings do: --inspect-script --data=<path> [--sig=<path>] [--pubkey=<hex>]
+	if len(os.Args) >= 2 && os.Args[1] == "--script-settings" {
+		os.Exit(runScriptSettings(os.Args[2:], os.Stdout))
+	}
+	if len(os.Args) >= 2 && os.Args[1] == "--inspect-script" {
+		os.Exit(runInspectScript(os.Args[2:], os.Stdout))
+	}
+	// Updates of installed script transports, JSON reports on stdout; see
+	// script_cli.go. The apps decide only when to call them and what to say.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "--check-script-update":
+			os.Exit(runCheckScriptUpdate(os.Args[2:], os.Stdout))
+		case "--apply-script-update":
+			os.Exit(runApplyScriptUpdate(os.Args[2:], os.Stdout))
+		case "--rollback-script":
+			os.Exit(runRollbackScript(os.Args[2:], os.Stdout))
+		}
+	}
 	fmt.Print("written by p1neappleXpress\n")
 
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
@@ -220,6 +253,9 @@ func main() {
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
+	scriptPath := flag.String("script-path", "", "Path to the script transport's <name>.flux or <name>.js (needs <name>.js.sig beside a bare .js)")
+	scriptPubkey := flag.String("script-pubkey", "", "Hex-encoded ed25519 public key the script transport's signature is checked against")
+	scriptName := flag.String("script-name", "", "Carrier name for the script transport (default: the name in its own info())")
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -273,6 +309,8 @@ TRANSPORT  (single-transport mode)
   -t, --transport=cupsonline   Cups.online interview rooms.
   -t, --transport=mailru       Mail.ru Docs over WebSocket.
   -t, --transport=direct       Plain TCP to a self-hosted exit.
+  -t, --transport=script       A signed JS (goja) transport. Session only
+                               (needs --encryption-key-file): see --script-*.
   -u, --url=<URL>              Document URL.
 
 TRANSPORTS  (multi-transport session; requires --encryption-key-file)
@@ -294,6 +332,12 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
       --oneme-uid=<uid>        MAX user id for the oneme transport.
       --direct-dial=<addr>     DirectTransport: exit host:port (client).
       --direct-listen=<addr>   DirectTransport: listen addr on exit.
+      --script-path=<path>     Script transport: path to <name>.flux or
+                               <name>.js (needs <name>.js.sig beside a bare
+                               .js). Also used with --transport=script.
+      --script-pubkey=<hex>    Script transport: author's ed25519 public key.
+      --script-name=<name>     Script transport: carrier name (default: the
+                               name the script's own info() reports).
 
 INBOUND  (only with --role=client)
   -i, --inbound=tun            utun (macOS) / Wintun (Windows, needs administrator
@@ -445,6 +489,22 @@ DEPRECATED (removed in v2)
 					"exit":  isExit,
 				}
 			}
+			if spec.Type == "script" {
+				spec.Params = map[string]interface{}{
+					"path":   t.Values["Path"],
+					"pubkey": t.Values["Pubkey"],
+					"name":   t.Values["Name"],
+				}
+				// Settings the user saved in the script's wizard: one encoded line, because
+				// a .conf value ends at '#' or ';' and a setting may hold either.
+				if enc := t.Values["Params"]; enc != "" {
+					settings, err := script.DecodeSettings(enc)
+					if err != nil {
+						log.Fatalf("--config: [Transport %s] Params: %v", t.Name, err)
+					}
+					spec.Params["settings"] = settings
+				}
+			}
 			if n := t.Values["Network"]; n != "" {
 				if !validNetwork(n) {
 					log.Fatalf("--config: [Transport %s] Network = %q: cellular, wifi or ethernet", t.Name, n)
@@ -499,7 +559,10 @@ DEPRECATED (removed in v2)
 	}
 
 	// Platform defaults. The recommended client path is utun on macOS and
-	// SOCKS5 everywhere else (see README for details).
+	// SOCKS5 everywhere else (see README for details). Stream mode keeps
+	// SOCKS5 unless the full tunnel is asked for by name: it was a proxy
+	// first, and the apps' proxy profiles do not pass --inbound.
+	inboundChosen := *inbound != ""
 	if *inbound == "" {
 		if runtime.GOOS == "darwin" {
 			*inbound = inboundTUN
@@ -545,6 +608,25 @@ DEPRECATED (removed in v2)
 	// slower than l3 (SNAT/DNAT: Linux as root, Windows with WinDivert).
 	if *role == roleExit && *mode == "l4" {
 		log.Printf("warning: exit on l4 (gVisor). l3 is faster: Linux as root, Windows as Administrator.")
+	}
+
+	// --mode=stream: the client speaks the phpbox stream mux (OPEN/DATA/CLOSE
+	// frames) over the transport instead of IP packets through gVisor, and a
+	// local SOCKS5 hands each app connection to a mux stream. The exit is a
+	// phpbox exit (deploy/phpbox over cups). This is a circuit-level TCP
+	// tunnel, not L7 - the exit never parses the application protocol.
+	// The debug level is set here, not only further down: this branch returns before that code runs.
+	if *role == roleClient && *mode == "stream" {
+		utils.SetLevel(*debug)
+		if *sensitive || *sensitiveAlias {
+			utils.SetSensitive(true)
+		}
+		if *inbound == inboundTUN && inboundChosen {
+			runStreamTUN(*transportType, globalDocUrl)
+			return
+		}
+		runStreamClient(*transportType, globalDocUrl, *socksAddr, *httpProxyAddr, *ipcSocketPath)
+		return
 	}
 
 	exitMode, err := tunnel.ParseExitMode(*mode)
@@ -647,6 +729,7 @@ DEPRECATED (removed in v2)
 				"listen":  *directListen,
 				"is_exit": isExit,
 			},
+			"script": {"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName},
 		}
 		specs = buildTransportSpecs(parsed, urls, extra)
 	} else {
@@ -666,6 +749,11 @@ DEPRECATED (removed in v2)
 		if *transportType == "direct" {
 			specs[0].Params = map[string]interface{}{
 				"dial": *directDial, "listen": *directListen, "is_exit": isExit,
+			}
+		}
+		if *transportType == "script" {
+			specs[0].Params = map[string]interface{}{
+				"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName,
 			}
 		}
 	}
@@ -774,10 +862,10 @@ DEPRECATED (removed in v2)
 		// saved; the Manager routes cookie control messages by name.
 		if store != nil {
 			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) {
+				if !transportHasCookies(spec.Type) && spec.Type != "script" {
 					continue
 				}
-				if err := managerInst.UseCookieStore(store, spec.Name, cookieKey(spec.Type, spec.URL, maxUid)); err != nil {
+				if err := managerInst.UseCookieStore(store, spec.Name, sessionCookieKey(spec, maxUid)); err != nil {
 					utils.Debugf("[COOKIE] replay %s: %v", spec.Name, err)
 				}
 			}
@@ -801,22 +889,22 @@ DEPRECATED (removed in v2)
 
 			// Checks for local transports go to the app as-is; checks the
 			// exit reports are marked Remote, to be passed from its address.
-			managerInst.SetCaptchaNotifier(func(name, url, reason string) {
-				_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-					Transport: name, URL: url, Reason: reason,
-				})
+			managerInst.SetCaptchaNotifier(func(name, url, html, reason string) {
+				_ = srv.SendCookiesRequest(localCheckRequest(name, url, html, reason))
 			})
 			if *role == roleClient {
 				demux = transport.NewPortDemux(managerInst, authProxyPortLo, authProxyPortHi)
 				authProxy := &remoteAuthProxy{demux: demux}
-				managerInst.SetRemoteAuthNotifier(func(name, url, reason string) {
+				managerInst.SetRemoteAuthNotifier(func(name, url, html, reason string) {
+					if remoteCheckRequest(name, url, html, reason, "") == nil {
+						log.Printf("remote check from %s ignored: its address is not a site this machine may open and it brought no page", name)
+						return
+					}
 					proxy, err := authProxy.Addr()
 					if err != nil {
 						log.Printf("remote auth proxy: %v", err)
 					}
-					_ = srv.SendCookiesRequest(&ipc.CookiesRequestPayload{
-						Transport: name, URL: url, Reason: reason, Remote: true, Proxy: proxy,
-					})
+					_ = srv.SendCookiesRequest(remoteCheckRequest(name, url, html, reason, proxy))
 				})
 			}
 		}
@@ -830,30 +918,24 @@ DEPRECATED (removed in v2)
 	} else {
 		// Classic single-transport path without a Session: no key (the
 		// Session needs one), or a bench role.
-		var inner transport.Transport
+		// The types the classic path serves; the registry builds them.
 		switch *transportType {
-		case "boards":
-			inner = yandex.NewBoardsTransport(globalDocUrl, config)
-		case "vyandex":
-			t, err := newVolgaTransport(globalDocUrl, config)
-			if err != nil {
-				log.Fatalf("vyandex: %v", err)
-			}
-			inner = t
-		case "yandex":
-			inner = yandex.NewYandexDocsTransport(globalDocUrl, config)
-		case "oneme":
-			uidint, _ := strconv.ParseInt(maxUid, 10, 64)
-			inner = oneme.NewOneMeTransport(isExit, maxToken, uidint, config)
-		case "cupsonline":
-			c := cupsonline.NewCupsonlineTransport(globalDocUrl, config, !isExit)
-			rooms[specs[0].Name] = c
-			inner = c
-		case "mailru":
-			inner = mailru.NewMailruDocsTransport(globalDocUrl, config)
+		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "mailru":
 		default:
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}
+		inner, err := registry.New(*transportType, globalDocUrl,
+			map[string]interface{}{"token": maxToken, "uid": maxUid, "exit": isExit},
+			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile})
+		if err != nil {
+			log.Fatalf("%s: %v", *transportType, err)
+		}
+		if r, ok := inner.(roomLister); ok {
+			rooms[specs[0].Name] = r
+		}
+
+		// The carrier itself, before the codec and encryption wrap it: the one that raises checks.
+		carrier := inner
 
 		// Persist cookie exchanger for the legacy path.
 		if store != nil {
@@ -894,6 +976,7 @@ DEPRECATED (removed in v2)
 			}
 			defer srv.Close()
 			statusServer = srv
+			wireCheckNotifier(carrier, srv)
 		}
 	}
 
@@ -920,9 +1003,11 @@ DEPRECATED (removed in v2)
 
 	if statusServer != nil {
 		if managerInst != nil {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport) })
+			utils.SafeGo("ipc-status", func() {
+				ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport, managerInst.Session().ActiveTransports)
+			})
 		} else {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil) })
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil) })
 		}
 	}
 
@@ -1006,7 +1091,7 @@ type statusSource interface {
 
 // ipcStatusLoop reports to the app every second: whether a carrier reaches
 // the peer, traffic totals, uptime and (Sessions) the active carrier.
-func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string) {
+func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string) {
 	started := time.Now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -1021,6 +1106,9 @@ func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string) {
 		}
 		if active != nil {
 			p.Active = active()
+		}
+		if activeAll != nil {
+			p.ActiveAll = activeAll()
 		}
 		_ = srv.SendStatus(p)
 	}
@@ -1058,6 +1146,90 @@ func runExit(trans transport.Transport, exitMode tunnel.ExitMode) {
 	}
 
 	select {}
+}
+
+// runStreamClient runs the --mode=stream client: a raw transport carries the
+// phpbox stream mux, and a local SOCKS5 (and optional HTTP) proxy dials each
+// app connection out as a mux stream to the phpbox exit. No gVisor, no IP
+// packets. The proxying itself is package streamproxy, shared with the
+// mobile bridges.
+// streamCarrier builds the carrier the stream mux rides.
+func streamCarrier(transportType, url string) phpbox.Carrier {
+	switch transportType {
+	case "cupsonline", "yandex", "", "vyandex", "mailru":
+	default:
+		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
+	}
+	t, err := registry.New(transportType, url, nil, registry.Options{
+		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile,
+	})
+	if err != nil {
+		log.Fatalf("--mode=stream %s: %v", transportType, err)
+	}
+	carrier, ok := t.(phpbox.Carrier)
+	if !ok {
+		log.Fatalf("--mode=stream: transport %q cannot carry a stream", transportType)
+	}
+	return carrier
+}
+
+// runStreamTUN is the stream mode as a full tunnel (--inbound=tun): the
+// system's traffic goes into a local stack that opens one mux stream per TCP
+// connection (tunnel.StreamNet, which is a transport, so the utun/Wintun
+// client runs on it as it does on any other).
+func runStreamTUN(transportType, url string) {
+	sn := tunnel.NewStreamNet(streamCarrier(transportType, url))
+	if err := sn.Start(); err != nil {
+		log.Fatalf("--mode=stream: %v", err)
+	}
+	log.Printf("Running as CLIENT (stream mux over %s, full tunnel)", transportType)
+	runClientTUN(sn)
+}
+
+func runStreamClient(transportType, url, socksAddr, httpProxyAddr, ipcSocket string) {
+	carrier := streamCarrier(transportType, url)
+	p, err := streamproxy.Start(streamproxy.Options{Carrier: carrier, Socks: socksAddr, HTTP: httpProxyAddr, Label: transportType})
+	if err != nil {
+		log.Fatalf("--mode=stream: %v", err)
+	}
+	defer p.Stop()
+
+	// The app's IPC bridge works here too: traffic totals for its speed counters.
+	if ipcSocket != "" {
+		var exchanger transport.CookieExchanger
+		if x, ok := carrier.(transport.CookieExchanger); ok {
+			exchanger = x
+		}
+		srv := ipc.NewServer(ipcSocket, &coreIPCHandler{exchanger: exchanger})
+		if err := srv.Listen(); err != nil {
+			log.Fatalf("IPC listen %s: %v", ipcSocket, err)
+		}
+		defer srv.Close()
+		statusServer = srv
+		go streamStatusLoop(srv, p)
+	}
+
+	if httpProxyAddr != "" {
+		log.Printf("HTTP proxy on %s", httpProxyAddr)
+	}
+	log.Printf("Running as CLIENT (stream mux over %s, SOCKS5 on %s)", transportType, socksAddr)
+	select {}
+}
+
+// streamStatusLoop reports the stream client to the app every second.
+func streamStatusLoop(srv *ipc.Server, p *streamproxy.Proxy) {
+	started := time.Now()
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		_ = srv.SendStatus(&ipc.StatusPayload{
+			Running:   true,
+			Connected: p.Connected(),
+			BytesIn:   uint64(p.BytesReceived()),
+			BytesOut:  uint64(p.BytesSent()),
+			UptimeMs:  time.Since(started).Milliseconds(),
+		})
+	}
 }
 
 func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr string, exitMode tunnel.ExitMode) {

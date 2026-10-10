@@ -28,9 +28,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -64,7 +64,7 @@ jobs:
           build darwin  arm64
           cd dist && sha256sum openflux-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openflux-${{ steps.version.outputs.value }}
           path: dist/*
@@ -80,7 +80,16 @@ jobs:
           # The release shows its CHANGELOG.md section, then what the assets are.
           awk -v v="${tag#v}" 'index($0, "## [")==1 { if (f) exit; f = (index($0, "## [" v "]") == 1); next } f' CHANGELOG.md > notes.md
           printf '\n%s\n' "Кросс-платформенная сборка CLI (клиент/выходная нода): \`openflux-<os>-<arch>[.exe]\`. Контрольные суммы — в \`SHA256SUMS.txt\`. Для установки выходной ноды по SSH из приложения используется отдельный релиз \`node-v*\` (см. deploy/node-install.sh)." >> notes.md
-          gh release create "$tag" dist/* \
-            --title "OpenFlux $tag" \
-            --generate-notes \
-            --notes-file notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # The tag was moved to rebuild an existing release: replace its
+            # assets and refresh the notes instead of failing on create.
+            generated=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" --jq .body)
+            printf '\n%s\n' "$generated" >> notes.md
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --title "OpenFlux $tag" --notes-file notes.md
+          else
+            gh release create "$tag" dist/* \
+              --title "OpenFlux $tag" \
+              --generate-notes \
+              --notes-file notes.md
+          fi

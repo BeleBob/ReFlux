@@ -21,7 +21,6 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/p1neappleXpress/OpenFlux/netbind"
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -185,7 +184,7 @@ func authorizeWithJar(docURL string, jar http.CookieJar) (*volgaAuth, error) {
 	session := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
-			DialContext:         netbind.DialContext,
+			DialContext:         dialIPv4First,
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
@@ -439,10 +438,6 @@ func CheckVolgaDocument(docURL string, jar http.CookieJar) (VolgaDocument, error
 	return VolgaDocument{DocID: a.DocID, Editable: a.Action == "" || a.Action == "edit"}, nil
 }
 
-func authorize(docURL string) (*volgaAuth, error) {
-	return authorizeWithJar(docURL, nil)
-}
-
 func getStr(m map[string]interface{}, key string) string {
 	if m == nil {
 		return ""
@@ -550,7 +545,7 @@ type relayClient struct {
 
 func newRelayClient(auth *atomic.Pointer[volgaAuth], cfg VolgaConfig, stats *VolgaStats) *relayClient {
 	tr := &http.Transport{
-		DialContext:         netbind.DialContextFor(cfg.Network),
+		DialContext:         dialIPv4FirstOn(cfg.Network),
 		MaxIdleConns:        cfg.MaxIdleConns,
 		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
 		IdleConnTimeout:     cfg.IdleConnTimeout,
@@ -971,7 +966,7 @@ func (w *wsListener) connect() error {
 	header.Set("Cookie", strings.Join(cookieParts, "; "))
 
 	dialer := websocket.Dialer{
-		NetDialContext:   netbind.DialContextFor(w.config.Network),
+		NetDialContext:   dialIPv4FirstOn(w.config.Network),
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
 		ReadBufferSize:   w.config.WSReadBufferSize,
 		WriteBufferSize:  w.config.WSWriteBufferSize,
@@ -1163,7 +1158,7 @@ type YandexVolgaTransport struct {
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
-	errNotifier func(err error, transportName, url, reason string)
+	errNotifier func(err error, transportName, url, html, reason string)
 
 	keepAliveStop chan struct{}
 }
@@ -1189,7 +1184,7 @@ func NewYandexVolgaTransportWithConfig(docURL string, cfg transport.TransportCon
 
 // SetErrorNotifier installs a callback for out-of-band errors such as
 // ErrCaptchaRequired or ErrLoginRequired. Called once by the manager.
-func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, reason string)) {
+func (t *YandexVolgaTransport) SetErrorNotifier(fn func(err error, transportName, url, html, reason string)) {
 	t.errNotifier = fn
 }
 
@@ -1207,7 +1202,7 @@ func (t *YandexVolgaTransport) Start() error {
 				reason = "login"
 			}
 			if t.errNotifier != nil {
-				t.errNotifier(err, "vyandex", t.docURL, reason)
+				t.errNotifier(err, "vyandex", t.docURL, "", reason)
 			}
 		}
 		return fmt.Errorf("auth: %w", err)

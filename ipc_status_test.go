@@ -32,7 +32,7 @@ func TestIPCStatusWithoutSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srv.Close()
-	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil)
+	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil, nil)
 
 	c, err := ipc.Dial(path)
 	if err != nil {
