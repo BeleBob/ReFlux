@@ -5,14 +5,30 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.5.0] / node-v1.4.0 - 2026-10-10 (meepo161/OpenFlux)
+
+The fork on p1neappleXpress/OpenFlux 0.4.2: its script (JS) transports, Mail.ru and
+Yandex fixes, and the phpbox carrier, with the fork's bonding, node wizard, and
+per-carrier network binding.
+
+### Added
+
+- Adding and removing documents on a node that already runs: `node-install.sh
+  set-transports CONFIG` (`provision` / the apps' node management call it over SSH).
+  The key, the port, the cookies and the encryption context stay, so links already
+  handed out keep working. The node is restarted; if it does not come back up on
+  the new config, the previous one is restored.
+- Script (JS) transports, phpbox carrier and the rest of p1neappleXpress 0.4.0-0.4.2
+  (see the upstream sections below).
+
 ### Changed
-- Merged p1neappleXpress/OpenFlux 0.4.2 into the fork (with bonding and the fork's node wizard).
-  Upstream brings the script (JS) transports, the Mail.ru and Yandex fixes, and the IPv4-first
-  dialing of Yandex carriers. The fork keeps its per-carrier `Network` binding: every Yandex
-  dial goes through `dialIPv4FirstOn(network)`, so a bonded carrier still leaves its own interface.
-- The Yandex captcha stays a client job: the check is passed in the app and the resulting cookies
-  reach the exit over the Session (`mobile.OfferExitCookies`), so one carrier's cookies serve the
-  others when a session cookie expires.
+
+- Merged p1neappleXpress/OpenFlux 0.4.2 into the fork. The Yandex carriers dial IPv4
+  first, through the carrier's own network binding (`dialIPv4FirstOn`), so bonded
+  carriers keep their interface.
+- The Yandex captcha stays a client job: the check is passed in the app and the
+  cookies reach the exit over the Session (`mobile.OfferExitCookies`), so one
+  carrier's cookies serve the others when a session cookie expires.
 
 ## [0.4.0] / node-v1.3.0 - 2026-09-30 (meepo161/OpenFlux)
 
