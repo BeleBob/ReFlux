@@ -63,6 +63,9 @@ type DocSession struct {
 	UserID     string
 	writeMu    sync.Mutex
 	lastWrite  atomic.Int64 // unix nanoseconds of the last successful write
+	// silence is how long the server may say nothing before the
+	// connection counts as dead (engineIOSilence).
+	silence time.Duration
 }
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
@@ -143,7 +146,11 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 	// Engine.IO open:
 	//   0{"sid":"...", ...}
 	if err := waitFor(func(text string) bool {
-		return strings.HasPrefix(text, "0{")
+		if !strings.HasPrefix(text, "0{") {
+			return false
+		}
+		session.silence = engineIOSilence(text[1:])
+		return true
 	}); err != nil {
 		return fmt.Errorf("mailru: wait for Engine.IO open: %w", err)
 	}
@@ -412,6 +419,9 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 
 		connectedAt := time.Now()
 		for t.IsRunning() {
+			if session.silence > 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(session.silence))
+			}
 			_, message, err := conn.ReadMessage()
 			if err != nil {
 				utils.Debugf("[M-DOCS] Read error: %v", err)
