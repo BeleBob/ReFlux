@@ -5,6 +5,28 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-11 (meepo161/OpenFlux)
+
+### Added
+
+- Subscription service `opensub` (`cmd/opensub`, `subscription/`): the owner of
+  nodes sells or gives access to them without handing out documents, keys or
+  SSH. People make an account in the app (login and password, no email; a
+  recovery key shown once), get a trial, pay (a manual provider: the owner
+  marks the order paid) and press "Подключить"; the service answers with the
+  locations built from the owner's node channels (`/etc/openflux/…` channel
+  files), re-read when they change. Keys without an account
+  (`openflux://sub?…`), devices per plan, password change and recovery,
+  account deletion; bcrypt over a SHA-256 prehash, rate limits, a self-signed
+  TLS certificate whose SHA-256 is in the key (pinned by the apps). The owner
+  runs it with `opensub serve` and manages it with `opensub users | grant |
+  ban | key-add | orders | paid …`. The whole design, every user step and edge
+  case: docs/subscriptions.ru.md. Release assets: `opensub-linux-amd64`,
+  `opensub-linux-arm64`.
+- `subscription.Invite`, `subscription.Document`: the key and the subscription
+  document the apps read (profiles are `openflux://v1/…` links, checked with
+  the same reader as imported ones).
+
 ## [0.5.1] / node-v1.4.1 - 2026-10-10 (meepo161/OpenFlux)
 
 ### Added
