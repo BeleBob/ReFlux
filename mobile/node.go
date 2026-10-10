@@ -216,6 +216,52 @@ func NodeSetCookies(channel, documentURL, cookieHeader, sudoPassword string) str
 	return result(nil)
 }
 
+// NodeShowChannel reads an installed channel: its documents, port, state
+// and encryption context, as {"ok":true,"channel":{...}} (see
+// provision.ChannelInfo). The key stays on the server.
+func NodeShowChannel(channel, sudoPassword string) string {
+	conn, err := nodeConn()
+	if err != nil {
+		return failure(err, nil)
+	}
+	info, err := conn.Show(channel, sudoPassword)
+	if err != nil {
+		return failure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+	}
+	return result(map[string]interface{}{"channel": info})
+}
+
+// NodeSetTransports changes the documents of an installed, running channel
+// (transportsJSON as for NodePlan; direct stays). Its key, port and
+// encryption context stay, so its links keep working. cookieHeader, when
+// not empty, is a new Yandex sign-in for the channel's Yandex document.
+// Answers like NodeShowChannel with the channel as it is now.
+func NodeSetTransports(channel, transportsJSON, cookieHeader, sudoPassword string) string {
+	conn, err := nodeConn()
+	if err != nil {
+		return failure(err, nil)
+	}
+	ts, err := nodeTransports(transportsJSON)
+	if err != nil {
+		return failure(err, nil)
+	}
+	var cookies string
+	if cookieHeader != "" {
+		if cookies, err = provision.ChannelCookies(ts, cookieHeader); err != nil {
+			return failure(err, nil)
+		}
+	}
+	if err := conn.SetTransports(channel, ts, cookies, sudoPassword); err != nil {
+		return failure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+	}
+	appendLog("[NODE] Транспорты канала " + channel + " изменены")
+	info, err := conn.Show(channel, sudoPassword)
+	if err != nil {
+		return failure(err, nil)
+	}
+	return result(map[string]interface{}{"channel": info})
+}
+
 // NodeSignedIn reports whether a WebView Cookie header holds a Yandex login.
 func NodeSignedIn(cookieHeader string) bool {
 	_, signedIn, err := provision.CookieStore("x", cookieHeader)
@@ -420,4 +466,15 @@ func NodeShareLink(name, transportsJSON, key, host string, port int) (string, er
 		return "", err
 	}
 	return provision.ShareLink(name, key, host, port, ts)
+}
+
+// NodeShareLinkContext is NodeShareLink for an installed channel whose
+// encryption context is set (NodeShowChannel's "context"): the link keeps it
+// whatever the channel's first document is now.
+func NodeShareLinkContext(name, transportsJSON, key, host string, port int, context string) (string, error) {
+	ts, err := nodeTransports(transportsJSON)
+	if err != nil {
+		return "", err
+	}
+	return provision.ShareLinkContext(name, key, host, port, ts, context)
 }

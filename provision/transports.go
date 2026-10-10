@@ -137,6 +137,14 @@ func SessionContext(ts []ChannelTransport) string {
 // priority order and direct to host:port as the backup. It carries the
 // channel key.
 func ShareLink(name, key, host string, port int, ts []ChannelTransport) (string, error) {
+	return ShareLinkContext(name, key, host, port, ts, "")
+}
+
+// ShareLinkContext is ShareLink for a channel whose encryption context is
+// already set: an installed channel whose documents were changed keeps the
+// context it was made with (ChannelInfo.Context), whatever its first
+// document is now. "" derives it from the documents, as for a new channel.
+func ShareLinkContext(name, key, host string, port int, ts []ChannelTransport, context string) (string, error) {
 	if host == "" || port <= 0 || port > 65535 {
 		return "", errors.New("нет адреса или порта ноды")
 	}
@@ -144,7 +152,11 @@ func ShareLink(name, key, host string, port int, ts []ChannelTransport) (string,
 	if err != nil {
 		return "", err
 	}
-	c := share.Config{Name: name, Negotiate: true, Secret: key, Context: SessionContext(ts)}
+	context = strings.TrimSpace(context)
+	if context == "" {
+		context = SessionContext(ts)
+	}
+	c := share.Config{Name: name, Negotiate: true, Secret: key, Context: context}
 	for _, t := range ts {
 		c.Transports = append(c.Transports, share.Transport{Type: t.Type, URL: t.URL, Priority: transportPriority[t.Type]})
 	}

@@ -37,6 +37,9 @@
 #                                                 remove the documents of a
 #                                                 running channel; key, port
 #                                                 and encryption context stay)
+#        node-install.sh show CONFIG_FILE         (run as root: a channel's
+#                                                 documents, port, state and
+#                                                 encryption context)
 #        node-install.sh update                   (run as root, by the timer:
 #                                                 move every channel to the
 #                                                 newest node-v* release)
@@ -978,6 +981,37 @@ cmd_set_transports() {
     printf '{"ok":true,"channel":"%s","transports":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")"
 }
 
+# show CONFIG_FILE: one channel's documents, port, state and encryption
+# context, read from its node.conf (root: the file is not world-readable).
+# The key stays on the server.
+cmd_show() {
+    [ "$(id -u)" = 0 ] || fail show "нужны права root (sudo)"
+    read_config "$@"
+    check_channel
+    dir="$CONF_ROOT/$CHANNEL"
+    [ -f "$dir/node.conf" ] || fail show "канала $CHANNEL нет на сервере"
+    port=$(sed -n 's/^Listen = [^:]*:\([0-9]*\)$/\1/p' "$dir/node.conf" | tail -n 1)
+    context=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
+    state=$(systemctl is-active "openflux-node@$CHANNEL" 2>/dev/null)
+    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","transports":[' \
+        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")"
+    first=1
+    awk '
+        function flush() { if (type != "") print type " " url; type = ""; url = "" }
+        /^\[Transport /       { flush(); section = 1; next }
+        /^\[/                 { flush(); section = 0; next }
+        section && /^Type = / { sub(/^Type = /, ""); type = $0; next }
+        section && /^URL = /  { sub(/^URL = /, ""); url = $0; next }
+        END                   { flush() }
+    ' "$dir/node.conf" | while read -r type url; do
+        [ "$type" = direct ] && continue
+        [ "$first" = 1 ] || printf ','
+        first=0
+        printf '{"type":"%s","url":"%s"}' "$(json_escape "$type")" "$(json_escape "$url")"
+    done
+    printf ']}\n'
+}
+
 # set_transports_rollback: the previous node.conf back, and the node restarted on it.
 set_transports_rollback() {
     dir="$CONF_ROOT/$CHANNEL"
@@ -1021,7 +1055,8 @@ case "${1:-}" in
     upgrade) cmd_upgrade ;;
     set-cookies) shift; cmd_set_cookies "$@" ;;
     set-transports) shift; cmd_set_transports "$@" ;;
+    show) shift; cmd_show "$@" ;;
     update) cmd_update ;;
     autoupdate) shift; cmd_autoupdate "$@" ;;
-    *) fail usage "usage: node-install.sh probe|plan|apply|remove|list|uninstall|status|upgrade|set-cookies|set-transports|update|autoupdate" ;;
+    *) fail usage "usage: node-install.sh probe|plan|apply|remove|list|uninstall|status|upgrade|set-cookies|set-transports|show|update|autoupdate" ;;
 esac

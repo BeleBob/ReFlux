@@ -55,7 +55,7 @@ func TestNodeWizardProtocolLines(t *testing.T) {
 
 func TestNodeWizardNeedsConnection(t *testing.T) {
 	w := newNodeWizard()
-	for _, m := range []string{"plan", "apply", "setCookies", "remove"} {
+	for _, m := range []string{"plan", "apply", "setCookies", "remove", "showChannel", "setTransports"} {
 		r := wizardCall(t, w, m, map[string]string{"channel": "c1"})
 		if r["ok"] != false || r["error"] != "нет подключения к серверу" {
 			t.Fatalf("%s: %v", m, r)
@@ -166,6 +166,27 @@ func TestNodeWizardShareLinkWithChosenTransports(t *testing.T) {
 		Transports: []provision.ChannelTransport{{Type: "boards", URL: "https://boards.yandex.ru/x"}}})
 	if r["ok"] != false {
 		t.Fatalf("a transport the wizard does not offer: %v", r)
+	}
+}
+
+// A link for an installed channel whose documents changed keeps the
+// channel's context, not the one its new first document would give.
+func TestNodeWizardShareLinkKeepsChannelContext(t *testing.T) {
+	w := newNodeWizard()
+	key := strings.Repeat("ab", 32)
+	mailru := "https://cloud.mail.ru/public/DEmN/ETbZW2MPY"
+	doc := "https://docs.yandex.ru/edit/d/S3sjFjA-ZmVWgXQPTmVwdSPegnqahzm72s0qoIz-cKg6OTJnZ2wza1d2UQ"
+	r := wizardCall(t, w, "shareLink", wizardParams{Name: "Нода", Key: key, Host: "203.0.113.5", ChannelPort: 8445,
+		Transports: []provision.ChannelTransport{{Type: "mailru", URL: mailru}}, Context: doc})
+	if r["ok"] != true {
+		t.Fatalf("shareLink: %v", r)
+	}
+	c, err := share.Decode(r["link"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Context != doc || c.Transports[0].URL != mailru {
+		t.Fatalf("link config: %+v", c)
 	}
 }
 

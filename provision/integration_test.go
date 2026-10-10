@@ -190,6 +190,50 @@ func TestInstallOnVDS(t *testing.T) {
 	if out, _, _ := c.run("sudo -S -p '' cat /var/lib/openflux-node/"+id+"/cookies.json", []byte(userPass+"\n")); !strings.Contains(string(out), "renewed-login") {
 		t.Fatalf("set-cookies did not replace the login: %q", out)
 	}
+	// The running channel's documents: read them, change them, and the key,
+	// port, sign-in and encryption context stay.
+	rootRead := func(path string) string {
+		out, _, _ := c.run("sudo -S -p '' cat "+path, []byte(userPass+"\n"))
+		return strings.TrimSpace(string(out))
+	}
+	info, err := c.Show(id, userPass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Channel != id || info.State != "active" || info.Port != plan.Port || info.Context != os.Getenv("OPENFLUX_TEST_DOC") ||
+		len(info.Transports) != 3 || info.Transports[0].Type != "vyandex" {
+		t.Fatalf("show: %+v", info)
+	}
+	keyBefore := rootRead("/etc/openflux-node/" + id + "/encryption-key")
+	board := "https://boards.yandex.ru/whiteboard/?hash=0123456789abcdef0123456789abcdef"
+	// The first document (the context's source) goes, a board comes.
+	if err := c.SetTransports(id, []ChannelTransport{volga[1], {Type: "boards", URL: board}}, "", userPass); err != nil {
+		t.Fatal(err)
+	}
+	info, err = c.Show(id, userPass)
+	if err != nil || info.State != "active" || info.Port != plan.Port || info.Context != os.Getenv("OPENFLUX_TEST_DOC") ||
+		len(info.Transports) != 2 || info.Transports[0] != volga[1] || info.Transports[1] != (ChannelTransport{Type: "boards", URL: board}) {
+		t.Fatalf("show after set-transports: %+v %v", info, err)
+	}
+	if rootRead("/etc/openflux-node/"+id+"/encryption-key") != keyBefore {
+		t.Fatal("set-transports changed the channel key")
+	}
+	if !strings.Contains(rootRead("/var/lib/openflux-node/"+id+"/cookies.json"), "renewed-login") {
+		t.Fatal("set-transports dropped the Yandex sign-in")
+	}
+	if out, _, _ := c.run("ls /etc/openflux-node/"+id+"/ 2>/dev/null | grep -c prev", nil); strings.TrimSpace(string(out)) != "0" {
+		t.Fatalf("the previous node.conf was left behind: %s", out)
+	}
+	if err := c.SetTransports(id, nil, "", userPass); err == nil {
+		t.Fatal("a channel without documents must be refused")
+	}
+	if err := c.SetTransports(id, volga, "", userPass); err != nil { // back, for the rest of the test
+		t.Fatal(err)
+	}
+	if info, err = c.Show(id, userPass); err != nil || len(info.Transports) != 3 || info.State != "active" {
+		t.Fatalf("show after the documents came back: %+v %v", info, err)
+	}
+
 	if _, err := c.Plan(Channel{ID: id, Transports: volga}, true); err == nil {
 		t.Fatal("planning an existing channel must fail")
 	}

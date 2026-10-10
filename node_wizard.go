@@ -56,6 +56,9 @@ type wizardParams struct {
 	// DocumentURL alone means a Yandex document (older apps).
 	Transports []provision.ChannelTransport `json:"transports"`
 	AutoUpdate bool                         `json:"autoUpdate"`
+	// Context is an installed channel's encryption context (see
+	// provision.ChannelInfo): a link for it keeps it.
+	Context string `json:"context"`
 	// Source picks the node's core: "fork" (default) or "official", see
 	// provision.PinnedFor.
 	Source string `json:"source"`
@@ -200,6 +203,35 @@ func (w *nodeWizard) handle(req wizardRequest) map[string]interface{} {
 			return wizardFailure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
 		}
 		return wizardOK(nil)
+	case "showChannel":
+		conn, err := w.connected()
+		if err != nil {
+			return wizardFailure(err, nil)
+		}
+		info, err := conn.Show(p.Channel, p.SudoPassword)
+		if err != nil {
+			return wizardFailure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+		}
+		return wizardOK(map[string]interface{}{"channel": info})
+	case "setTransports":
+		conn, err := w.connected()
+		if err != nil {
+			return wizardFailure(err, nil)
+		}
+		var cookies string
+		if p.Cookies != "" {
+			if cookies, err = provision.ChannelCookies(p.transports(), p.Cookies); err != nil {
+				return wizardFailure(err, nil)
+			}
+		}
+		if err := conn.SetTransports(p.Channel, p.transports(), cookies, p.SudoPassword); err != nil {
+			return wizardFailure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
+		}
+		info, err := conn.Show(p.Channel, p.SudoPassword)
+		if err != nil {
+			return wizardFailure(err, nil)
+		}
+		return wizardOK(map[string]interface{}{"channel": info})
 	case "remove":
 		conn, err := w.connected()
 		if err != nil {
@@ -223,7 +255,7 @@ func (w *nodeWizard) handle(req wizardRequest) map[string]interface{} {
 		}
 		return wizardOK(map[string]interface{}{"rooms": rooms})
 	case "shareLink":
-		link, err := provision.ShareLink(p.Name, p.Key, p.Host, p.ChannelPort, p.transports())
+		link, err := provision.ShareLinkContext(p.Name, p.Key, p.Host, p.ChannelPort, p.transports(), p.Context)
 		if err != nil {
 			return wizardFailure(err, nil)
 		}

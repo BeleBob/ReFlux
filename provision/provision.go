@@ -362,6 +362,52 @@ func CookieStore(documentURL, header string) (cookies string, signedIn bool, err
 	return base64.StdEncoding.EncodeToString(raw), signedIn, nil
 }
 
+// ChannelInfo is an installed channel as node-install.sh show reports it.
+type ChannelInfo struct {
+	Channel string `json:"channel"`
+	// State is systemd's word for the node: active, failed, ...
+	State string `json:"state"`
+	// Port is direct's port.
+	Port int `json:"port"`
+	// Context is the channel's encryption context (node.conf's URL line).
+	// SetTransports keeps it, so the links made for the channel stay valid;
+	// a new link for it must carry it too (ShareLinkContext).
+	Context string `json:"context"`
+	// Transports are the channel's carriers besides direct.
+	Transports []ChannelTransport `json:"transports"`
+}
+
+// Show reads an installed channel's documents, port, state and encryption
+// context. It needs root: the node's config is not world-readable. The key
+// stays on the server.
+func (c *Conn) Show(channel, sudoPassword string) (*ChannelInfo, error) {
+	var info ChannelInfo
+	if err := c.asRootJSON("show", "channel="+channel+"\n", sudoPassword, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
+// SetTransports replaces the documents of an installed, running channel:
+// some added, some removed. Its key, port, cookies and encryption context
+// stay, so the links handed out keep working; the node restarts on the new
+// config and the old one comes back if it does not start. cookies (see
+// CookieStore) replace the channel's Yandex sign-in when given.
+func (c *Conn) SetTransports(channel string, ts []ChannelTransport, cookies, sudoPassword string) error {
+	ts, err := CheckTransports(ts)
+	if err != nil {
+		return err
+	}
+	if len(ts) == 0 {
+		return errors.New("нужен хотя бы один документ: без него канал не нужен")
+	}
+	cfg := "channel=" + channel + "\n" + transportLines(ts)
+	if cookies != "" {
+		cfg += "cookies=" + cookies + "\n"
+	}
+	return c.asRoot("set-transports", cfg, sudoPassword)
+}
+
 // Remove stops and deletes the channel; the last one also removes the
 // binaries, unit and system user the script installed.
 func (c *Conn) Remove(channel, sudoPassword string) error {
@@ -369,6 +415,12 @@ func (c *Conn) Remove(channel, sudoPassword string) error {
 }
 
 func (c *Conn) asRoot(command, cfg, sudoPassword string) error {
+	return c.asRootJSON(command, cfg, sudoPassword, nil)
+}
+
+// asRootJSON runs a root command of the script; into (when not nil) gets the
+// command's JSON answer.
+func (c *Conn) asRootJSON(command, cfg, sudoPassword string, into interface{}) error {
 	if c.script == "" {
 		return errors.New("скрипт установки не загружен")
 	}
@@ -419,6 +471,9 @@ func (c *Conn) asRoot(command, cfg, sudoPassword string) error {
 	}
 	if !res.OK {
 		return fmt.Errorf("%s", res.Error)
+	}
+	if into != nil {
+		return lastJSON(stdout, into)
 	}
 	return nil
 }

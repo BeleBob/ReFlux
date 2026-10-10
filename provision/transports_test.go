@@ -172,3 +172,51 @@ func TestCheckTransportsYandexDocsAndBoards(t *testing.T) {
 		t.Fatalf("board context %q", c)
 	}
 }
+
+// A channel whose documents changed keeps the context it was made with: the
+// link says that one, not the one its new first document would give.
+func TestShareLinkContextKeepsTheChannelContext(t *testing.T) {
+	key := strings.Repeat("cd", 32)
+	board := "https://boards.yandex.ru/whiteboard/?hash=0123456789abcdef0123456789abcdef"
+	ts := []ChannelTransport{{"boards", board}, {"cupsonline", testRooms}}
+	link, err := ShareLinkContext("Нода", key, "203.0.113.5", 8445, ts, testMailru)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := share.Decode(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Context != testMailru {
+		t.Fatalf("context %q, want the channel's %q", c.Context, testMailru)
+	}
+	if c.Transports[0].Type != "boards" || c.Transports[0].URL != board {
+		t.Fatalf("transports: %+v", c.Transports)
+	}
+	// No context given: derived from the documents, as for a new channel.
+	link, err = ShareLinkContext("Нода", key, "203.0.113.5", 8445, ts, " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := share.Decode(link); c.Context != SessionContext(ts) || c.Context == testMailru {
+		t.Fatalf("derived context %q, want %q", c.Context, SessionContext(ts))
+	}
+}
+
+// SetTransports checks the documents before it touches the server.
+func TestSetTransportsChecksBeforeTheServer(t *testing.T) {
+	c := &Conn{}
+	if err := c.SetTransports("of-abc123", nil, "", ""); err == nil || !strings.Contains(err.Error(), "хотя бы один документ") {
+		t.Fatalf("no documents: %v", err)
+	}
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{"mailru", "https://example.com/x"}}, "", ""); err == nil || !strings.Contains(err.Error(), "Mail.ru") {
+		t.Fatalf("bad link: %v", err)
+	}
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{"direct", "x"}}, "", ""); err == nil {
+		t.Fatal("direct is always there and cannot be chosen")
+	}
+	// Valid documents reach the script, which this connection has not fetched.
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{"mailru", testMailru}}, "", ""); err == nil || !strings.Contains(err.Error(), "скрипт установки не загружен") {
+		t.Fatalf("valid documents: %v", err)
+	}
+}
