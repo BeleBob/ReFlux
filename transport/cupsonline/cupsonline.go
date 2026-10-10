@@ -78,6 +78,10 @@ type CupsonlineConfig struct {
 	// the write and drops the connection, so the transport paces itself below
 	// that. Four channels each send at this rate.
 	SendInterval time.Duration
+	// StreamResyncAfter gives up a packet whose rest has not come for this
+	// long: a message of the sender's batch was lost, and the stream would
+	// stay out of sync. 0 waits forever.
+	StreamResyncAfter time.Duration
 
 	SendQueueSize int
 
@@ -126,6 +130,9 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// no reconnects and margin under the burst that stalled the old,
 		// unpaced code.
 		SendInterval: 18 * time.Millisecond,
+		// A batch arrives as a burst of messages SendInterval apart, a few
+		// hundred milliseconds even for the largest packet.
+		StreamResyncAfter: 2 * time.Second,
 
 		// В очереди кадры кодека (до ~8 KB), а не IP-пакеты: очередь длиннее
 		// — это уже не буфер, а секунды задержки.
@@ -572,6 +579,8 @@ type cupsWS struct {
 	// Touched only by the read goroutine, and reset on every reconnect - a
 	// packet split across a drop is lost, like on any link.
 	recvBufs map[string][]byte
+	// recvSince is when each member's pending part of a packet began.
+	recvSince map[string]time.Time
 
 	sendQueue chan []byte
 
@@ -760,6 +769,7 @@ func (w *cupsWS) connectAndServe() error {
 	conn.SetReadLimit(int64(w.config.MaxMessageBytes))
 	// Fresh socket, fresh stream: drop any half-assembled packet from before.
 	w.recvBufs = nil
+	w.recvSince = nil
 
 	if err := w.writeJSON(map[string]interface{}{
 		"id": 1, "connect": map[string]interface{}{"token": a.connToken, "name": "js"},
@@ -895,6 +905,9 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	w.stats.batchesSent.Add(1)
 	return nil
 }
+
+// cupsNow is the receive clock; tests move it.
+var cupsNow = time.Now
 
 // pace waits out the rest of SendInterval since the last message, so the
 // channel never floods the server. Returns errStopped if the transport is
@@ -1071,6 +1084,21 @@ func (w *cupsWS) handleReply(raw []byte) {
 	// across messages completes once the rest of it arrives.
 	if w.recvBufs == nil {
 		w.recvBufs = make(map[string][]byte)
+		w.recvSince = make(map[string]time.Time)
+	}
+	now := cupsNow()
+	// A packet whose rest never came (a message of the sender's batch was
+	// lost) would hold the stream out of sync until some length happened to
+	// line it up again, and everything the sender sent meanwhile was lost.
+	// A batch comes as a burst of messages a pacing interval apart, so a part
+	// still waiting after StreamResyncAfter is given up and this message
+	// starts the stream afresh: the first message of every batch begins at a
+	// packet boundary.
+	pending := len(w.recvBufs[sender]) > 0
+	if pending && w.config.StreamResyncAfter > 0 && now.Sub(w.recvSince[sender]) > w.config.StreamResyncAfter {
+		utils.Debugf("[CUPS] recv %s: %d bytes of a packet never completed, starting the stream afresh", w.roomUUID, len(w.recvBufs[sender]))
+		delete(w.recvBufs, sender)
+		pending = false
 	}
 	buf := append(w.recvBufs[sender], chunk...)
 	adv, count, total := 0, 0, 0
@@ -1099,12 +1127,18 @@ func (w *cupsWS) handleReply(raw []byte) {
 	switch {
 	case len(rest) == 0:
 		delete(w.recvBufs, sender)
+		delete(w.recvSince, sender)
 	case len(rest) > w.config.MaxPayloadBytes+w.config.MaxMessageData:
 		// A stream that never yields a packet must not grow without bound.
 		utils.Debugf("[CUPS] recv stream out of sync (%s), resetting", w.roomUUID)
 		delete(w.recvBufs, sender)
+		delete(w.recvSince, sender)
 	default:
 		w.recvBufs[sender] = rest
+		// A new part of a packet starts its clock; the rest of the same one keeps it.
+		if !pending || count > 0 {
+			w.recvSince[sender] = now
+		}
 	}
 	if count > 0 {
 		w.stats.packetsRecv.Add(uint64(count))
