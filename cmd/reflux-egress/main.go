@@ -68,8 +68,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+	case "check-docs":
+		if err := checkDocs(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
 	default:
-		fmt.Fprintln(os.Stderr, "usage: reflux-egress [run|health|status|ru-cidr]")
+		fmt.Fprintln(os.Stderr, "usage: reflux-egress [run|health|status|ru-cidr|check-docs]")
 		os.Exit(2)
 	}
 }

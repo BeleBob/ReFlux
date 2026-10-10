@@ -19,8 +19,13 @@ RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git /src \
 FROM golang:1.26-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+# check-docs opens mail.ru documents with the core's transport.
+COPY transport ./transport
+COPY utils ./utils
+COPY netbind ./netbind
 COPY cmd/reflux-egress ./cmd/reflux-egress
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/reflux-egress ./cmd/reflux-egress
 # A snapshot of the Russian IPv4 space, so the egress routes Russia from
 # its first second; it refreshes the list daily at run time.
