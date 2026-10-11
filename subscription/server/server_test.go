@@ -148,6 +148,29 @@ func (e *env) register(login, device string) (token string, r reply) {
 	return r.str("deviceToken"), r
 }
 
+// idOf finds a user's id by login through /admin/users.
+func (e *env) idOf(login string) string {
+	e.t.Helper()
+	req, _ := http.NewRequest("GET", e.http.URL+"/admin/users", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var users []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&users); err != nil {
+		e.t.Fatal(err)
+	}
+	for _, u := range users {
+		if reply(u).str("login") == login {
+			return reply(u).str("id")
+		}
+	}
+	e.t.Fatalf("no user %q", login)
+	return ""
+}
+
 func (e *env) admin(method, path string, body any) (int, reply) {
 	e.t.Helper()
 	return e.call(method, path, adminToken, body)

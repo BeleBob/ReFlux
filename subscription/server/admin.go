@@ -53,6 +53,11 @@ func (s *Server) adminInfo(w http.ResponseWriter, _ *http.Request) {
 	var pools []pool
 	for _, p := range s.cfg.Pools {
 		pl := pool{ID: p.ID, Name: p.Name, Channel: p.Channel, OK: true}
+		if p.PerUser {
+			pl.Channel = "(per-user)"
+			pools = append(pools, pl)
+			continue
+		}
 		if _, err := s.links.link(p, p.Channel); err != nil {
 			pl.OK, pl.Error = false, err.Error()
 			if p.AutoNode {

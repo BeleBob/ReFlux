@@ -131,9 +131,10 @@ func (c *linkCache) link(p Pool, channel string) (string, error) {
 	return link, nil
 }
 
-// profiles are the locations a plan or key may use. A pool whose files cannot
-// be read is left out: the others still work.
-func (s *Server) profiles(poolIDs []string) []subscription.Profile {
+// profiles are the locations an owner (account or key) may use. A perUser pool
+// gives each owner their own channel; a pool whose files cannot be read is left
+// out: the others still work.
+func (s *Server) profiles(poolIDs []string, owner string) []subscription.Profile {
 	want := map[string]bool{}
 	for _, id := range poolIDs {
 		want[id] = true
@@ -145,11 +146,18 @@ func (s *Server) profiles(poolIDs []string) []subscription.Profile {
 		if len(want) > 0 && !want[p.ID] {
 			continue
 		}
-		link, err := s.links.link(p, p.Channel)
+		channel := p.Channel
+		if p.PerUser {
+			if owner == "" {
+				continue
+			}
+			channel = userChannel(owner)
+		}
+		link, err := s.links.link(p, channel)
 		if err != nil {
 			s.logf("pool %s: %v", p.ID, err)
-			if p.AutoNode {
-				s.start(nodeRequest{Pool: p, Channel: p.Channel})
+			if p.AutoNode || p.PerUser {
+				s.start(nodeRequest{Pool: p, Channel: channel, Owner: owner})
 			}
 			continue
 		}

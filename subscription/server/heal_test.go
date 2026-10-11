@@ -293,3 +293,89 @@ func TestPerUserConfigAndChannelName(t *testing.T) {
 		t.Fatal("a yandex transport without url must be refused")
 	}
 }
+
+func TestPerUserGetsOwnChannel(t *testing.T) {
+	e := newEnv(t, func(c *Config) {
+		c.Pools = []Pool{{ID: "main", Name: "Главная", PerUser: true,
+			Transports: []provision.ChannelTransport{{Type: "cupsonline"}}}}
+		c.Plans = []Plan{{ID: "trial", Name: "Пробный", Days: 3, Devices: 1, Trial: true}}
+	})
+	fake := &fakeProvisioner{nodes: e.nodes, t: t}
+	e.prov = fake
+	e.start(e.srv.cfg)
+
+	t1, _ := e.register("ivan", "a")
+	t2, _ := e.register("petr", "b")
+
+	// Both ask: each triggers a creation of their own channel.
+	e.call("GET", "/api/v1/subscription", t1, nil)
+	e.call("GET", "/api/v1/subscription", t2, nil)
+	u1, u2 := userChannel(e.idOf("ivan")), userChannel(e.idOf("petr"))
+	if u1 == u2 {
+		t.Fatal("two owners must not share a channel")
+	}
+	// The creation is async (start spawns a goroutine): wait for both channels.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, e1 := os.Stat(filepath.Join(e.nodes, u1, "node.conf"))
+		_, e2 := os.Stat(filepath.Join(e.nodes, u2, "node.conf"))
+		if e1 == nil && e2 == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("channels were not created: ivan %v, petr %v", e1, e2)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// ivan now sees his own profile.
+	e.waitForPool(t, t1, 1)
+	_, doc := e.call("GET", "/api/v1/subscription", t1, nil)
+	if len(doc.list("profiles")) != 1 {
+		t.Fatalf("profiles: %v", doc)
+	}
+}
+
+func TestPerUserHealthyChannelIsNotRecreated(t *testing.T) {
+	e := newEnv(t, func(c *Config) {
+		c.Pools = []Pool{{ID: "main", Name: "Главная", PerUser: true,
+			Transports: []provision.ChannelTransport{{Type: "cupsonline"}}}}
+		c.Plans = []Plan{{ID: "trial", Name: "Пробный", Days: 3, Devices: 1, Trial: true}}
+	})
+	fake := &fakeProvisioner{nodes: e.nodes, t: t}
+	e.prov = fake
+	e.start(e.srv.cfg)
+	token, _ := e.register("ivan", "a")
+	e.waitForPool(t, token, 1)
+	before := fake.count()
+	e.call("GET", "/api/v1/subscription", token, nil)
+	if fake.count() != before {
+		t.Fatalf("a ready channel was recreated: %d -> %d", before, fake.count())
+	}
+}
+
+// A key without an account gets its own channel too.
+func TestPerUserKeyGetsOwnChannel(t *testing.T) {
+	e := newEnv(t, func(c *Config) {
+		c.Pools = []Pool{{ID: "main", Name: "Главная", PerUser: true,
+			Transports: []provision.ChannelTransport{{Type: "cupsonline"}}}}
+		c.Plans = []Plan{{ID: "trial", Name: "Пробный", Days: 3, Devices: 1, Trial: true}}
+	})
+	fake := &fakeProvisioner{nodes: e.nodes, t: t}
+	e.prov = fake
+	e.start(e.srv.cfg)
+	_, k := e.admin("POST", "/admin/keys", map[string]any{"name": "Подарок"})
+	token := k.str("token")
+	e.call("GET", "/sub/"+token, "", nil)
+	// The key's channel appears (id is the key's; wait by polling profiles).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, doc := e.call("GET", "/sub/"+token, "", nil)
+		if len(doc.list("profiles")) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the key never got a channel: %v", doc)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
