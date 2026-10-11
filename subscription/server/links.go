@@ -148,6 +148,9 @@ func (s *Server) profiles(poolIDs []string) []subscription.Profile {
 		link, err := s.links.link(p)
 		if err != nil {
 			s.logf("pool %s: %v", p.ID, err)
+			if p.AutoNode {
+				s.start(p)
+			}
 			continue
 		}
 		out = append(out, subscription.Profile{ID: p.ID, Name: p.Name, Link: link})

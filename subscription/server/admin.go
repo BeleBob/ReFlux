@@ -55,6 +55,9 @@ func (s *Server) adminInfo(w http.ResponseWriter, _ *http.Request) {
 		pl := pool{ID: p.ID, Name: p.Name, Channel: p.Channel, OK: true}
 		if _, err := s.links.link(p); err != nil {
 			pl.OK, pl.Error = false, err.Error()
+			if p.AutoNode {
+				s.start(p)
+			}
 		}
 		pools = append(pools, pl)
 	}

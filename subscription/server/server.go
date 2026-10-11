@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/subscription"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 )
 
 // Server is the subscription service.
@@ -20,6 +21,8 @@ type Server struct {
 	cfg   *Config
 	st    *store
 	links *linkCache
+	prov  nodeProvisioner
+	w     *nodeWatch
 	lim   *limiter
 	now   func() time.Time
 	logf  func(format string, args ...any)
@@ -34,6 +37,8 @@ type Server struct {
 type Options struct {
 	Now  func() time.Time
 	Logf func(format string, args ...any)
+	// Provisioner makes a pool's channel; scriptProvisioner by default.
+	Provisioner nodeProvisioner
 }
 
 // New opens the state and loads (or makes) the certificate.
@@ -53,6 +58,12 @@ func New(cfg *Config, opt Options) (*Server, error) {
 		s.logf = opt.Logf
 	}
 	s.links = newLinkCache(cfg.NodeConfDir)
+	s.w = newNodeWatch()
+	if opt.Provisioner != nil {
+		s.prov = opt.Provisioner
+	} else {
+		s.prov = &scriptProvisioner{cfg: cfg, logf: s.logf, exec: runCmd, rooms: cupsonline.CreateRoomList}
+	}
 	s.lim = newLimiter(func() time.Time { return s.now() })
 	if s.dummyHash, err = hashPassword("dummy-password-for-timing", s.cost()); err != nil {
 		return nil, err
@@ -118,6 +129,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.startNodeWatch(ctx)
 	srv := &http.Server{
 		Handler:           s.Handler(),
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{s.cert}, MinVersion: tls.VersionTLS12},
