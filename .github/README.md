@@ -1,4 +1,22 @@
-# ReFlux
+<div align="center">
+  <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="Логотип ReFlux">
+  <h1>ReFlux</h1>
+  <p>Сервер для OpenFlux: exit-ноды в Docker для нескольких клиентов, выход в интернет только через AmneziaWG.</p>
+  <p>
+    <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Последний релиз"></a>
+    <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="Статус CI"></a>
+    <a href="https://github.com/BeleBob/ReFlux/actions/workflows/reflux-images.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/reflux-images.yml/badge.svg" alt="Сборка образов"></a>
+    <a href="../LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue?style=flat-square" alt="Лицензия GPL-3.0 или новее"></a>
+  </p>
+  <p>
+    <img src="https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-455a64?style=flat-square&amp;logo=linux&amp;logoColor=white" alt="Linux amd64 и arm64">
+    <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&amp;logo=docker&amp;logoColor=white" alt="Docker Compose">
+    <img src="https://img.shields.io/badge/AmneziaWG-tunnels-455a64?style=flat-square" alt="Туннели AmneziaWG">
+    <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&amp;logo=go&amp;logoColor=white" alt="Go 1.26 и новее">
+    <a href="https://github.com/BeleBob/ReFlux-Android"><img src="https://img.shields.io/badge/client-Android-3DDC84?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Клиент для Android"></a>
+  </p>
+  <p><strong>Русский</strong> · <a href="README.en.md">English</a></p>
+</div>
 
 ReFlux — набор инструментов для развёртывания и обслуживания exit-нод
 [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) на Linux-сервере.
@@ -6,13 +24,14 @@ ReFlux — набор инструментов для развёртывания
 трафик клиентов проходит только через туннели AmneziaWG. Управление
 выполняется из командной строки, через Telegram-бот и веб-панель.
 
-[![CI](https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg)](https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml)
-[![Images](https://github.com/BeleBob/ReFlux/actions/workflows/reflux-images.yml/badge.svg)](https://github.com/BeleBob/ReFlux/actions/workflows/reflux-images.yml)
-[![Release](https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&label=release)](https://github.com/BeleBob/ReFlux/releases)
-[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](../LICENSE)
+**[Скачать последний релиз](https://github.com/BeleBob/ReFlux/releases/latest)** ·
+**[Приложение для Android](https://github.com/BeleBob/ReFlux-Android)**
+
+```text
+Клиент -> документ Mail.ru / Яндекса -> нода клиента -> egress: туннели AmneziaWG -> Интернет
+```
 
 ## Содержание
-- [Технологии](#технологии)
 - [Возможности](#возможности)
 - [Использование](#использование)
 - [Разработка](#разработка)
@@ -20,9 +39,7 @@ ReFlux — набор инструментов для развёртывания
 - [Deploy и CI/CD](#deploy-и-cicd)
 - [Contributing](#contributing)
 - [To do](#to-do)
-- [Команда проекта](#команда-проекта)
-- [Источники](#источники)
-- [Лицензия](#лицензия)
+- [Происхождение и лицензия](#происхождение-и-лицензия)
 
 ## Возможности
 - **Изоляция клиентов.** Для каждого клиента запускается отдельный контейнер
@@ -72,7 +89,9 @@ reflux doctor                        # проверить сервер
 reflux update                        # обновить образы
 ```
 
-Полное описание команд и ручной установки — в
+Клиенты подключаются приложением
+[ReFlux для Android](https://github.com/BeleBob/ReFlux-Android) по ссылке
+`openflux://` или QR-коду. Полное описание команд и ручной установки — в
 [руководстве администратора](../docs/reflux/SERVER.ru.md).
 
 ## Разработка
@@ -86,10 +105,13 @@ go build ./cmd/reflux
 ```
 
 ### Структура
-- `cmd/reflux` — утилита управления, боты и веб-панель.
-- `cmd/reflux-egress` — контроллер контейнера egress.
-- `deploy/reflux` — Dockerfile, установщик и системные unit-файлы.
-- `docs/reflux` — документация и история изменений.
+```
+ReFlux/
+  cmd/reflux/          # утилита управления, боты и веб-панель
+  cmd/reflux-egress/   # контроллер контейнера egress
+  deploy/reflux/       # Dockerfile, установщик и системные unit-файлы
+  docs/reflux/         # документация и история изменений
+```
 
 Остальные каталоги содержат ядро OpenFlux.
 
@@ -125,14 +147,15 @@ go vet ./...
 - [x] Отдельная нода и ключ для каждого клиента
 - [x] Установка одной командой и мастер настройки
 - [x] Telegram-боты и веб-панель
+- [x] Своё приложение для Android — [ReFlux для Android](https://github.com/BeleBob/ReFlux-Android)
+- [ ] Самообновление подписки через документ
 - [ ] Обслуживание нескольких клиентов одной нодой с аутентификацией по ключу
-- [ ] Доработанное Android-приложение
 
-## Источники
-ReFlux основан на [OpenFlux](https://github.com/p1neappleXpress/OpenFlux) и
-является его изменённой версией. Документация ядра —
-[README OpenFlux](../README.ru.md).
+## Происхождение и лицензия
+ReFlux — изменённая версия [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
+(p1neappleXpress): с сентября 2026 года добавлены утилита управления,
+контейнер egress, боты и веб-панель, в ядро внесены исправления. Документация
+ядра — [README OpenFlux](../README.ru.md).
 
-## Лицензия
-Распространяется по лицензии GNU GPL v3.0 или более поздней версии. См.
+Распространяется по лицензии GNU GPL v3.0 или более поздней версии: см.
 [LICENSE](../LICENSE), [COPYRIGHT](../COPYRIGHT) и [NOTICE](../NOTICE).
