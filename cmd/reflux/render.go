@@ -37,6 +37,7 @@ URL = %s
 EncryptionKeyFile = /config/key
 CookieStore = /state/cookies.json
 IPCSocket = %s
+ConfigOfferFile = /config/offer
 `, c.Transport, c.URL, ipcSocket)
 	}
 	var b strings.Builder
@@ -49,6 +50,7 @@ URL = %s
 EncryptionKeyFile = /config/key
 CookieStore = /state/cookies.json
 IPCSocket = %s
+ConfigOfferFile = /config/offer
 `, c.context(), ipcSocket)
 	docs := c.Docs()
 	for i, name := range carrierNames(docs) {

@@ -72,6 +72,9 @@ func checkDocsInEgress(docs []Doc) ([]docVerdict, error) {
 
 // docChange is what an automatic check did about one dead document.
 type docChange struct {
+	// Backup: not a dead document but a backup given to a client that had
+	// only one (ensureBackups); Doc is then the new document.
+	Backup bool
 	Doc    Doc
 	Reason string // the check's answer
 	Client string // "" for a pool document
@@ -149,7 +152,40 @@ func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
 		changes = append(changes, ch)
 	}
 	st.Checked = now
-	return changes, changed, s.saveDocsState(st)
+	if err := s.saveDocsState(st); err != nil {
+		return changes, changed, err
+	}
+	added, err := s.ensureBackups(st, now)
+	changes = append(changes, added...)
+	for _, ch := range added {
+		changed = changed || ch.Err == nil
+	}
+	return changes, changed, err
+}
+
+// ensureBackups gives every active client with a single document a free
+// pool document as its backup. A client then keeps its channel when one
+// document dies, and the replacement reaches the app over the other (the
+// node's ConfigOffer). A document that failed a check is not handed out
+// until it passes.
+func (s Store) ensureBackups(st docsState, now time.Time) ([]docChange, error) {
+	clients, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var out []docChange
+	for _, c := range clients {
+		if !c.Active(now) || len(c.Docs()) >= 2 {
+			continue
+		}
+		d, err := s.freeDocExcept(c, func(url string) bool { return st.Suspect[url] > 0 })
+		if err != nil {
+			continue // nothing to give now; the next check tries again
+		}
+		_, err = s.AddDoc(c.Name, d)
+		out = append(out, docChange{Backup: true, Doc: d, Client: c.Name, New: &d, Err: err})
+	}
+	return out, nil
 }
 
 // replaceDoc gives a client a free pool document in place of a dead one.

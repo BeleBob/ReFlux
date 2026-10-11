@@ -169,6 +169,9 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 		appendLog(fmt.Sprintf("[ANDROID] Session: транспорт %s (%s), приоритет %d", spec.Name, spec.Type, spec.Priority))
 	}
 	sess.SetControlHandler(m.DispatchControl)
+	if !exit {
+		m.SetControlCallback(receiveConfigOffer)
+	}
 	setSessionRoute(sess, types)
 	applyInitialCookies(m, specs)
 	if exit {

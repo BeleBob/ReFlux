@@ -110,6 +110,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   document (the client bot sends the new link). Documents leaving a client
   (`TakeDoc`, revoke) sit in quarantine for `docQuarantine` (1 day), then
   are free; `reflux pool recheck` / the bot's 🔄 bring dead ones back.
+  The same check gives every active client with one document a backup
+  (`ensureBackups`, documents that failed a check are skipped). Each node
+  gets `ConfigOfferFile = /config/offer` (`offer.go`: the client's link and a
+  version that moves with it); the core sends it to Session clients as
+  `ConfigOffer` (0x30, `config_offer.go`), the mobile API keeps the newest
+  for the app (`PendingConfigOffer`).
   Access requests (`requests.go`; the owner bot `botrequests.go`, the panel
   `webrequests.go`, `reflux requests`): `requests/<telegram id>.json`, pending →
   approved (a client named after the account, a pool document, linked) /

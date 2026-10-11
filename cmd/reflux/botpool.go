@@ -72,7 +72,11 @@ func (b *bot) docsTick(now time.Time) {
 			continue
 		}
 		if c, err := b.s.Get(ch.Client); err == nil {
-			cb.docReplaced(c)
+			msg := "cb.doc.replaced"
+			if ch.Backup {
+				msg = "cb.doc.backup"
+			}
+			cb.docReplaced(c, msg)
 		}
 	}
 }
@@ -80,6 +84,12 @@ func (b *bot) docsTick(now time.Time) {
 // docChangeMessage tells the owner what happened to one dead document.
 func docChangeMessage(ch docChange) (string, []any) {
 	e := html.EscapeString
+	if ch.Backup {
+		if ch.Err != nil {
+			return "docs.backup.failed", []any{e(ch.Client), e(ch.Err.Error())}
+		}
+		return "docs.backup.added", []any{e(ch.Client)}
+	}
 	reason := e(ch.Reason)
 	switch {
 	case ch.Client == "":
@@ -222,7 +232,7 @@ func (b *bot) poolPress(action, arg string) screen {
 
 // docReplaced tells a client its document was replaced and sends the new
 // link. Like broadcast, it does not take cb.mu (the owner bot calls it).
-func (cb *clientBot) docReplaced(c Client) {
+func (cb *clientBot) docReplaced(c Client, msg string) {
 	if c.Telegram == nil || !c.Active(time.Now()) {
 		return
 	}
@@ -231,7 +241,7 @@ func (cb *clientBot) docReplaced(c Client) {
 		json.Unmarshal(b, &st)
 	}
 	l := langOf(st.Lang[c.Telegram.ID])
-	if _, err := cb.t.Send(c.Telegram.ID, tr(l, "cb.doc.replaced", html.EscapeString(c.Name))); err != nil {
+	if _, err := cb.t.Send(c.Telegram.ID, tr(l, msg, html.EscapeString(c.Name))); err != nil {
 		log.Printf("client bot: new document for %s: %v", c.Name, err)
 		return
 	}

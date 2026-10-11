@@ -123,6 +123,7 @@ predates idle pacing keeps pinging every 10 seconds, which is still answered.
 | 0x04 AuthRequired | exit -> client | `{"transport","url","reason"}` (`smartcaptcha` or `login`) |
 | 0x10..0x13 | client <-> exit | transport start, stop, status, list |
 | 0x20 LinkPing, 0x21 LinkPong | both | none |
+| 0x30 ConfigOffer | exit -> client | `{"link","version"}`: the client's current `openflux://` configuration; a client applies it only when `version` is newer than its own (ReFlux) |
 
 An empty `transport` (older peers) means the highest-priority transport that
 carries cookies. Cookie messages and AuthRequired may carry `"doc"`, the
