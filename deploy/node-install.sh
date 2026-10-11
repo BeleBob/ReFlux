@@ -1086,9 +1086,10 @@ cmd_set_transports() {
     printf '{"ok":true,"channel":"%s","transports":"%s","mode":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")" "$MODE"
 }
 
-# show CONFIG_FILE: one channel's documents, port, state and encryption
-# context, read from its node.conf (root: the file is not world-readable).
-# The key stays on the server.
+# show CONFIG_FILE: one channel's documents, port, state, mode, encryption
+# context and key, read from its node.conf (root: the files are not
+# world-readable). The key goes only to the root who asks over SSH: the
+# owner's app builds the channel's link and profile from it.
 cmd_show() {
     [ "$(id -u)" = 0 ] || fail show "нужны права root (sudo)"
     read_config "$@"
@@ -1098,8 +1099,10 @@ cmd_show() {
     port=$(sed -n 's/^Listen = [^:]*:\([0-9]*\)$/\1/p' "$dir/node.conf" | tail -n 1)
     context=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
     state=$(systemctl is-active "openflux-node@$CHANNEL" 2>/dev/null)
-    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","mode":"%s","transports":[' \
-        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")"
+    key=$(cat "$dir/encryption-key" 2>/dev/null)
+    valid_key "$key" || key=""
+    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","mode":"%s","key":"%s","transports":[' \
+        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")" "$key"
     first=1
     awk '
         function flush() { if (type != "") print type " " url; type = ""; url = "" }

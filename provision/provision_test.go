@@ -3,8 +3,10 @@ package provision
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -83,5 +85,14 @@ func TestCookieStoreFormat(t *testing.T) {
 	}
 	if _, signedIn, _ := CookieStore("u", "yandexuid=1"); signedIn {
 		t.Fatal("no Session_id means not signed in")
+	}
+}
+
+func TestChannelInfoStringHidesTheKey(t *testing.T) {
+	info := ChannelInfo{Channel: "of-abc", State: "active", Port: 31337, Mode: "l3", Key: strings.Repeat("ab", 32)}
+	for _, s := range []string{info.String(), fmt.Sprintf("%v", info), fmt.Sprintf("%+v", &info)} {
+		if strings.Contains(s, "abab") {
+			t.Fatalf("the key is in %q", s)
+		}
 	}
 }

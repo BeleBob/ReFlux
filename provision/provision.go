@@ -407,11 +407,18 @@ type ChannelInfo struct {
 	Transports []ChannelTransport `json:"transports"`
 	// Mode is how the node forwards traffic: "l4" or "l3" (see Channel.Mode).
 	Mode string `json:"mode"`
+	// Key is the channel's encryption key, read by root over SSH so the
+	// owner can make its link and profile; empty when the installer is older.
+	Key string `json:"key"`
 }
 
-// Show reads an installed channel's documents, port, state and encryption
-// context. It needs root: the node's config is not world-readable. The key
-// stays on the server.
+// String omits the key: a ChannelInfo in a log or an error must not carry it.
+func (i ChannelInfo) String() string {
+	return fmt.Sprintf("ChannelInfo{%s %s port=%d mode=%s}", i.Channel, i.State, i.Port, i.Mode)
+}
+
+// Show reads an installed channel's documents, port, state, mode, encryption
+// context and key. It needs root: the node's config is not world-readable.
 func (c *Conn) Show(channel, sudoPassword string) (*ChannelInfo, error) {
 	var info ChannelInfo
 	if err := c.asRootJSON("show", "channel="+channel+"\n", sudoPassword, &info); err != nil {
