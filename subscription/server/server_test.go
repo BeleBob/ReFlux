@@ -42,6 +42,7 @@ type env struct {
 	clock *clock
 	nodes string
 	data  string
+	prov  nodeProvisioner
 }
 
 // writeChannel is a channel as node-install.sh leaves it: documents, direct port, key.
@@ -93,7 +94,11 @@ func newEnv(t *testing.T, mutate ...func(*Config)) *env {
 }
 
 func (e *env) start(cfg *Config) {
-	s, err := New(cfg, Options{Now: e.clock.now, Logf: func(string, ...any) {}})
+	opt := Options{Now: e.clock.now, Logf: func(string, ...any) {}}
+	if e.prov != nil {
+		opt.Provisioner = e.prov
+	}
+	s, err := New(cfg, opt)
 	if err != nil {
 		e.t.Fatal(err)
 	}
