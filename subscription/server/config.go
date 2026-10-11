@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
+
+	"github.com/p1neappleXpress/OpenFlux/provision"
 )
 
 // Config is /etc/openflux-sub/config.json.
@@ -28,6 +31,9 @@ type Config struct {
 	KeyFile  string `json:"keyFile,omitempty"`
 	// NodeConfDir is where node-install.sh keeps its channels.
 	NodeConfDir string `json:"nodeConfDir,omitempty"`
+	// NodeScript is node-install.sh on this machine (local, root), which the
+	// autoNode pools run to create their channel.
+	NodeScript string `json:"nodeScript,omitempty"`
 
 	Title       string `json:"title"`
 	Support     string `json:"support,omitempty"`
@@ -52,6 +58,15 @@ type Pool struct {
 	Channel string `json:"channel"`
 	// Host is the node's address in the link's direct carrier (default PublicHost).
 	Host string `json:"host,omitempty"`
+	// AutoNode makes the service itself create the channel on this host when
+	// its files are missing (opensub must run as root; see docs).
+	AutoNode bool `json:"autoNode,omitempty"`
+	// Transports are the channel's carriers besides direct (see provision.ChannelTransport).
+	// A cupsonline entry with an empty url means "create the rooms yourself" (AutoNode);
+	// empty Transports + AutoNode likewise gets cups.online rooms only.
+	Transports []provision.ChannelTransport `json:"transports,omitempty"`
+	// Mode is the node's forwarding mode: "l4" (default) or "l3".
+	Mode string `json:"mode,omitempty"`
 }
 
 // Plan is what a subscriber can have.
@@ -75,6 +90,10 @@ type Payment struct {
 }
 
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// scriptChannelRe is node-install.sh's valid_channel: autoNode runs the script
+// with the pool's channel name.
+var scriptChannelRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
 
 // LoadConfig reads and checks the config file.
 func LoadConfig(path string) (*Config, error) {
@@ -106,6 +125,9 @@ func (c *Config) Check() error {
 	if c.NodeConfDir == "" {
 		c.NodeConfDir = "/etc/openflux-node"
 	}
+	if c.NodeScript == "" {
+		c.NodeScript = "/opt/openflux-node/node-install.sh"
+	}
 	if c.Title == "" {
 		c.Title = "OpenFlux"
 	}
@@ -133,6 +155,19 @@ func (c *Config) Check() error {
 		pools[p.ID] = true
 		if p.Host == "" {
 			p.Host = c.PublicHost
+		}
+		if p.AutoNode {
+			if !scriptChannelRe.MatchString(p.Channel) {
+				return fmt.Errorf("config: pool %q: autoNode wants a channel name like node-install.sh: a-z0-9 и дефис, до 31 символа", p.ID)
+			}
+			if _, err := provision.CheckMode(p.Mode); err != nil {
+				return fmt.Errorf("config: pool %q: %w", p.ID, err)
+			}
+			if err := checkAutoTransports(p.Transports); err != nil {
+				return fmt.Errorf("config: pool %q: %w", p.ID, err)
+			}
+		} else if hasEmptyCups(p.Transports) {
+			return fmt.Errorf("config: pool %q: cupsonline без url требует autoNode", p.ID)
 		}
 	}
 	if len(c.Plans) == 0 {
@@ -172,4 +207,34 @@ func (c *Config) trialPlan() (Plan, bool) {
 		}
 	}
 	return Plan{}, false
+}
+
+// hasEmptyCups reports a cupsonline transport that the service would create
+// rooms for: only possible with autoNode.
+func hasEmptyCups(ts []provision.ChannelTransport) bool {
+	for _, t := range ts {
+		if t.Type == "cupsonline" && strings.TrimSpace(t.URL) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// checkAutoTransports validates the transports of an autoNode pool: any type
+// except a cupsonline-with-empty-url is checked like provision does; two of a
+// type are refused.
+func checkAutoTransports(ts []provision.ChannelTransport) error {
+	seen := map[string]bool{}
+	for _, t := range ts {
+		if t.Type == "cupsonline" && strings.TrimSpace(t.URL) == "" {
+			t.Type = strings.TrimSpace(t.Type)
+		} else if _, err := provision.CheckTransports([]provision.ChannelTransport{t}); err != nil {
+			return err
+		}
+		if seen[t.Type] {
+			return fmt.Errorf("транспорт %s выбран дважды", t.Type)
+		}
+		seen[t.Type] = true
+	}
+	return nil
 }
