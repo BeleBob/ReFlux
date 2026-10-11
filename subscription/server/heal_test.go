@@ -262,3 +262,34 @@ func TestAutoNodeHealthyPoolIsNotTouched(t *testing.T) {
 		t.Fatalf("profiles: %v", doc)
 	}
 }
+
+func TestPerUserConfigAndChannelName(t *testing.T) {
+	c := &Config{
+		PublicHost: "h", AdminToken: strings.Repeat("x", 24),
+		Pools: []Pool{{ID: "main", Name: "A", PerUser: true,
+			Transports: []provision.ChannelTransport{{Type: "cupsonline"}, {Type: "direct"}}}},
+		Plans: []Plan{{ID: "p", Name: "P", Days: 1, Devices: 1}},
+	}
+	if err := c.Check(); err != nil {
+		t.Fatalf("perUser pool without channel must pass: %v", err)
+	}
+	// Deterministic, stable, one per owner, valid for node-install.sh.
+	a1 := userChannel("account-1")
+	a2 := userChannel("account-1")
+	if a1 != a2 {
+		t.Fatalf("channel name is not deterministic: %q vs %q", a1, a2)
+	}
+	if !scriptChannelRe.MatchString(a1) {
+		t.Fatalf("channel %q does not fit node-install.sh", a1)
+	}
+	if userChannel("account-1") == userChannel("account-2") {
+		t.Fatal("two owners got the same channel")
+	}
+	// A perUser pool with a bad transport template is refused.
+	bad := *c
+	bad.Pools = []Pool{{ID: "main", Name: "A", PerUser: true,
+		Transports: []provision.ChannelTransport{{Type: "vyandex"}}}}
+	if err := bad.Check(); err == nil {
+		t.Fatal("a yandex transport without url must be refused")
+	}
+}

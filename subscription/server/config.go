@@ -4,6 +4,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +63,10 @@ type Pool struct {
 	// AutoNode makes the service itself create the channel on this host when
 	// its files are missing (opensub must run as root; see docs).
 	AutoNode bool `json:"autoNode,omitempty"`
+	// PerUser makes every owner (account or key) get their own channel, built
+	// from this pool's transports template. The channel name is derived from
+	// the owner, so there is no fixed Channel.
+	PerUser bool `json:"perUser,omitempty"`
 	// Transports are the channel's carriers besides direct (see provision.ChannelTransport).
 	// A cupsonline entry with an empty url means "create the rooms yourself" (AutoNode);
 	// empty Transports + AutoNode likewise gets cups.online rooms only.
@@ -146,8 +152,8 @@ func (c *Config) Check() error {
 	pools := map[string]bool{}
 	for i := range c.Pools {
 		p := &c.Pools[i]
-		if !idRe.MatchString(p.ID) || p.Name == "" || p.Channel == "" || !idRe.MatchString(p.Channel) {
-			return fmt.Errorf("config: pool %q: id, name and channel (a-z0-9-_) are required", p.ID)
+		if !idRe.MatchString(p.ID) || p.Name == "" {
+			return fmt.Errorf("config: pool %q: id (a-z0-9-_) and name are required", p.ID)
 		}
 		if pools[p.ID] {
 			return fmt.Errorf("config: pool %q twice", p.ID)
@@ -155,6 +161,19 @@ func (c *Config) Check() error {
 		pools[p.ID] = true
 		if p.Host == "" {
 			p.Host = c.PublicHost
+		}
+		if p.PerUser {
+			p.Transports = withoutDirect(p.Transports)
+			if _, err := provision.CheckMode(p.Mode); err != nil {
+				return fmt.Errorf("config: pool %q: %w", p.ID, err)
+			}
+			if err := checkAutoTransports(p.Transports); err != nil {
+				return fmt.Errorf("config: pool %q: %w", p.ID, err)
+			}
+			continue
+		}
+		if !idRe.MatchString(p.Channel) {
+			return fmt.Errorf("config: pool %q: id, name and channel (a-z0-9-_) are required", p.ID)
 		}
 		if p.AutoNode {
 			if !scriptChannelRe.MatchString(p.Channel) {
@@ -209,6 +228,20 @@ func (c *Config) trialPlan() (Plan, bool) {
 	return Plan{}, false
 }
 
+// withoutDirect drops the implicit direct carrier from a template: every
+// channel already has direct (its own port), and node-install.sh and
+// provision.CheckTransports do not take it as a listed transport.
+func withoutDirect(ts []provision.ChannelTransport) []provision.ChannelTransport {
+	out := make([]provision.ChannelTransport, 0, len(ts))
+	for _, t := range ts {
+		if strings.TrimSpace(t.Type) == "direct" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 // hasEmptyCups reports a cupsonline transport that the service would create
 // rooms for: only possible with autoNode.
 func hasEmptyCups(ts []provision.ChannelTransport) bool {
@@ -237,4 +270,11 @@ func checkAutoTransports(ts []provision.ChannelTransport) error {
 		seen[t.Type] = true
 	}
 	return nil
+}
+
+// userChannel is the personal channel name for an owner (account or key id):
+// "u" and 18 hex of sha256(owner), which node-install.sh accepts.
+func userChannel(owner string) string {
+	sum := sha256.Sum256([]byte(owner))
+	return "u" + hex.EncodeToString(sum[:9])
 }
