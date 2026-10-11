@@ -50,28 +50,30 @@ func TestDeadDocumentIsReplaced(t *testing.T) {
 	fakeEgressCheck(t, testURL)
 	now := time.Now()
 
+	// The first check finds one bad answer, which is not enough, and
+	// gives the single-document client a backup.
 	changes, changed, err := s.checkDocs(now)
-	if err != nil || len(changes) != 0 || changed {
-		t.Fatalf("one bad answer acted on: %+v %v %v", changes, changed, err)
+	if err != nil || len(changes) != 1 || !changes[0].Backup || changes[0].Doc.URL != docB || !changed {
+		t.Fatalf("first check: %+v %v %v", changes, changed, err)
 	}
 	changes, changed, err = s.checkDocs(now.Add(docCheckEvery))
 	if err != nil || len(changes) != 1 || !changed {
 		t.Fatalf("second check: %+v %v %v", changes, changed, err)
 	}
 	ch := changes[0]
-	if ch.Client != "phone" || ch.New == nil || ch.New.URL != docB || ch.Err != nil || ch.Reason == "" {
+	if ch.Backup || ch.Client != "phone" || ch.New == nil || ch.New.URL != docC || ch.Err != nil || ch.Reason == "" {
 		t.Errorf("change %+v", ch)
 	}
 	c, _ := s.Get("phone")
-	if c.URL != docB || len(c.Docs()) != 1 || c.context() != testURL {
-		t.Errorf("client after: %+v (the context stays the first document)", c)
+	if c.URL != docB || len(c.Docs()) != 2 || c.Docs()[1].URL != docC || c.context() != testURL {
+		t.Errorf("client after: %+v (the backup moves up, the context stays the first document)", c)
 	}
 	st, _ := s.loadDocsState()
 	if d := st.Docs[testURL]; d == nil || d.State != stateDead || d.Client != "phone" {
 		t.Errorf("dead list: %+v", st.Docs)
 	}
-	if d, err := s.freeDoc(c); err != nil || d.URL != docC {
-		t.Errorf("next free %+v %v", d, err)
+	if d, err := s.freeDoc(c); err == nil {
+		t.Errorf("a free document left: %+v", d)
 	}
 	if msg, _ := docChangeMessage(ch); msg != "docs.dead.replaced" {
 		t.Errorf("message %s", msg)
@@ -192,6 +194,7 @@ func TestBotPoolScreen(t *testing.T) {
 	c, _ := s.Get("phone")
 	c.Telegram = &TGAccount{ID: 101, Username: "dima"}
 	s.Save(c)
+	writeFile(t, s.poolPath(), "mailru "+docB+"\nmailru "+docC+"\n")
 	fakeEgressCheck(t, testURL)
 	now := time.Now()
 	owner.docsTick(now)
@@ -203,8 +206,12 @@ func TestBotPoolScreen(t *testing.T) {
 	if !strings.Contains(strings.Join(told, "\n"), "больше не открывается") {
 		t.Errorf("owner not told: %q", told)
 	}
-	if m := f.to(101); len(m) == 0 || !strings.Contains(m[0].Text, "переехал на новый документ") || f.photoCount() == 0 {
-		t.Errorf("client not given the new link: %+v", m)
+	var toClient []string
+	for _, m := range f.to(101) {
+		toClient = append(toClient, m.Text)
+	}
+	if all := strings.Join(toClient, "\n"); !strings.Contains(all, "появился запасной документ") || !strings.Contains(all, "переехал на новый документ") || f.photoCount() < 2 {
+		t.Errorf("client not given the new links: %q", toClient)
 	}
 	sc := owner.poolScreen()
 	kb, _ := json.Marshal(sc.kb)
@@ -243,12 +250,43 @@ func TestPoolCommand(t *testing.T) {
 	if err := run([]string{"pool"}, strings.NewReader(""), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Dead (reflux pool recheck") || !strings.Contains(out.String(), "1 of 2 free") {
+	if !strings.Contains(out.String(), "Dead (reflux pool recheck") || !strings.Contains(out.String(), "0 of 2 free") {
 		t.Errorf("pool:\n%s", out.String())
 	}
 	fakeEgressCheck(t)
 	out.Reset()
 	if err := run([]string{"pool", "recheck"}, strings.NewReader(""), &out); err != nil || !strings.Contains(out.String(), "Back: 1") {
 		t.Errorf("recheck: %v\n%s", err, out.String())
+	}
+}
+
+// Backups go to active clients with one document only, from documents
+// that passed their last check.
+func TestEnsureBackups(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	writeFile(t, s.poolPath(), "mailru "+docB+"\nmailru "+docC+"\n")
+	for _, n := range []string{"phone", "paused"} {
+		url := testURL
+		if n == "paused" {
+			url = "https://cloud.mail.ru/public/PPPP/pppp"
+		}
+		if _, err := s.Add(n, "mailru", url); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, _ := s.Get("paused")
+	p.Paused = true
+	s.Save(p)
+	st, _ := s.loadDocsState()
+	st.Suspect[docB] = 1
+	changes, err := s.ensureBackups(st, time.Now())
+	if err != nil || len(changes) != 1 || changes[0].Client != "phone" || changes[0].Doc.URL != docC {
+		t.Fatalf("backups %+v %v", changes, err)
+	}
+	if c, _ := s.Get("paused"); len(c.Docs()) != 1 {
+		t.Error("a paused client got a backup")
+	}
+	if changes, _ := s.ensureBackups(st, time.Now()); len(changes) != 0 {
+		t.Errorf("a second backup %+v", changes)
 	}
 }

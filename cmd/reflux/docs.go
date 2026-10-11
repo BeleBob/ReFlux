@@ -279,7 +279,10 @@ func (s Store) poolStatus() ([]poolDoc, error) {
 
 // freeDoc is the first free pool document for c: of its main document's
 // type first (the pool's Yandex documents may hit SmartCaptcha).
-func (s Store) freeDoc(c Client) (Doc, error) {
+func (s Store) freeDoc(c Client) (Doc, error) { return s.freeDocExcept(c, nil) }
+
+// freeDocExcept is freeDoc passing over the documents skip names.
+func (s Store) freeDocExcept(c Client, skip func(url string) bool) (Doc, error) {
 	docs, err := s.poolStatus()
 	if err != nil {
 		return Doc{}, err
@@ -287,7 +290,7 @@ func (s Store) freeDoc(c Client) (Doc, error) {
 	var other *Doc
 	for i := range docs {
 		d := docs[i]
-		if !d.free() || !transports[d.Transport] || validURL(d.URL) != nil {
+		if !d.free() || !transports[d.Transport] || validURL(d.URL) != nil || (skip != nil && skip(d.URL)) {
 			continue
 		}
 		if d.Transport == c.Transport {

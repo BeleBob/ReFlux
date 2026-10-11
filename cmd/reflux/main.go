@@ -590,6 +590,9 @@ func render(s Store) error {
 		if err := s.SyncConf(c); err != nil {
 			return fmt.Errorf("%s: node.conf: %w", c.Name, err)
 		}
+		if err := s.writeOffer(c, time.Now()); err != nil {
+			return fmt.Errorf("%s: offer: %w", c.Name, err)
+		}
 	}
 	b, err := composeYAML(s.Root, activeClients(clients, time.Now()), options())
 	if err != nil {
