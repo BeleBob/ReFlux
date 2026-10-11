@@ -138,7 +138,9 @@ func (s *Server) profiles(poolIDs []string) []subscription.Profile {
 	for _, id := range poolIDs {
 		want[id] = true
 	}
-	var out []subscription.Profile
+	// out starts empty, never nil: the JSON of a document with no usable pool
+	// must be "profiles":[], which the apps read, and not "profiles":null.
+	out := []subscription.Profile{}
 	for _, p := range s.cfg.Pools {
 		if len(want) > 0 && !want[p.ID] {
 			continue

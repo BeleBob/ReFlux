@@ -629,6 +629,25 @@ func TestBrokenPoolIsLeftOut(t *testing.T) {
 	}
 }
 
+// Every pool unusable must not turn into "profiles":null, which apps cannot
+// decode: the answer keeps the empty list the document always carries.
+func TestAllPoolsBrokenGivesEmptyProfilesNotNull(t *testing.T) {
+	e := newEnv(t)
+	token, _ := e.register("ivan", "a")
+	for _, ch := range []string{"fork-all", "de"} {
+		if err := os.Remove(filepath.Join(e.nodes, ch, "node.conf")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, doc := e.call("GET", "/api/v1/subscription", token, nil)
+	if code != 200 || doc.str("status") != "active" {
+		t.Fatalf("document: %d %v", code, doc)
+	}
+	if doc["profiles"] == nil {
+		t.Fatalf(`an active subscription with no usable pool must answer "profiles":[], not null: %v`, doc)
+	}
+}
+
 func TestConfigChecks(t *testing.T) {
 	good := func() *Config {
 		return &Config{
