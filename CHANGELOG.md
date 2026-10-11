@@ -5,6 +5,15 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-11 (meepo161/OpenFlux)
+
+### Added
+
+- `node-install.sh show` returns the channel's encryption `key`, read as root
+  over SSH, so the owner's app can make the link and profile of a node that was
+  installed elsewhere (a server screen lists all nodes on it and shares or
+  connects to any). `provision.ChannelInfo.Key`; its `String()` leaves the key out.
+
 ## [0.7.0] - 2026-10-11 (meepo161/OpenFlux)
 
 ### Added
