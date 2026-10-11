@@ -26,38 +26,38 @@ func newNodeWatch() *nodeWatch {
 	return &nodeWatch{busy: map[string]bool{}, again: map[string]time.Time{}}
 }
 
-// start asks for the pool's channel to be created. It checks the channel on
+// start asks for the requested channel to be created. It checks the channel on
 // disk again under the lock, so a parallel or finished attempt is not doubled.
-func (s *Server) start(p Pool) {
+func (s *Server) start(r nodeRequest) {
 	s.w.mu.Lock()
-	if s.w.busy[p.Channel] {
+	if s.w.busy[r.Channel] {
 		s.w.mu.Unlock()
 		return
 	}
-	if t, ok := s.w.again[p.Channel]; ok && s.now().Before(t) {
+	if t, ok := s.w.again[r.Channel]; ok && s.now().Before(t) {
 		s.w.mu.Unlock()
 		return
 	}
-	if _, err := s.links.link(p); err == nil {
+	if _, err := s.links.link(r.Pool, r.Channel); err == nil {
 		s.w.mu.Unlock()
 		return
 	}
-	s.w.busy[p.Channel] = true
+	s.w.busy[r.Channel] = true
 	s.w.mu.Unlock()
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		err := s.prov.Ensure(ctx, p)
+		err := s.prov.Ensure(ctx, r)
 		s.w.mu.Lock()
 		defer s.w.mu.Unlock()
-		s.w.busy[p.Channel] = false
+		s.w.busy[r.Channel] = false
 		if err != nil {
-			s.logf("pool %s: channel %s: autoNode: %v", p.ID, p.Channel, err)
-			s.w.again[p.Channel] = s.now().Add(nodeRetryAfter)
+			s.logf("pool %s: channel %s: autoNode: %v", r.Pool.ID, r.Channel, err)
+			s.w.again[r.Channel] = s.now().Add(nodeRetryAfter)
 			return
 		}
-		delete(s.w.again, p.Channel)
+		delete(s.w.again, r.Channel)
 	}()
 }
 
@@ -81,8 +81,8 @@ func (s *Server) startNodeWatch(ctx context.Context) {
 
 func (s *Server) ensureAll() {
 	for _, p := range s.cfg.Pools {
-		if p.AutoNode {
-			s.start(p)
+		if p.AutoNode && !p.PerUser {
+			s.start(nodeRequest{Pool: p, Channel: p.Channel})
 		}
 	}
 }

@@ -13,11 +13,19 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/provision"
 )
 
-// nodeProvisioner creates a pool's exit node channel on this host. The heavy
-// lifting is node-install.sh's plan/apply (as root); a cupsonline transport
-// with an empty url means "make the rooms yourself". See docs/plans.
+// nodeRequest is one channel to create: the pool's template, the concrete
+// channel name and the owner (account or key id) documents are made for.
+type nodeRequest struct {
+	Pool    Pool
+	Channel string
+	Owner   string
+}
+
+// nodeProvisioner creates a channel on this host. The heavy lifting is
+// node-install.sh's plan/apply (as root); a cupsonline transport with an empty
+// url means "make the rooms yourself". See docs/plans.
 type nodeProvisioner interface {
-	Ensure(ctx context.Context, p Pool) error
+	Ensure(ctx context.Context, r nodeRequest) error
 }
 
 // scriptProvisioner runs node-install.sh on this machine, the way the owner
@@ -30,6 +38,9 @@ type scriptProvisioner struct {
 	exec func(ctx context.Context, stdin string, name string, args ...string) ([]byte, error)
 	// rooms makes cups.online rooms; cupsonline.CreateRoomList for real.
 	rooms func(ctx context.Context) (string, error)
+	// docs supplies carrier documents (vyandex/mailru/boards); nil or an
+	// unconfigured factory means those carriers are skipped.
+	docs DocFactory
 }
 
 // scriptResult is node-install.sh's last JSON line.
@@ -48,18 +59,31 @@ func runCmd(ctx context.Context, stdin string, name string, args ...string) ([]b
 }
 
 // channelTransports fills a cupsonline transport with empty url with fresh
-// cups.online rooms, and makes rooms for a pool with no transports at all, so
-// a new channel always has a document transport for readChannel.
-func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provision.ChannelTransport) ([]provision.ChannelTransport, error) {
+// cups.online rooms, asks the DocFactory for document carriers, and drops a
+// document carrier no factory can serve. A pool with no transports at all gets
+// cups.online rooms, so a channel always has a document for readChannel.
+func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provision.ChannelTransport, owner string) ([]provision.ChannelTransport, error) {
 	out := make([]provision.ChannelTransport, 0, len(ts)+1)
 	for _, t := range ts {
+		t.Type = strings.TrimSpace(t.Type)
 		t.URL = strings.TrimSpace(t.URL)
-		if t.Type == "cupsonline" && t.URL == "" {
+		switch {
+		case t.Type == "cupsonline" && t.URL == "":
 			rooms, err := p.rooms(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("cups.online: %w", err)
 			}
 			t.URL = rooms
+		case docCarrier(t.Type) && t.URL == "":
+			if p.docs == nil {
+				continue
+			}
+			url, _, err := p.docs.Make(ctx, t.Type, owner)
+			if err != nil {
+				p.logf("pool owner %s: %s: %v", owner, t.Type, err)
+				continue
+			}
+			t.URL = url
 		}
 		out = append(out, t)
 	}
@@ -73,37 +97,38 @@ func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provisio
 	return provision.CheckTransports(out)
 }
 
-// Ensure creates the pool's channel on this host: node-install.sh plan picks a
-// port, apply installs, configures and starts the openflux-node@channel unit.
-func (p *scriptProvisioner) Ensure(ctx context.Context, pool Pool) error {
-	ts, err := p.channelTransports(ctx, pool.Transports)
+// Ensure creates the channel of a request on this host: node-install.sh plan
+// picks a port, apply installs, configures and starts the openflux-node@channel
+// unit.
+func (p *scriptProvisioner) Ensure(ctx context.Context, r nodeRequest) error {
+	ts, err := p.channelTransports(ctx, r.Pool.Transports, r.Owner)
 	if err != nil {
 		return err
 	}
-	mode, _ := provision.CheckMode(pool.Mode) // checked in Config.Check already
+	mode, _ := provision.CheckMode(r.Pool.Mode) // checked in Config.Check already
 	key, err := provision.NewKey()
 	if err != nil {
 		return err
 	}
-	cfg := "channel=" + pool.Channel + "\n" + transportLines(ts)
+	cfg := "channel=" + r.Channel + "\n" + transportLines(ts)
 	if mode == provision.ModeL3 {
 		cfg += "mode=l3\n"
 	}
 	cfg += "autoupdate=no\n"
 
-	r, err := p.runScript(ctx, "plan", cfg)
+	res, err := p.runScript(ctx, "plan", cfg)
 	if err != nil {
 		return err
 	}
-	if r.Port <= 0 || r.Port > 65535 {
-		return fmt.Errorf("план ноды не дал порт (port=%d)", r.Port)
+	if res.Port <= 0 || res.Port > 65535 {
+		return fmt.Errorf("план ноды не дал порт (port=%d)", res.Port)
 	}
 	cfg += "key=" + key + "\n"
-	cfg += "port=" + strconv.Itoa(r.Port) + "\n"
+	cfg += "port=" + strconv.Itoa(res.Port) + "\n"
 	if _, err := p.runScript(ctx, "apply", cfg); err != nil {
 		return err
 	}
-	p.logf("pool %s: channel %s created on this host, port %d", pool.ID, pool.Channel, r.Port)
+	p.logf("pool %s: channel %s created on this host, port %d", r.Pool.ID, r.Channel, res.Port)
 	return nil
 }
 

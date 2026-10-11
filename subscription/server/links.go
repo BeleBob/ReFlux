@@ -104,8 +104,8 @@ type cached struct {
 
 func newLinkCache(dir string) *linkCache { return &linkCache{dir: dir, entries: map[string]cached{}} }
 
-func (c *linkCache) link(p Pool) (string, error) {
-	base := filepath.Join(c.dir, p.Channel)
+func (c *linkCache) link(p Pool, channel string) (string, error) {
+	base := filepath.Join(c.dir, channel)
 	ci, err := os.Stat(filepath.Join(base, "node.conf"))
 	if err != nil {
 		return "", err
@@ -116,10 +116,10 @@ func (c *linkCache) link(p Pool) (string, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e, ok := c.entries[p.ID]; ok && e.conf.Equal(ci.ModTime()) && e.key.Equal(ki.ModTime()) {
+	if e, ok := c.entries[channel]; ok && e.conf.Equal(ci.ModTime()) && e.key.Equal(ki.ModTime()) {
 		return e.link, nil
 	}
-	info, err := readChannel(c.dir, p.Channel)
+	info, err := readChannel(c.dir, channel)
 	if err != nil {
 		return "", err
 	}
@@ -127,7 +127,7 @@ func (c *linkCache) link(p Pool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	c.entries[p.ID] = cached{conf: ci.ModTime(), key: ki.ModTime(), link: link}
+	c.entries[channel] = cached{conf: ci.ModTime(), key: ki.ModTime(), link: link}
 	return link, nil
 }
 
@@ -145,11 +145,11 @@ func (s *Server) profiles(poolIDs []string) []subscription.Profile {
 		if len(want) > 0 && !want[p.ID] {
 			continue
 		}
-		link, err := s.links.link(p)
+		link, err := s.links.link(p, p.Channel)
 		if err != nil {
 			s.logf("pool %s: %v", p.ID, err)
 			if p.AutoNode {
-				s.start(p)
+				s.start(nodeRequest{Pool: p, Channel: p.Channel})
 			}
 			continue
 		}

@@ -74,10 +74,10 @@ type fakeProvisioner struct {
 	block   chan struct{} // when set, Ensure waits here before writing
 }
 
-func (f *fakeProvisioner) Ensure(_ context.Context, p Pool) error {
+func (f *fakeProvisioner) Ensure(_ context.Context, r nodeRequest) error {
 	f.mu.Lock()
 	f.calls++
-	f.channel = p.Channel
+	f.channel = r.Channel
 	started, block, fail, nodes := f.started, f.block, f.fail, f.nodes
 	f.mu.Unlock()
 	if started != nil {
@@ -95,7 +95,7 @@ func (f *fakeProvisioner) Ensure(_ context.Context, p Pool) error {
 	if fail {
 		return errors.New("не смог")
 	}
-	writeChannel(f.t, nodes, p.Channel, []string{mailruDoc}, "35123")
+	writeChannel(f.t, nodes, r.Channel, []string{mailruDoc}, "35123")
 	return nil
 }
 

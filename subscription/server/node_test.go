@@ -48,7 +48,7 @@ func TestScriptProvisionerCallsPlanThenApply(t *testing.T) {
 	}
 	p := Pool{ID: "main", Channel: "fork-all", AutoNode: true,
 		Transports: []provision.ChannelTransport{{Type: "cupsonline", URL: ""}}}
-	if err := sp.Ensure(context.Background(), p); err != nil {
+	if err := sp.Ensure(context.Background(), nodeRequest{Pool: p, Channel: "fork-all"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(cmds) != 2 || cmds[0] != "plan" || cmds[1] != "apply" {
@@ -95,7 +95,7 @@ func TestScriptProvisionerEmptyTransportsMakeCupsRooms(t *testing.T) {
 		},
 		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
 	}
-	if err := sp.Ensure(context.Background(), Pool{ID: "m", Channel: "fork-all", AutoNode: true}); err != nil {
+	if err := sp.Ensure(context.Background(), nodeRequest{Pool: Pool{ID: "m", Channel: "fork-all", AutoNode: true}, Channel: "fork-all"}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(applyConf, "cupsonline=WyJyb29tIl0") {
@@ -118,10 +118,40 @@ func TestScriptProvisionerReportsScriptErrors(t *testing.T) {
 		},
 		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
 	}
-	err := sp.Ensure(context.Background(), Pool{ID: "m", Channel: "fork-all", AutoNode: true,
-		Transports: []provision.ChannelTransport{{Type: "cupsonline", URL: "WyJyb29tIl0"}}})
+	err := sp.Ensure(context.Background(), nodeRequest{Pool: Pool{ID: "m", Channel: "fork-all", AutoNode: true,
+		Transports: []provision.ChannelTransport{{Type: "cupsonline", URL: "WyJyb29tIl0"}}}, Channel: "fork-all"})
 	if err == nil || !strings.Contains(err.Error(), "имя канала занято") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestScriptProvisionerUsesRequestChannel(t *testing.T) {
+	var applyConf string
+	sp := &scriptProvisioner{
+		cfg:  &Config{NodeScript: "/node-install.sh"},
+		logf: func(string, ...any) {},
+		exec: func(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
+			if name != "sh" {
+				t.Fatalf("name %q, want sh", name)
+			}
+			switch modeOf(args) {
+			case "plan":
+				return []byte(`{"ok":true,"port":30001}` + "\n"), nil
+			case "apply":
+				b, _ := os.ReadFile(args[len(args)-1])
+				applyConf = string(b)
+				return []byte(`{"ok":true}` + "\n"), nil
+			}
+			return nil, nil
+		},
+		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
+	}
+	r := nodeRequest{Pool: Pool{ID: "main", Name: "M", PerUser: true}, Channel: "u1a2b3c4d5e6f708090", Owner: "acc-1"}
+	if err := sp.Ensure(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(applyConf, "channel=u1a2b3c4d5e6f708090") {
+		t.Fatalf("apply must use the request's channel, got: %q", applyConf)
 	}
 }
 
@@ -134,8 +164,8 @@ func TestScriptProvisionerMissingScript(t *testing.T) {
 		},
 		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
 	}
-	err := sp.Ensure(context.Background(), Pool{ID: "m", Channel: "fork-all", AutoNode: true,
-		Transports: []provision.ChannelTransport{{Type: "cupsonline", URL: "WyJyb29tIl0"}}})
+	err := sp.Ensure(context.Background(), nodeRequest{Pool: Pool{ID: "m", Channel: "fork-all", AutoNode: true,
+		Transports: []provision.ChannelTransport{{Type: "cupsonline", URL: "WyJyb29tIl0"}}}, Channel: "fork-all"})
 	if err == nil || !strings.Contains(err.Error(), "plan:") {
 		t.Fatalf("err %v", err)
 	}
