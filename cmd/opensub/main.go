@@ -6,7 +6,7 @@
 //	opensub reset-password <login> | delete-user <login>
 //	opensub key-add <name> [days] [pools] | keys | key-extend <id> <days> | key-revoke <id>
 //	opensub orders | paid <order>
-//	opensub rotate <pool>               new key for a location's channel (root)
+//	opensub rotate <pool>               new key for a pool's fixed channel (root; not for per-user pools)
 //	opensub config-example
 //
 // The commands call the service's admin API on this machine; see
@@ -265,6 +265,12 @@ func rotate(cfg *server.Config, poolID string) {
 	for _, p := range cfg.Pools {
 		if p.ID != poolID {
 			continue
+		}
+		if p.PerUser {
+			fatal(fmt.Errorf("pool %q: a per-user pool has no fixed channel to rotate; restart the openflux-node@u<hex> units themselves, one per subscriber", poolID))
+		}
+		if p.Channel == "" {
+			fatal(fmt.Errorf("pool %q has no channel", poolID))
 		}
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {

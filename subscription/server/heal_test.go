@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/provision"
+	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 func TestAutoNodeConfigRules(t *testing.T) {
@@ -308,7 +309,9 @@ func TestPerUserGetsOwnChannel(t *testing.T) {
 	t2, _ := e.register("petr", "b")
 
 	// Both ask: each triggers a creation of their own channel.
-	e.call("GET", "/api/v1/subscription", t1, nil)
+	if _, d1 := e.call("GET", "/api/v1/subscription", t1, nil); d1["profiles"] == nil {
+		t.Fatalf("during per-user channel creation the answer must be \"profiles\":[], not null: %v", d1)
+	}
 	e.call("GET", "/api/v1/subscription", t2, nil)
 	u1, u2 := userChannel(e.idOf("ivan")), userChannel(e.idOf("petr"))
 	if u1 == u2 {
@@ -332,6 +335,17 @@ func TestPerUserGetsOwnChannel(t *testing.T) {
 	_, doc := e.call("GET", "/api/v1/subscription", t1, nil)
 	if len(doc.list("profiles")) != 1 {
 		t.Fatalf("profiles: %v", doc)
+	}
+	cfgL, err := share.Decode(reply(doc.list("profiles")[0].(map[string]any)).str("link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBytes, err := os.ReadFile(filepath.Join(e.nodes, u1, "encryption-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgL.Secret != strings.TrimSpace(string(keyBytes)) {
+		t.Fatalf("ivan's profile must be his own channel: link secret %q, channel key %q", cfgL.Secret, strings.TrimSpace(string(keyBytes)))
 	}
 }
 
@@ -364,12 +378,14 @@ func TestPerUserKeyGetsOwnChannel(t *testing.T) {
 	e.prov = fake
 	e.start(e.srv.cfg)
 	_, k := e.admin("POST", "/admin/keys", map[string]any{"name": "Подарок"})
+	kid := k.str("id")
 	token := k.str("token")
 	e.call("GET", "/sub/"+token, "", nil)
 	// The key's channel appears (id is the key's; wait by polling profiles).
+	var doc reply
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		_, doc := e.call("GET", "/sub/"+token, "", nil)
+		_, doc = e.call("GET", "/sub/"+token, "", nil)
 		if len(doc.list("profiles")) == 1 {
 			break
 		}
@@ -377,5 +393,16 @@ func TestPerUserKeyGetsOwnChannel(t *testing.T) {
 			t.Fatalf("the key never got a channel: %v", doc)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	cfgL, err := share.Decode(reply(doc.list("profiles")[0].(map[string]any)).str("link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBytes, err := os.ReadFile(filepath.Join(e.nodes, userChannel(kid), "encryption-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgL.Secret != strings.TrimSpace(string(keyBytes)) {
+		t.Fatalf("the key's profile must be its own channel: link secret %q, channel key %q", cfgL.Secret, strings.TrimSpace(string(keyBytes)))
 	}
 }
