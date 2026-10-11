@@ -153,7 +153,7 @@ func nodeTransports(transportsJSON string) ([]provision.ChannelTransport, error)
 // NodePlan asks the VDS what installing the channel would change: {"plan"}.
 // transportsJSON: the carriers (see nodeTransports); withCookies: the Yandex
 // sign-in goes to the node too; autoUpdate: the server's core updater.
-func NodePlan(channel string, port int, transportsJSON string, withCookies, autoUpdate bool) string {
+func NodePlan(channel string, port int, transportsJSON string, withCookies, autoUpdate bool, mode string) string {
 	conn, err := nodeConn()
 	if err != nil {
 		return failure(err, nil)
@@ -162,7 +162,7 @@ func NodePlan(channel string, port int, transportsJSON string, withCookies, auto
 	if err != nil {
 		return failure(err, nil)
 	}
-	plan, err := conn.Plan(provision.Channel{ID: channel, Port: port, Transports: ts, AutoUpdate: autoUpdate}, withCookies)
+	plan, err := conn.Plan(provision.Channel{ID: channel, Port: port, Transports: ts, AutoUpdate: autoUpdate, Mode: mode}, withCookies)
 	if err != nil {
 		return failure(err, nil)
 	}
@@ -174,7 +174,7 @@ func NodePlan(channel string, port int, transportsJSON string, withCookies, auto
 // cookieHeader is the Yandex sign-in for the node ("" for none): the node
 // then opens the Yandex document as that account, which gets it past the
 // checks Yandex shows a server's address.
-func NodeApply(channel, transportsJSON, key string, port int, autoUpdate bool, sudoPassword, cookieHeader string) string {
+func NodeApply(channel, transportsJSON, key string, port int, autoUpdate bool, sudoPassword, cookieHeader, mode string) string {
 	conn, err := nodeConn()
 	if err != nil {
 		return failure(err, nil)
@@ -183,7 +183,7 @@ func NodeApply(channel, transportsJSON, key string, port int, autoUpdate bool, s
 	if err != nil {
 		return failure(err, nil)
 	}
-	ch := provision.Channel{ID: channel, Transports: ts, Key: key, Port: port, AutoUpdate: autoUpdate}
+	ch := provision.Channel{ID: channel, Transports: ts, Key: key, Port: port, AutoUpdate: autoUpdate, Mode: mode}
 	if cookieHeader != "" {
 		if ch.Cookies, err = provision.ChannelCookies(ts, cookieHeader); err != nil {
 			return failure(err, nil)
@@ -236,7 +236,7 @@ func NodeShowChannel(channel, sudoPassword string) string {
 // encryption context stay, so its links keep working. cookieHeader, when
 // not empty, is a new Yandex sign-in for the channel's Yandex document.
 // Answers like NodeShowChannel with the channel as it is now.
-func NodeSetTransports(channel, transportsJSON, cookieHeader, sudoPassword string) string {
+func NodeSetTransports(channel, transportsJSON, cookieHeader, sudoPassword, mode string) string {
 	conn, err := nodeConn()
 	if err != nil {
 		return failure(err, nil)
@@ -251,7 +251,7 @@ func NodeSetTransports(channel, transportsJSON, cookieHeader, sudoPassword strin
 			return failure(err, nil)
 		}
 	}
-	if err := conn.SetTransports(channel, ts, cookies, sudoPassword); err != nil {
+	if err := conn.SetChannel(channel, ts, mode, cookies, sudoPassword); err != nil {
 		return failure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
 	}
 	appendLog("[NODE] Транспорты канала " + channel + " изменены")

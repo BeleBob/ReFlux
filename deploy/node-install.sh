@@ -270,7 +270,7 @@ pick_port() {
 
 # ---- input ------------------------------------------------------------------
 
-CHANNEL=""; URL=""; YANDEX=""; MAILRU=""; BOARDS=""; CUPS=""; KEY=""; PORT=""; COOKIES=""; AUTOUPDATE=""
+CHANNEL=""; URL=""; YANDEX=""; MAILRU=""; BOARDS=""; CUPS=""; KEY=""; PORT=""; COOKIES=""; AUTOUPDATE=""; MODE=""
 
 # read_config [FILE]: reads stdin, or FILE and then deletes it.
 read_config() {
@@ -293,6 +293,7 @@ read_config() {
             port=*) PORT=${line#port=} ;;
             cookies=*) COOKIES=${line#cookies=} ;;
             autoupdate=*) AUTOUPDATE=${line#autoupdate=} ;;
+            mode=*) MODE=${line#mode=} ;;
             "") ;;
             *) fail input "неизвестная строка конфигурации" ;;
         esac
@@ -328,6 +329,7 @@ check_transports() {
     [ -z "$CUPS" ] || valid_rooms "$CUPS" || fail input "неверный список комнат cups.online"
     [ -z "$COOKIES" ] || [ -n "$URL" ] || [ -n "$YANDEX" ] || fail input "вход в Яндекс нужен только каналу с документом Яндекса"
     case "$AUTOUPDATE" in ""|yes|no) ;; *) fail input "autoupdate: yes или no" ;; esac
+    case "$MODE" in ""|l4|l3) ;; *) fail input "режим ноды: l4 или l3" ;; esac
 }
 
 # transport_names: the channel's transports for people, primary first.
@@ -425,6 +427,10 @@ cmd_plan() {
     fi
     set -- "$@" "Создать $CONF_ROOT/$CHANNEL: node.conf и ключ шифрования канала (права 0640)"
     [ -f "$UNIT_FILE" ] || set -- "$@" "Установить шаблон systemd $UNIT_FILE"
+    if [ "$MODE" = l3 ]; then
+        l3_ready plan
+        set -- "$@" "Режим l3: каналу даётся CAP_NET_RAW, а пока он работает, исходящие TCP-RST ядра с адреса сервера отбрасываются правилом iptables. Это касается и других сервисов на этом адресе"
+    fi
     names=$(transport_names)
     if [ -n "$names" ]; then
         set -- "$@" "Запустить openflux-node@$CHANNEL: $names и direct на порту $PORT/tcp (резерв)"
@@ -452,7 +458,7 @@ cmd_plan() {
 }
 
 # Rollback state for apply: what this run created.
-CREATED_USER=0; CREATED_UNIT=0; CREATED_BIN=0; CREATED_CONF=0; CREATED_FW=""; STARTED=0
+CREATED_USER=0; CREATED_UNIT=0; CREATED_BIN=0; CREATED_CONF=0; CREATED_FW=""; STARTED=0; CREATED_L3=0
 
 rollback() {
     [ "$STARTED" = 1 ] && unit_stop "openflux-node@$CHANNEL"
@@ -460,6 +466,7 @@ rollback() {
         ufw) ufw delete allow "$PORT/tcp" >/dev/null 2>&1 ;;
         firewalld) firewall-cmd --permanent --remove-port="$PORT/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 ;;
     esac
+    [ "$CREATED_L3" = 1 ] && set_channel_mode "$CHANNEL" l4 && systemctl daemon-reload >/dev/null 2>&1
     [ "$CREATED_CONF" = 1 ] && rm -rf "${CONF_ROOT:?}/$CHANNEL" "${STATE_ROOT:?}/$CHANNEL"
     [ "$CREATED_UNIT" = 1 ] && rm -f "$UNIT_FILE" && systemctl daemon-reload >/dev/null 2>&1
     [ "$CREATED_BIN" = 1 ] && rm -f "$BIN_DIR/openflux-$CORE_VERSION"
@@ -532,6 +539,88 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 WantedBy=multi-user.target
 EOF
     chmod 0644 "$UNIT_FILE"
+}
+
+# ---- l3: the node forwards IP packets ------------------------------------
+#
+# Mode = l3 sends clients' packets out through raw sockets, which needs
+# CAP_NET_RAW, and the kernel must not answer the replies with its own RSTs:
+# while an l3 channel runs, outbound TCP RSTs from the node's address are
+# dropped. That is host-wide for the address (other services on it lose
+# their RSTs, nothing else), which is why l4 is the default.
+
+L3_HELPER="/opt/openflux-node/l3-rst.sh"
+
+# l3_dropin_file CHANNEL: the per-channel systemd drop-in that makes it l3.
+l3_dropin_file() { printf '/etc/systemd/system/openflux-node@%s.service.d/l3.conf' "$1"; }
+
+# systemd_new_enough: the "+" prefix (a command that runs as root even in a
+# sandboxed unit) needs systemd 231.
+systemd_new_enough() {
+    v=$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9]*\).*/\1/p')
+    [ -n "$v" ] && [ "$v" -ge 231 ]
+}
+
+# l3_ready: what l3 needs of the server; the reason on stderr-less failure via fail.
+l3_ready() { # STEP
+    have iptables || fail "$1" "для режима l3 нужен iptables, а его на сервере нет"
+    have ip || fail "$1" "для режима l3 нужна команда ip (iproute2)"
+    systemd_new_enough || fail "$1" "для режима l3 нужен systemd 231 или новее"
+}
+
+write_l3_helper() {
+    mkdir -p "$(dirname "$L3_HELPER")"
+    cat > "$L3_HELPER" <<'EOF'
+#!/bin/sh
+# Managed by OpenFlux node-install.sh: drops the kernel's own TCP RSTs for the
+# node's address while an l3 channel runs (the node answers those packets itself).
+ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1)
+[ -n "$ip" ] || exit 0
+rule="OUTPUT -p tcp --tcp-flags RST RST -s $ip -j DROP"
+case "$1" in
+    add) iptables -C $rule 2>/dev/null || iptables -A $rule ;;
+    del)
+        # Another l3 channel still running keeps the rule.
+        for d in /etc/systemd/system/openflux-node@*.service.d/l3.conf; do
+            [ -f "$d" ] || continue
+            ch=${d#/etc/systemd/system/openflux-node@}; ch=${ch%.service.d/l3.conf}
+            [ "$ch" = "$2" ] && continue
+            systemctl is-active --quiet "openflux-node@$ch" && exit 0
+        done
+        iptables -C $rule 2>/dev/null && iptables -D $rule ;;
+esac
+exit 0
+EOF
+    chmod 0755 "$L3_HELPER"
+}
+
+# set_channel_mode CHANNEL MODE: makes the channel's unit l3 or plain l4 (the caller reloads systemd).
+set_channel_mode() {
+    f=$(l3_dropin_file "$1")
+    if [ "$2" = l3 ]; then
+        write_l3_helper
+        mkdir -p "$(dirname "$f")"
+        cat > "$f" <<EOF
+$MARKER
+# This channel forwards IP packets (Mode = l3).
+[Service]
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+ExecStartPre=+$L3_HELPER add %i
+ExecStopPost=+$L3_HELPER del %i
+EOF
+        chmod 0644 "$f"
+    else
+        [ -f "$f" ] && grep -qF "$MARKER" "$f" && rm -f "$f"
+        rmdir "$(dirname "$f")" 2>/dev/null
+    fi
+    return 0
+}
+
+# channel_mode CHANNEL: l3 or l4, as the channel's node.conf says.
+channel_mode() {
+    m=$(sed -n 's/^Mode = //p' "$CONF_ROOT/$1/node.conf" 2>/dev/null | head -n 1)
+    [ "$m" = l3 ] && printf l3 || printf l4
 }
 
 # script_core FILE: the CORE_VERSION a copy of this script pins.
@@ -614,7 +703,7 @@ write_node_conf() {
     cat <<EOF
 # OpenFlux node channel $CHANNEL, written by node-install.sh
 Role = exit
-Mode = l4
+Mode = ${MODE:-l4}
 EncryptionKeyFile = $CONF_ROOT/$CHANNEL/encryption-key
 CookieStore = $STATE_ROOT/$CHANNEL/cookies.json
 EOF
@@ -683,6 +772,11 @@ cmd_apply() {
         write_unit
         CREATED_UNIT=1
     fi
+    if [ "$MODE" = l3 ]; then
+        l3_ready apply
+        set_channel_mode "$CHANNEL" l3
+        CREATED_L3=1
+    fi
     systemctl daemon-reload || apply_fail systemd "systemctl daemon-reload не удался"
 
     case "$(firewall_kind)" in
@@ -709,13 +803,17 @@ cmd_apply() {
     autoupdate=false
     apply_autoupdate
     autoupdate_on && autoupdate=true
-    printf '{"ok":true,"channel":"%s","port":%s,"core":"%s","autoupdate":%s}\n' "$CHANNEL" "$PORT" "$(core_to_use)" "$autoupdate"
+    printf '{"ok":true,"channel":"%s","port":%s,"core":"%s","autoupdate":%s,"mode":"%s"}\n' "$CHANNEL" "$PORT" "$(core_to_use)" "$autoupdate" "${MODE:-l4}"
 }
 
 # remove_channel CHANNEL: stops the channel, closes its firewall port and
 # deletes its config and state.
 remove_channel() {
     unit_stop "openflux-node@$1"
+    if [ -f "$(l3_dropin_file "$1")" ]; then
+        set_channel_mode "$1" l4
+        systemctl daemon-reload >/dev/null 2>&1
+    fi
     if [ -f "$CONF_ROOT/$1/firewall" ]; then
         read -r kind port < "$CONF_ROOT/$1/firewall"
         case "$kind" in
@@ -961,11 +1059,18 @@ cmd_set_transports() {
     # The context is the URL line before the first [Transport] section.
     KEPT_CONTEXT=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
     CONTEXT_KEEP=1
+    PREV_MODE=$(channel_mode "$CHANNEL")
+    [ -n "$MODE" ] || MODE=$PREV_MODE
+    [ "$MODE" = l3 ] && l3_ready set-transports
     cp -p "$dir/node.conf" "$dir/node.conf.prev" || fail set-transports "не удалось сохранить прежний node.conf"
     tmp=$(mktemp "$dir/.node.conf.XXXXXX") || fail set-transports "не удалось создать временный файл"
     write_node_conf > "$tmp" && chown "root:$NODE_USER" "$tmp" && chmod 0640 "$tmp" && mv -f "$tmp" "$dir/node.conf" \
         || { rm -f "$tmp"; fail set-transports "не удалось записать node.conf"; }
     [ -n "$COOKIES" ] && { write_cookies || fail set-transports "не удалось сохранить вход в Яндекс на сервере"; }
+    if [ "$MODE" != "$PREV_MODE" ]; then
+        set_channel_mode "$CHANNEL" "$MODE"
+        systemctl daemon-reload >/dev/null 2>&1
+    fi
 
     if ! systemctl restart "openflux-node@$CHANNEL" >/dev/null 2>&1; then
         set_transports_rollback
@@ -978,7 +1083,7 @@ cmd_set_transports() {
         fail set-transports "нода не поднялась с новыми транспортами, вернули прежние: $logs"
     fi
     rm -f "$dir/node.conf.prev"
-    printf '{"ok":true,"channel":"%s","transports":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")"
+    printf '{"ok":true,"channel":"%s","transports":"%s","mode":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")" "$MODE"
 }
 
 # show CONFIG_FILE: one channel's documents, port, state and encryption
@@ -993,8 +1098,8 @@ cmd_show() {
     port=$(sed -n 's/^Listen = [^:]*:\([0-9]*\)$/\1/p' "$dir/node.conf" | tail -n 1)
     context=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
     state=$(systemctl is-active "openflux-node@$CHANNEL" 2>/dev/null)
-    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","transports":[' \
-        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")"
+    printf '{"ok":true,"channel":"%s","state":"%s","port":%s,"context":"%s","mode":"%s","transports":[' \
+        "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")"
     first=1
     awk '
         function flush() { if (type != "") print type " " url; type = ""; url = "" }
@@ -1016,6 +1121,10 @@ cmd_show() {
 set_transports_rollback() {
     dir="$CONF_ROOT/$CHANNEL"
     [ -f "$dir/node.conf.prev" ] && mv -f "$dir/node.conf.prev" "$dir/node.conf"
+    if [ -n "${PREV_MODE:-}" ]; then
+        set_channel_mode "$CHANNEL" "$PREV_MODE"
+        systemctl daemon-reload >/dev/null 2>&1
+    fi
     systemctl restart "openflux-node@$CHANNEL" >/dev/null 2>&1
 }
 

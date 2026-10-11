@@ -220,3 +220,29 @@ func TestSetTransportsChecksBeforeTheServer(t *testing.T) {
 		t.Fatalf("valid documents: %v", err)
 	}
 }
+
+func TestChannelMode(t *testing.T) {
+	for in, want := range map[string]string{"": "l4", "l4": "l4", " L3 ": "l3", "l3": "l3"} {
+		got, err := CheckMode(in)
+		if err != nil || got != want {
+			t.Errorf("CheckMode(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := CheckMode("l2"); err == nil {
+		t.Error("an unknown mode is refused")
+	}
+	// l4 is the script's default: nothing is sent for it; l3 is named.
+	ch := Channel{ID: "of-abc", Port: 20001}
+	if cfg, _ := ch.config(); strings.Contains(cfg, "mode=") {
+		t.Errorf("default config names a mode: %q", cfg)
+	}
+	ch.Mode = "l3"
+	if cfg, _ := ch.config(); !strings.Contains(cfg, "mode=l3") {
+		t.Errorf("l3 config lacks the mode: %q", cfg)
+	}
+	ch.Mode = "bogus"
+	if _, err := ch.config(); err == nil {
+		t.Error("a bad mode is refused before it reaches the server")
+	}
+}
+

@@ -112,6 +112,29 @@ type Channel struct {
 	// AutoUpdate turns the server's core updater on, or off: it is one
 	// timer for every channel on the server.
 	AutoUpdate bool
+	// Mode is how the node forwards its clients' traffic: ModeL4 (the
+	// default, "" too: TCP streams, no special rights) or ModeL3 (IP
+	// packets: the node gets CAP_NET_RAW and a rule that drops the
+	// kernel's own RSTs for the node's address).
+	Mode string
+}
+
+// The node's two ways of forwarding traffic (node.conf's Mode).
+const (
+	ModeL4 = "l4"
+	ModeL3 = "l3"
+)
+
+// CheckMode returns mode as the script takes it: "l4" or "l3", "" meaning
+// the default (l4).
+func CheckMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ModeL4:
+		return ModeL4, nil
+	case ModeL3:
+		return ModeL3, nil
+	}
+	return "", errors.New("режим ноды: l4 или l3")
 }
 
 // config is the channel's part of node-install.sh's config, secrets aside.
@@ -120,7 +143,14 @@ func (ch Channel) config() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	mode, err := CheckMode(ch.Mode)
+	if err != nil {
+		return "", err
+	}
 	cfg := "channel=" + ch.ID + "\n" + transportLines(ts)
+	if mode == ModeL3 {
+		cfg += "mode=l3\n"
+	}
 	if ch.Port != 0 {
 		cfg += "port=" + strconv.Itoa(ch.Port) + "\n"
 	}
@@ -375,6 +405,8 @@ type ChannelInfo struct {
 	Context string `json:"context"`
 	// Transports are the channel's carriers besides direct.
 	Transports []ChannelTransport `json:"transports"`
+	// Mode is how the node forwards traffic: "l4" or "l3" (see Channel.Mode).
+	Mode string `json:"mode"`
 }
 
 // Show reads an installed channel's documents, port, state and encryption
@@ -394,6 +426,12 @@ func (c *Conn) Show(channel, sudoPassword string) (*ChannelInfo, error) {
 // config and the old one comes back if it does not start. cookies (see
 // CookieStore) replace the channel's Yandex sign-in when given.
 func (c *Conn) SetTransports(channel string, ts []ChannelTransport, cookies, sudoPassword string) error {
+	return c.SetChannel(channel, ts, "", cookies, sudoPassword)
+}
+
+// SetChannel is SetTransports that can change the node's mode too: mode "l3" or
+// "l4" is written to node.conf, "" keeps the one the channel has.
+func (c *Conn) SetChannel(channel string, ts []ChannelTransport, mode, cookies, sudoPassword string) error {
 	ts, err := CheckTransports(ts)
 	if err != nil {
 		return err
@@ -402,6 +440,13 @@ func (c *Conn) SetTransports(channel string, ts []ChannelTransport, cookies, sud
 		return errors.New("нужен хотя бы один документ: без него канал не нужен")
 	}
 	cfg := "channel=" + channel + "\n" + transportLines(ts)
+	if strings.TrimSpace(mode) != "" {
+		m, err := CheckMode(mode)
+		if err != nil {
+			return err
+		}
+		cfg += "mode=" + m + "\n"
+	}
 	if cookies != "" {
 		cfg += "cookies=" + cookies + "\n"
 	}

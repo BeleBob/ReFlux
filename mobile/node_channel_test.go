@@ -12,7 +12,7 @@ import (
 func TestNodeChannelCallsNeedConnection(t *testing.T) {
 	for name, out := range map[string]string{
 		"show": NodeShowChannel("of-abc123", ""),
-		"set":  NodeSetTransports("of-abc123", `[{"type":"mailru","url":"https://cloud.mail.ru/public/DEmN/ETbZW2MPY"}]`, "", ""),
+		"set":  NodeSetTransports("of-abc123", `[{"type":"mailru","url":"https://cloud.mail.ru/public/DEmN/ETbZW2MPY"}]`, "", "", ""),
 	} {
 		var r struct {
 			OK    bool   `json:"ok"`

@@ -56,6 +56,9 @@ type wizardParams struct {
 	// DocumentURL alone means a Yandex document (older apps).
 	Transports []provision.ChannelTransport `json:"transports"`
 	AutoUpdate bool                         `json:"autoUpdate"`
+	// Mode is how the node forwards traffic: "l4" (default) or "l3"; on
+	// setTransports "" keeps the channel's own.
+	Mode string `json:"mode"`
 	// Context is an installed channel's encryption context (see
 	// provision.ChannelInfo): a link for it keeps it.
 	Context string `json:"context"`
@@ -74,7 +77,7 @@ func (p wizardParams) transports() []provision.ChannelTransport {
 
 // channel is the channel the request describes, key and cookies aside.
 func (p wizardParams) channel() provision.Channel {
-	return provision.Channel{ID: p.Channel, Transports: p.transports(), Port: p.ChannelPort, AutoUpdate: p.AutoUpdate}
+	return provision.Channel{ID: p.Channel, Transports: p.transports(), Port: p.ChannelPort, AutoUpdate: p.AutoUpdate, Mode: p.Mode}
 }
 
 // nodeWizard holds the SSH connection between calls.
@@ -224,7 +227,7 @@ func (w *nodeWizard) handle(req wizardRequest) map[string]interface{} {
 				return wizardFailure(err, nil)
 			}
 		}
-		if err := conn.SetTransports(p.Channel, p.transports(), cookies, p.SudoPassword); err != nil {
+		if err := conn.SetChannel(p.Channel, p.transports(), p.Mode, cookies, p.SudoPassword); err != nil {
 			return wizardFailure(err, map[string]interface{}{"sudo": errors.Is(err, provision.ErrSudoPassword)})
 		}
 		info, err := conn.Show(p.Channel, p.SudoPassword)
