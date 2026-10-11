@@ -27,7 +27,7 @@ type scriptProvisioner struct {
 	logf func(format string, args ...any)
 	// exec runs the script; runCmd runs it for real. Tests replace it and
 	// return node-install.sh answers without a shell.
-	exec func(ctx context.Context, name string, args ...string) ([]byte, error)
+	exec func(ctx context.Context, stdin string, name string, args ...string) ([]byte, error)
 	// rooms makes cups.online rooms; cupsonline.CreateRoomList for real.
 	rooms func(ctx context.Context) (string, error)
 }
@@ -39,8 +39,12 @@ type scriptResult struct {
 	Error string `json:"error"`
 }
 
-func runCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+func runCmd(ctx context.Context, stdin string, name string, args ...string) ([]byte, error) {
+	c := exec.CommandContext(ctx, name, args...)
+	if stdin != "" {
+		c.Stdin = strings.NewReader(stdin)
+	}
+	return c.CombinedOutput()
 }
 
 // channelTransports fills a cupsonline transport with empty url with fresh
@@ -103,18 +107,24 @@ func (p *scriptProvisioner) Ensure(ctx context.Context, pool Pool) error {
 	return nil
 }
 
-// runScript writes the config to a 0600 temp file argv-style (node-install.sh
-// reads it and deletes it) and runs `sh script <cmd> <conf>`.
+// runScript feeds the config to the script the way its commands want it:
+// plan reads stdin, apply a config file argument it deletes after itself.
 func (p *scriptProvisioner) runScript(ctx context.Context, cmd, cfg string) (scriptResult, error) {
-	f, err := os.CreateTemp("", "opensub-node-*.conf")
-	if err != nil {
-		return scriptResult{}, err
+	var out []byte
+	var err error
+	if cmd == "plan" {
+		out, err = p.exec(ctx, cfg, "sh", p.cfg.NodeScript, cmd)
+	} else {
+		f, err2 := os.CreateTemp("", "opensub-node-*.conf")
+		if err2 != nil {
+			return scriptResult{}, err2
+		}
+		defer os.Remove(f.Name())
+		if err2 := os.WriteFile(f.Name(), []byte(cfg), 0o600); err2 != nil {
+			return scriptResult{}, err2
+		}
+		out, err = p.exec(ctx, "", "sh", p.cfg.NodeScript, cmd, f.Name())
 	}
-	defer os.Remove(f.Name())
-	if err := os.WriteFile(f.Name(), []byte(cfg), 0o600); err != nil {
-		return scriptResult{}, err
-	}
-	out, err := p.exec(ctx, "sh", p.cfg.NodeScript, cmd, f.Name())
 	if err != nil {
 		msg := firstLine(out)
 		if msg == "" {

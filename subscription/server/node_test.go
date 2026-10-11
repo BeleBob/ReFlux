@@ -9,6 +9,14 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/provision"
 )
 
+// modeOf: node-install.sh.argv is [script plan] or [script apply conf].
+func modeOf(args []string) string {
+	if len(args) >= 2 {
+		return args[1]
+	}
+	return ""
+}
+
 func TestScriptProvisionerCallsPlanThenApply(t *testing.T) {
 	cfg := &Config{NodeScript: "/opt/openflux-node/node-install.sh"}
 	var planConf, applyConf string
@@ -16,21 +24,21 @@ func TestScriptProvisionerCallsPlanThenApply(t *testing.T) {
 	sp := &scriptProvisioner{
 		cfg:  cfg,
 		logf: func(string, ...any) {},
-		exec: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		exec: func(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
 			if name != "sh" {
 				t.Fatalf("name %q, want sh", name)
 			}
-			cmd := args[len(args)-2]
-			b, err := os.ReadFile(args[len(args)-1])
-			if err != nil {
-				t.Fatal(err)
-			}
-			cmds = append(cmds, cmd)
-			switch cmd {
+			switch modeOf(args) {
 			case "plan":
-				planConf = string(b)
+				cmds = append(cmds, "plan")
+				planConf = stdin
 				return []byte(`{"ok":true,"channel":"fork-all","port":23234,"actions":["x"]}` + "\n"), nil
 			case "apply":
+				cmds = append(cmds, "apply")
+				b, err := os.ReadFile(args[len(args)-1])
+				if err != nil {
+					t.Fatal(err)
+				}
 				applyConf = string(b)
 				return []byte(`{"ok":true,"channel":"fork-all","port":23234}` + "\n"), nil
 			}
@@ -71,12 +79,15 @@ func TestScriptProvisionerEmptyTransportsMakeCupsRooms(t *testing.T) {
 	sp := &scriptProvisioner{
 		cfg:  &Config{NodeScript: "/node-install.sh"},
 		logf: func(string, ...any) {},
-		exec: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			b, _ := os.ReadFile(args[len(args)-1])
-			switch args[len(args)-2] {
+		exec: func(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
+			if name != "sh" {
+				t.Fatalf("name %q, want sh", name)
+			}
+			switch modeOf(args) {
 			case "plan":
 				return []byte(`{"ok":true,"port":30001}` + "\n"), nil
 			case "apply":
+				b, _ := os.ReadFile(args[len(args)-1])
 				applyConf = string(b)
 				return []byte(`{"ok":true}` + "\n"), nil
 			}
@@ -96,8 +107,11 @@ func TestScriptProvisionerReportsScriptErrors(t *testing.T) {
 	sp := &scriptProvisioner{
 		cfg:  &Config{NodeScript: "/node-install.sh"},
 		logf: func(string, ...any) {},
-		exec: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			if args[len(args)-2] == "plan" {
+		exec: func(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
+			if name != "sh" {
+				t.Fatalf("name %q, want sh", name)
+			}
+			if modeOf(args) == "plan" {
 				return []byte(`{"ok":false,"error":"имя канала занято"}` + "\n"), nil
 			}
 			return nil, nil
@@ -115,7 +129,7 @@ func TestScriptProvisionerMissingScript(t *testing.T) {
 	sp := &scriptProvisioner{
 		cfg:  &Config{NodeScript: "/nonexistent/node-install.sh"},
 		logf: func(string, ...any) {},
-		exec: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		exec: func(_ context.Context, stdin string, name string, args ...string) ([]byte, error) {
 			return nil, os.ErrNotExist
 		},
 		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
