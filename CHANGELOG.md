@@ -5,6 +5,23 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11 (meepo161/OpenFlux)
+
+### Added
+
+- The node's mode, l4 or l3, is chosen when a node is made and can be changed on
+  an installed channel. `node-install.sh` takes `mode=l3|l4` (plan, apply,
+  set-transports) and reports `mode` (show, apply, set-transports). l4 stays the
+  default and needs nothing. l3 passes IP packets through raw sockets: the
+  channel's unit gets a drop-in with `AmbientCapabilities=CAP_NET_RAW`, and
+  `l3-rst.sh` adds an iptables rule dropping the kernel's own TCP RSTs from the
+  server's address while an l3 channel runs (and removes it when the last one
+  stops). It needs iptables, iproute2 and systemd 231+, and says so before
+  installing; the rule is host-wide for that address, which the plan states.
+  `provision.Channel.Mode`, `provision.CheckMode`, `provision.Conn.SetChannel`,
+  `ChannelInfo.Mode`; `mobile.NodePlan` / `NodeApply` / `NodeSetTransports`
+  take the mode; the desktop node wizard takes `mode`.
+
 ## [0.6.0] - 2026-10-11 (meepo161/OpenFlux)
 
 ### Added
