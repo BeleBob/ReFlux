@@ -31,10 +31,11 @@ func TestDocFactorySlotDropsUnconfiguredCarriers(t *testing.T) {
 }
 
 func TestDocFactoryMakesDocumentWhenConfigured(t *testing.T) {
+	f := &fakeDocFactory{url: "https://docs.yandex.ru/edit/d/abcdefghijklmnopqrstuv", seen: map[string]string{}}
 	sp := &scriptProvisioner{
 		cfg:  &Config{NodeScript: "/n.sh"},
 		logf: func(string, ...any) {},
-		docs: fakeDocFactory{url: "https://docs.yandex.ru/edit/d/abcdefghijklmnopqrstuv"},
+		docs: f,
 		rooms: func(context.Context) (string, error) { return "WyJyb29tIl0", nil },
 	}
 	ts, err := sp.channelTransports(context.Background(), []provision.ChannelTransport{
@@ -52,10 +53,20 @@ func TestDocFactoryMakesDocumentWhenConfigured(t *testing.T) {
 	if got != "https://docs.yandex.ru/edit/d/abcdefghijklmnopqrstuv" {
 		t.Fatalf("the factory's document did not reach the transports: %v", ts)
 	}
+	if f.seen["vyandex"] != "owner-1" {
+		t.Fatalf("the owner did not reach the factory: %v", f.seen)
+	}
+	if _, ok := f.seen["cupsonline"]; ok {
+		t.Fatalf("a non-document carrier must not ask the factory: %v", f.seen)
+	}
 }
 
-type fakeDocFactory struct{ url string }
+type fakeDocFactory struct {
+	url  string
+	seen map[string]string // carrier -> owner
+}
 
-func (f fakeDocFactory) Make(context.Context, string, string) (string, string, error) {
+func (f *fakeDocFactory) Make(_ context.Context, carrier, owner string) (string, string, error) {
+	f.seen[carrier] = owner
 	return f.url, "cookies", nil
 }
