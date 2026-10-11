@@ -41,6 +41,7 @@ with inline examples.
 | `--config` | | | `.conf` file; flags override it |
 | `--cookie-store` | | `./cookies-<transport>.json` | Cookie jar file |
 | `--ipc-socket` | | | Unix socket for the app (captcha requests, cookies) |
+| `--config-offer-file` | | | Exit: a `{"link","version"}` JSON file whose `openflux://` link the Session client is told (`ConfigOffer`, sent on each handshake and change) |
 | `--share` | | `false` | Exit: print an `openflux://` link and QR code for clients |
 | `--share-host` | | (first public IPv4) | Exit: address clients dial for `direct` in that link |
 | `--node-wizard` | | | Sole argument: run the JSON-over-stdio provisioning protocol instead of normal CLI startup - see [node-provisioning.md](node-provisioning.md) |

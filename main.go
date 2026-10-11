@@ -259,6 +259,8 @@ func main() {
 		"Exit: print an openflux:// link and QR code that clients scan to connect (contains the encryption key)")
 	shareHost := flag.String("share-host", "",
 		"Exit: address clients dial for direct in the --share link. Default: this host's first public IPv4")
+	configOfferFile := flag.String("config-offer-file", "",
+		"Exit only: a JSON {link, version} file whose openflux:// link the Session client is told (ReFlux config self-update)")
 	ipcSocketPath := flag.String("ipc-socket", "",
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
@@ -444,6 +446,7 @@ DEPRECATED (removed in v2)
 		applyConfString(conf.Interface, "SessionContext", "session-context", sessionContextFlag, setFlags)
 		applyConfString(conf.Interface, "CookieStore", "cookie-store", cookieStorePath, setFlags)
 		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
+		applyConfString(conf.Interface, "ConfigOfferFile", "config-offer-file", configOfferFile, setFlags)
 		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
 		if v, ok := confValue(conf.Interface, "Debug"); ok && !setFlags["debug"] {
 			if b, err := strconv.Atoi(v); err == nil {
@@ -864,6 +867,9 @@ DEPRECATED (removed in v2)
 
 		// Hook the Session control dispatcher into the manager.
 		sess.SetControlHandler(managerInst.DispatchControl)
+		if isExit && *configOfferFile != "" {
+			go runConfigOffer(sess, *configOfferFile, nil)
+		}
 
 		// Optional IPC bridge: if --ipc-socket is set, the core talks to the
 		// mobile app over a Unix domain socket. Transport-initiated captcha
