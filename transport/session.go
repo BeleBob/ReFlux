@@ -47,6 +47,9 @@ type Session struct {
 	linkTimeoutIdle time.Duration
 	lastData        time.Time // the last IPv4 sent or received
 	activeSince     time.Time // when IPv4 resumed after an idle spell
+	// peerHeard: the last time anything came from the peer on any carrier
+	// (PeerHeard). Not cleared when a carrier is marked stalled.
+	peerHeard time.Time
 
 	candidate     *candidatePeer
 	candidateLast time.Time
@@ -787,6 +790,17 @@ func (s *Session) IsConnected() bool {
 	return s.anyLive()
 }
 
+// PeerHeard is when the peer was last heard on any carrier; zero when it
+// never was. IsConnected also counts a carrier that is only attached on
+// this side, so an exit keeps reading connected while it holds its
+// document, long after its client went away: a status that means "the
+// client is there" needs this.
+func (s *Session) PeerHeard() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerHeard
+}
+
 // handshakeDone reports whether the Session handshake completed and a
 // carrier reaches the peer (IsConnected also counts classic mode).
 func (s *Session) handshakeDone() bool {
@@ -1241,6 +1255,7 @@ func (s *Session) receiveClassic(link *transportLink, p []byte) {
 		utils.Infof("[SESSION] the exit answers in classic mode on %q (it predates Session or runs classic): staying classic, still offering the handshake", link.name)
 	}
 	link.classicHeard = now
+	s.peerHeard = now
 	cb := s.dataCallback
 	s.mu.Unlock()
 	n := s.cntClassicRecv.Add(1)
@@ -1364,6 +1379,7 @@ func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 		s.ready = true
 	}
 	link.lastHeard = time.Now()
+	s.peerHeard = link.lastHeard
 	var names []string
 	if changed || (!wasReady && echo) || (wasReady && env.Hello.Ready == 0) {
 		names = append(names, s.order...)
@@ -1410,6 +1426,7 @@ func (s *Session) offerReplacementLocked(link *transportLink, sender [32]byte, p
 			l.lastHeard = time.Time{}
 		}
 		link.lastHeard = now
+		s.peerHeard = now
 		names := append([]string(nil), s.order...)
 		s.mu.Unlock()
 		utils.Debugf("[SESSION] peer REPLACED by %s after fresh challenge echo", shortID(sender))
@@ -1505,6 +1522,7 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 		return
 	}
 	link.lastHeard = time.Now()
+	s.peerHeard = link.lastHeard
 	woke := s.markDataLocked(link.lastHeard)
 	cb := s.dataCallback
 	s.mu.Unlock()
@@ -1538,6 +1556,7 @@ func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Env
 		return
 	}
 	link.lastHeard = time.Now()
+	s.peerHeard = link.lastHeard
 	switch env.Control.Subtype {
 	case control.SubtypeLinkPing:
 		noPong := s.noPong
