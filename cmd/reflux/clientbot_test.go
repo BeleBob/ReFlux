@@ -88,8 +88,9 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	if len(m) < 2 || !strings.Contains(m[len(m)-2].Text, "Доступ выдан") || f.photoCount() != photos+1 {
 		t.Fatalf("delivery: %+v", m)
 	}
+	// the link only: the key travels inside it, never as plain text
 	key, _ := s.Key("dima")
-	if !strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+	if strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "openflux://") {
 		t.Errorf("access text %q", m[len(m)-1].Text)
 	}
 	if _, err := s.getRequest(101); err == nil {
