@@ -18,8 +18,8 @@ const (
 	PinnedSHA256 = "5b26db38be10e7de90d7a64ba65732dcfbd6dd6c310c18c5fc6770315e37974a"
 
 	OfficialRepo   = "p1neappleXpress/OpenFlux"
-	OfficialCommit = "cdc6c0d10adc82eda3cb3ccaeee0b67ca3dd5597"
-	OfficialSHA256 = "11b65510d0ded807f33e172357c70d787c67b02facc9eb8e37156c25f8fb2ba1"
+	OfficialCommit = "3459bfdf73be83b1128865de8737deb009ce0e7e"
+	OfficialSHA256 = "8a75cfd72a642a464d8d2e871172bcf37b1241d0d37e9323568557d3033f250f"
 )
 
 // Script sources the node wizard offers.

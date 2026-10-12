@@ -29,11 +29,10 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
-// mailruUserAgent is what the carrier tells Mail.ru it is. A Firefox one: the
-// document server answers a WebSocket upgrade that claims to be Chrome (any
-// version) with 409 Conflict when the TLS handshake is not Chrome's, so a
-// Chrome agent from Go never joins the document, while a Firefox one does.
-const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0"
+// Mail.ru rejects the old Chrome/137 UA on the WebSocket upgrade with HTTP 409
+// on some edge nodes; a current Firefox UA is accepted for both the API and the
+// WebSocket. Reported by @Shiller70 (issue #164).
+const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
 
 var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 
@@ -274,6 +273,12 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		}
 
 		dialer := websocket.Dialer{
+			// Mail.ru's nginx answers 409 Conflict to an upgrade that does
+			// not offer permessage-deflate. gorilla/websocket only sends the
+			// Sec-WebSocket-Extensions header when compression is enabled, so
+			// without this the handshake was rejected before any auth and the
+			// carrier never came up. Reported by @pirsasha (issue #163).
+			EnableCompression: true,
 			HandshakeTimeout: 15 * time.Second,
 			NetDialContext: netbind.WrapFor(t.network(), &net.Dialer{
 				Timeout:   10 * time.Second,
@@ -282,6 +287,10 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		}
 		headers := http.Header{}
 		headers.Set("User-Agent", mailruUserAgent)
+		// Some Mail.ru edge nodes still answer 409 to the upgrade when the
+		// request looks less like a browser than the others; a real browser
+		// always sends Accept-Language. Reported to still hit iOS (#164).
+		headers.Set("Accept-Language", "en-US,en;q=0.9")
 		headers.Set("Origin", "https://docs.datacloudmail.ru")
 
 		utils.Debugf("[M-DOCS] WebSocket dial %s", info.WsURL)
@@ -660,6 +669,7 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	req, _ := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("User-Agent", mailruUserAgent)
 	req.Header.Set("X-Api-Version", "4")
 	req.Header.Set("Referer", fmt.Sprintf("https://cloud.mail.ru/public/%s?weblink=%s", weblink, weblink))

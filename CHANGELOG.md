@@ -188,6 +188,105 @@ this fork.
 
 ## [0.4.2] - 2026-10-07 (p1neappleXpress/OpenFlux)
 
+## [0.5.1] - 2026-10-11
+
+### Fixed
+
+- **A Telemost exit crashed with "negative shift amount"** when a client vanished mid-transfer: a piece
+  resent 255 times wrapped its retry counter to zero and the timeout's shift went negative. The counter now
+  saturates, and the sender drops a piece nobody acked for the hole deadline plus 3 s, so a gone receiver no
+  longer keeps the lanes resending.
+- **Downloads through an L4 exit sat at about 1.5 MB/s on many servers.** The exit asked for 16 MB socket
+  buffers on every outgoing connection; Linux cuts that to `net.core.rmem_max` (416 KB on a stock kernel) and
+  turns buffer autotuning off, so the exit fetched from the internet at 1.4 MB/s where the same socket left
+  alone does 42 MB/s. The buffers are left to the kernel.
+- **Script transports with `--transport=script` lost what their setup page was given** (a token, a pairing)
+  at every start: the cookie store was never opened for them. Each script now gets its own jar,
+  `./cookies-script-<name>.json` by default, under the same key the Session path uses.
+- **Telemost lanes paired by guesswork.** The SFU drops a participant's description, so the lane tags never
+  reached the other end; the tags now ride in the participant name as characters that take no space, and a
+  node pairs with the newest run of the other end at once, ghosts of earlier runs aside.
+- **Mail.ru Docs still answered 409 on some clients** after the User-Agent fix (reported on iOS, #164):
+  the WebSocket upgrade and the API call now also send `Accept-Language`, the way a browser does.
+
+### Changed
+
+- **Telemost starts with three lanes and adds more under load** (up to six; `stripes` and `stripes_max`
+  in a profile, `TELEMOST_STRIPES_MAX` in the environment). A lane is added only after 15 s of full
+  saturation: a new pair of lanes joining stops the SFU forwarding every lane for 10-15 s.
+- **Telemost lanes join as "Гость"** - no program name in the participant list or the RTCP CNAME.
+- **Steadier speed on striped carriers.** Each lane's rate follows what the SFU lets through (lanes of one
+  conference differ: 6% and 64% lost at one rate), the shared send queue lets TCP ride out the carrier's
+  swings (CoDel 150 ms / 600 ms instead of 30/250), and a lane that stops delivering keeps its stream warm
+  with copies instead of falling silent into the SFU's ramp. Between two phones on Wi-Fi, three lanes: 4.4-5
+  MB/s steady after the first seconds, against 1.2-1.7 MB/s on average before.
+
+## [0.5.0] - 2026-10-11
+
+### Added
+
+- **Telemost transport (type `telemost`, `-t telemost`).** The tunnel rides a Yandex Telemost conference as
+  video relayed by its SFU; the conference link is all a profile needs. One Telemost stream carries at most
+  about 16 Mbit/s (the SFU caps each subscriber), so the carrier runs **five lanes**: five participants of the
+  conference on each end, each publishing a camera and watching one lane of the other end, with the tunnel
+  striped over them. The profile parameter `stripes` sets another count, or `auto` (start at 3 and add lanes
+  while they stay saturated). Share links (`--share`) carry it. Both ends need this version, and one
+  conference serves one client and one exit. Clients run it through their proxies or the Android VPN; the
+  desktop full tunnel (`--inbound=tun`) refuses it for now, since its media would loop into the tunnel.
+  Experimental.
+- **A reliable link under the tunnel for striped carriers.** The SFU loses 10-80% of a lane's packets, and
+  the tunnel's TCP read every loss and every slow repair as congestion and lived in timeouts. The stripe now
+  delivers in order and repairs what the SFU drops: lanes take packets on their own send clock (ack first, then
+  resends, then new data), the receiver acks every 10 ms, a packet is resent - on another lane - as soon as
+  a later packet of the same lane arrives, one send queue under CoDel gives TCP a clean congestion signal,
+  idle room in a tick carries early copies of overdue packets, and a lane whose packets stop arriving only
+  gets probes. Telemost publishes each tick's packets spread over the tick: back to back they lost 50-80%
+  on the way from a server, spread 0-10%. Measured with an HTTPS download through the tunnel, exit on a
+  server and client on a phone: **from 24 KB/s to about 1.5 MB/s** on average (3.4 MB/s at peak), with
+  0.014% TCP retransmissions and no timeouts; the raw carrier delivers 1.7 MB/s on the same path. The first
+  seconds of every transfer are still slow: the SFU raises a stream's allowance only gradually.
+- **Script transports: WebRTC with an RTP line and typed data-channel messages.** `pc.addTransceiver(kind,
+  {direction})` adds an audio or video m-line to the next offer (a conference SFU such as MTS-Link's wants
+  a `recvonly` audio line next to the data channel), and a data channel's `onmessage(bytes, isString)` now
+  tells text from binary, so a transport can keep the signaling strings apart from the tunnel's packets.
+
+### Changed
+
+- The tunnel's TCP (gVisor) uses CUBIC instead of Reno (`OPENFLUX_TCP_CC=reno` restores Reno), a 3-second
+  floor for its retransmission timeout (`OPENFLUX_TCP_MIN_RTO_MS`) and duplicate-ACK loss detection instead
+  of RACK and tail loss probes (`OPENFLUX_TCP_RACK=1` restores them). Carriers deliver in order but now and
+  then late, and a timeout that fired on late data used to cost a connection its whole window.
+
+Exit nodes that carry Telemost need `node-v1.3.0`.
+
+## [0.4.3] - 2026-10-11
+
+Hotfix for 0.4.2: the Yandex and Mail.ru carriers, both reported by node operators.
+
+### Fixed
+
+- **Yandex: the carrier relays tunnel packets again.** The outgoing cursor message declared a fixed
+  length of `18` before the base64 payload, but Yandex Disk does not relay a cursor whose declared
+  length does not match the packet behind it, so every tunnel packet was silently dropped and the
+  Session handshake timed out; a working Direct fallback could hide the failure. The prefix is now the
+  real binary packet length (`len(pending)`) on every send. Found with a decisive A/B wire experiment
+  (length `18` → 0/3 delivered, correct length → 3/3) by
+  [@Gamazzz](https://github.com/p1neappleXpress/OpenFlux/issues/165) — thank you.
+  [#165](https://github.com/p1neappleXpress/OpenFlux/issues/165)
+- **Mail.ru Docs: the carrier comes up on public links again.** Mail.ru's nginx answered `409 Conflict`
+  to the WebSocket upgrade, so the transport looped on reconnects and never connected. Two causes:
+  `gorilla/websocket` only sends `Sec-WebSocket-Extensions: permessage-deflate` when compression is
+  enabled, and the old Chrome/137 `User-Agent` is rejected on some edge nodes. Compression is now
+  enabled and a current Firefox `User-Agent` is used for both the API and the WebSocket. Measured with
+  the real service: before, 8× `409` in 75 s and 0 connections; after, the WebSocket connects, Engine.IO
+  and Socket.IO come up, auth succeeds, and a packet passes between two peers. Reported by
+  [@pirsasha](https://github.com/p1neappleXpress/OpenFlux/issues/163) ([#163](https://github.com/p1neappleXpress/OpenFlux/issues/163))
+  and [@Shiller70](https://github.com/p1neappleXpress/OpenFlux/issues/164) ([#164](https://github.com/p1neappleXpress/OpenFlux/issues/164)) — thank you.
+
+Exit nodes that carry Yandex or Mail.ru need `node-v1.2.3`.
+
+## [0.4.2] - 2026-10-07
+
 Hotfix for 0.4.1: Mail.ru Docs.
 
 ### Fixed
