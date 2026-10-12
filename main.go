@@ -1001,10 +1001,11 @@ DEPRECATED (removed in v2)
 	if statusServer != nil {
 		if managerInst != nil {
 			utils.SafeGo("ipc-status", func() {
-				ipcStatusLoop(statusServer, managerInst, managerInst.Session().ActiveTransport, managerInst.Session().ActiveTransports)
+				sess := managerInst.Session()
+				ipcStatusLoop(statusServer, managerInst, sess.ActiveTransport, sess.ActiveTransports, sess.PeerHeard)
 			})
 		} else {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil) })
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil, nil) })
 		}
 	}
 
@@ -1087,8 +1088,9 @@ type statusSource interface {
 }
 
 // ipcStatusLoop reports to the app every second: whether a carrier reaches
-// the peer, traffic totals, uptime and (Sessions) the active carrier.
-func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string) {
+// the peer, traffic totals, uptime and (Sessions) the active carrier and
+// when the peer was last heard.
+func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string, heard func() time.Time) {
 	started := time.Now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -1106,6 +1108,11 @@ func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, acti
 		}
 		if activeAll != nil {
 			p.ActiveAll = activeAll()
+		}
+		if heard != nil {
+			if t := heard(); !t.IsZero() {
+				p.HeardMs = t.UnixMilli()
+			}
 		}
 		_ = srv.SendStatus(p)
 	}

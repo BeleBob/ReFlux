@@ -74,6 +74,11 @@ type StatusPayload struct {
 	// ActiveAll names every carrier data is spread over: several when they
 	// share the highest priority. Active is the first. Sessions only.
 	ActiveAll []string `json:"active_all,omitempty"`
+	// HeardMs is when the peer was last heard, in Unix milliseconds; 0
+	// when it never was. Connected stays true while a carrier is attached
+	// on this side, so an exit says whether its client is there by this.
+	// Sessions only.
+	HeardMs int64 `json:"heard_ms,omitempty"`
 }
 
 type CommandPayload struct {

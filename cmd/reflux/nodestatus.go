@@ -59,8 +59,24 @@ func readNodeStatus(path string, timeout time.Duration) (ipc.StatusPayload, erro
 		if err := ipc.DecodeJSON(payload, &st); err != nil {
 			return st, err
 		}
+		st.Connected = clientThere(st, time.Now())
 		return st, nil
 	}
+}
+
+// heardFor is how recently a node must have heard its client for it to be
+// online: an idle client pings every 25 s and is dropped after 80 s.
+const heardFor = 90 * time.Second
+
+// clientThere reads a node's status: a client is online when the node says
+// connected and heard it lately. A Session exit says connected while its
+// own carrier holds the document, long after the client went away; a core
+// older than heard_ms is taken at its word.
+func clientThere(st ipc.StatusPayload, now time.Time) bool {
+	if !st.Connected || st.HeardMs == 0 {
+		return st.Connected
+	}
+	return now.Sub(time.UnixMilli(st.HeardMs)) < heardFor
 }
 
 // nodeStatuses reads the status of every running node, in parallel.

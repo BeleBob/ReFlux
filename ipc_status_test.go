@@ -21,6 +21,28 @@ func (f fixedStats) Stats() transport.TransportStats {
 // A classic carrier without a Session reports its traffic too: the app's
 // speed counters read it.
 func TestIPCStatusWithoutSession(t *testing.T) {
+	p := firstStatus(t, nil)
+	if !p.Connected || p.BytesIn != 1500 || p.BytesOut != 700 || p.Active != "" || p.HeardMs != 0 {
+		t.Fatalf("status = %+v", p)
+	}
+}
+
+// A Session says when it last heard the peer: an exit's Connected stays
+// true while it holds its document, after its client went away.
+func TestIPCStatusTellsWhenThePeerWasHeard(t *testing.T) {
+	heard := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	if p := firstStatus(t, func() time.Time { return heard }); p.HeardMs != heard.UnixMilli() {
+		t.Fatalf("heard_ms = %d, want %d", p.HeardMs, heard.UnixMilli())
+	}
+	if p := firstStatus(t, func() time.Time { return time.Time{} }); p.HeardMs != 0 {
+		t.Fatalf("never heard: heard_ms = %d", p.HeardMs)
+	}
+}
+
+// firstStatus serves fixedStats with heard over a socket and returns the
+// first status an IPC client reads.
+func firstStatus(t *testing.T, heard func() time.Time) ipc.StatusPayload {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "ofipc")
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +54,7 @@ func TestIPCStatusWithoutSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srv.Close()
-	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil, nil)
+	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil, nil, heard)
 
 	c, err := ipc.Dial(path)
 	if err != nil {
@@ -54,10 +76,9 @@ func TestIPCStatusWithoutSession(t *testing.T) {
 	})
 	select {
 	case p := <-got:
-		if !p.Connected || p.BytesIn != 1500 || p.BytesOut != 700 || p.Active != "" {
-			t.Fatalf("status = %+v", p)
-		}
+		return p
 	case <-time.After(3 * time.Second):
 		t.Fatal("no status")
 	}
+	return ipc.StatusPayload{}
 }
