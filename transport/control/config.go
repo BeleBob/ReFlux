@@ -7,7 +7,7 @@ import (
 )
 
 // SubtypeConfigOffer (exit -> client) carries the client's current
-// configuration as an openflux:// link with a version (ReFlux): when the
+// configuration as a reflux:// or openflux:// link with a version (ReFlux): when the
 // owner gives the channel new documents, a client reached over one that
 // still works learns the rest without anyone sending it a new link. Peers
 // that do not know it ignore it, like any unknown subtype.
@@ -30,8 +30,14 @@ func DecodeConfigOffer(b []byte) (ConfigOffer, error) {
 	if err := json.Unmarshal(b, &o); err != nil {
 		return o, err
 	}
-	if !strings.HasPrefix(o.Link, "openflux://") || o.Version <= 0 {
-		return o, errors.New("control: a config offer needs an openflux:// link and a version")
+	if !hasLinkScheme(o.Link) || o.Version <= 0 {
+		return o, errors.New("control: a config offer needs a reflux:// or openflux:// link and a version")
 	}
 	return o, nil
+}
+
+// hasLinkScheme says whether link is a share link: ReFlux's servers hand out
+// reflux:// links, which ReFlux apps read as openflux:// ones.
+func hasLinkScheme(link string) bool {
+	return strings.HasPrefix(link, "reflux://") || strings.HasPrefix(link, "openflux://")
 }

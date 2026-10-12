@@ -41,8 +41,9 @@ func receiveConfigOffer(sub control.Subtype, payload []byte) {
 }
 
 // PendingConfigOffer returns the newest configuration the exit offered since
-// the last call, as {"link":"openflux://...","version":N}, or "" when there
-// is none. The link parses with ParseShareLink.
+// the last call, as {"link":"reflux://...","version":N} (openflux:// from an
+// older server), or "" when there is none. The link parses with
+// ParseShareLink once its scheme is openflux://.
 func PendingConfigOffer() string {
 	configOffers.Lock()
 	defer configOffers.Unlock()

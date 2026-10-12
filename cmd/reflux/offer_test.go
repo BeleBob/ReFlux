@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
 )
 
 // The node's offer holds the client's current link; its version moves
@@ -34,6 +36,12 @@ func TestOfferFollowsTheLink(t *testing.T) {
 	key, _ := s.Key("phone")
 	if want, _ := shownLink(c, key); first.Link != want || !strings.HasPrefix(want, refluxPrefix) || first.Version != now.Unix() {
 		t.Errorf("first offer %+v", first)
+	}
+	// The node's core reads the file with the same check it applies on
+	// the client: an offer it refuses never leaves the node.
+	raw, _ := os.ReadFile(s.offerPath("phone"))
+	if _, err := control.DecodeConfigOffer(raw); err != nil {
+		t.Errorf("the core refuses the offer file: %v", err)
 	}
 	if st, _ := os.Stat(s.offerPath("phone")); st.Mode().Perm() != 0o600 {
 		t.Errorf("offer mode %v", st.Mode().Perm())

@@ -10,11 +10,11 @@ import (
 
 // An exit given --config-offer-file (ConfigOfferFile in a .conf) tells its
 // Session client the client's current configuration (control.ConfigOffer):
-// the file holds {"link":"openflux://...","version":N} and is rewritten by
-// whoever manages the channel (ReFlux) when its documents change. The offer
-// goes out when a client completes a handshake, when the file changes, and
-// every configOfferRepeat in between, in case one was lost. Classic clients
-// have no control channel and get nothing.
+// the file holds {"link":"reflux://...","version":N} (or an openflux://
+// link) and is rewritten by whoever manages the channel (ReFlux) when its
+// documents change. The offer goes out when a client completes a handshake,
+// when the file changes, and every configOfferRepeat in between, in case one
+// was lost. Classic clients have no control channel and get nothing.
 
 var (
 	configOfferPoll   = 2 * time.Second
