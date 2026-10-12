@@ -264,3 +264,27 @@ func TestLastSeenShown(t *testing.T) {
 		t.Errorf("never seen: %q", got)
 	}
 }
+
+// A node that holds none of its documents a few minutes after it started
+// cannot be reached: doctor fails it. Not while it is starting, not when
+// one document is up, and not for an image that does not report carriers.
+func TestNoDocument(t *testing.T) {
+	for _, c := range []struct {
+		st   ipc.StatusPayload
+		up   time.Duration
+		want bool
+	}{
+		{ipc.StatusPayload{Carriers: 2}, 10 * time.Minute, true},
+		{ipc.StatusPayload{Carriers: 2}, time.Minute, false},
+		{ipc.StatusPayload{Carriers: 2, Attached: []string{"mailru-2"}}, time.Hour, false},
+		{ipc.StatusPayload{}, time.Hour, false},
+	} {
+		if got := noDocument(c.st, c.up); got != c.want {
+			t.Errorf("%+v up %v: %v, want %v", c.st, c.up, got, c.want)
+		}
+	}
+	got := tr(langRU, "node.nodoc", "phone", "phone")
+	if got != "нода phone не подключена ни к одному своему документу — клиент не подключится (reflux logs phone)" {
+		t.Errorf("message %q", got)
+	}
+}

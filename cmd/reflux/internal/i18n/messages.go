@@ -475,6 +475,7 @@ var Messages = map[string][2]string{
 	"web.dials":            {"Right now", "Сейчас"},
 
 	// several documents per client (docs.go, botdocs.go)
+	"node.nodoc":            {"node %s holds none of its documents: its client cannot connect (reflux logs %s)", "нода %s не подключена ни к одному своему документу — клиент не подключится (reflux logs %s)"},
 	"node.onbackup":         {"node %s: the client is on backup document %d: the main one does not reach it (reflux docs %s)", "нода %s: клиент на резервном документе %d — основной до него не доходит (reflux docs %s)"},
 	"node.onmain":           {"node %s: traffic over the main document (%d in all)", "нода %s: трафик идёт через основной документ (всего документов: %d)"},
 	"short.onmain":          {"%s: main document of %d", "%s: основной документ из %d"},

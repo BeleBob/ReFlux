@@ -35,3 +35,20 @@ func TestSessionPeerHeardStopsWhenTheClientGoes(t *testing.T) {
 		t.Error("MarkStalled cleared PeerHeard")
 	}
 }
+
+// Carriers tells which carriers hold their document, a peer there or not:
+// none before Start, every one once started, and not one marked dead.
+func TestSessionCarriersSayWhatIsAttached(t *testing.T) {
+	client, exit, _, _ := linkedSessions(t, "direct", "yandex")
+	if attached, total := exit.Carriers(); len(attached) != 0 || total != 2 {
+		t.Fatalf("before Start: %v of %d", attached, total)
+	}
+	startPair(t, client, exit)
+	if attached, total := exit.Carriers(); len(attached) != 2 || total != 2 {
+		t.Fatalf("started: %v of %d", attached, total)
+	}
+	exit.MarkDead("yandex")
+	if attached, total := exit.Carriers(); len(attached) != 1 || attached[0] != "direct" || total != 2 {
+		t.Fatalf("yandex dead: %v of %d", attached, total)
+	}
+}

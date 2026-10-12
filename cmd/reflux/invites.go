@@ -30,10 +30,10 @@ import (
 const inviteFor = 7 * 24 * time.Hour
 
 type invite struct {
-	Code    string    `json:"code"`
-	How     string    `json:"how"` // +30, +90 or never: what approving gives
+	Code string `json:"code"`
+	How  string `json:"how"` // +30, +90 or never: what approving gives
 	// Client: a link invite's client, which keeps its own access.
-	Client string `json:"client,omitempty"`
+	Client  string    `json:"client,omitempty"`
 	Note    string    `json:"note,omitempty"`
 	Created time.Time `json:"created"`
 	Expires time.Time `json:"expires"`

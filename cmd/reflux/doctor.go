@@ -351,11 +351,27 @@ func (d *doctor) nodes(s Store) {
 			d.add(levelWarn, "node:"+c.Name, levelOK.String(), "node.nostatus", c.Name)
 			continue
 		}
+		if up := time.Duration(st.UptimeMs) * time.Millisecond; noDocument(st, up) {
+			d.fail("node:"+c.Name, "node.nodoc", c.Name, c.Name)
+			continue
+		}
 		d.ok("node:"+c.Name, "node.ok", c.Name,
 			durationPhrase(time.Duration(st.UptimeMs)*time.Millisecond), onlinePhrase(st),
 			humanBytes(st.BytesOut), humanBytes(st.BytesIn))
 		d.docInUse(c, st)
 	}
+}
+
+// noDocAfter is how long a node may take to reach a document after it
+// starts: a mail.ru connect is a few seconds, a retry after a refusal more.
+const noDocAfter = 3 * time.Minute
+
+// noDocument: a node that has carriers and holds none of their documents
+// after noDocAfter cannot be reached by its client at all (on 2026-10-11
+// mail.ru refused every node's WebSocket with 409 for a day). A node image
+// that does not report its carriers says nothing here.
+func noDocument(st ipc.StatusPayload, up time.Duration) bool {
+	return st.Carriers > 0 && len(st.Attached) == 0 && up >= noDocAfter
 }
 
 // docSeen remembers which document each Session client was last seen on:

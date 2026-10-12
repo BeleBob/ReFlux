@@ -922,6 +922,21 @@ func (s *Session) ActiveTransport() string {
 // ActiveTransports names every carrier data goes through now: the
 // highest-priority live ones, which Send spreads flows over. ActiveTransport
 // is the first of them. Empty before the handshake or after Stop.
+// Carriers says which carriers are attached on this side (connected to
+// their document, a client there or not) and how many the session has. An
+// exit nobody has talked to yet still holds its documents; one that holds
+// none cannot be reached.
+func (s *Session) Carriers() (attached []string, total int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range s.order {
+		if s.connectedLocked(s.links[name]) {
+			attached = append(attached, name)
+		}
+	}
+	return attached, len(s.order)
+}
+
 func (s *Session) ActiveTransports() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
