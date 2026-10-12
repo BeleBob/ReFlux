@@ -64,6 +64,8 @@ type CodecTransport struct {
 	lingerMs      int
 	maxBatchBytes int
 	maxBatchCount int
+	// frameLimit caps a batch below the carrier's frame limit (LimitFrame).
+	frameLimit atomic.Int64
 
 	running   atomic.Bool
 	lifecycle sync.Mutex
@@ -91,6 +93,9 @@ func NewCodecTransport(inner Transport, preferred string, initiator bool) *Codec
 		stopCh:        make(chan struct{}),
 	}
 	c.batchNow.Store(c.preferred)
+	// Straight over a carrier that refuses big frames (keyless classic
+	// mode); under a Session, newLink sets the limit.
+	c.LimitFrame(batchBudget(inner))
 	utils.Debugf("[CODEC] created: preferred=%s initiator=%v (both framings accepted on receive)",
 		codecName(c.preferred), initiator)
 	return c
@@ -269,49 +274,36 @@ func (c *CodecTransport) sendBatch() bool {
 }
 
 func (c *CodecTransport) flushLoop() {
+	// carry: the packet that would have taken the last batch past the
+	// carrier's frame limit; it starts the next one.
+	var carry []byte
 	for c.running.Load() {
-		var first []byte
-		select {
-		case <-c.stopCh:
-			return
-		case first = <-c.queue:
+		first := carry
+		carry = nil
+		if first == nil {
+			select {
+			case <-c.stopCh:
+				return
+			case first = <-c.queue:
+			}
 		}
 		if !c.sendBatch() {
 			c.write(compress(first))
 			continue
 		}
-		batch := [][]byte{first}
-		size := 2 + len(first)
-	drain:
-		for size < c.maxBatchBytes && len(batch) < c.maxBatchCount {
-			select {
-			case p := <-c.queue:
-				batch = append(batch, p)
-				size += 2 + len(p)
-			default:
-				break drain
-			}
+		batch, _, next, stopped := fillBatch(c.queue, c.stopCh, first,
+			c.maxBatchBytes, c.maxBatchCount, c.lingerMs, int(c.frameLimit.Load()))
+		if stopped {
+			return
 		}
-		if c.lingerMs > 0 && size < c.maxBatchBytes && len(batch) < c.maxBatchCount {
-			timer := time.NewTimer(time.Duration(c.lingerMs) * time.Millisecond)
-		linger:
-			for size < c.maxBatchBytes && len(batch) < c.maxBatchCount {
-				select {
-				case <-c.stopCh:
-					timer.Stop()
-					return
-				case p := <-c.queue:
-					batch = append(batch, p)
-					size += 2 + len(p)
-				case <-timer.C:
-					break linger
-				}
-			}
-			timer.Stop()
-		}
+		carry = next
 		c.write(encodeBatch(batch))
 	}
 }
+
+// LimitFrame keeps every batch at most n bytes (0: no limit), for a carrier
+// that refuses bigger frames (FrameLimiter).
+func (c *CodecTransport) LimitFrame(n int) { c.frameLimit.Store(int64(n)) }
 
 func (c *CodecTransport) write(frame []byte) {
 	if err := c.Transport.Send(frame); err != nil {

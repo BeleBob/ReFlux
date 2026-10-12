@@ -213,6 +213,14 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 		link.classicCodec = NewCodecTransport(d.side(false), codec, !s.exit)
 		link.classicEnc = enc.SharingKeys(link.classicCodec)
 	}
+	// A carrier that refuses big frames (Mail.ru since 2026-10-12) gets
+	// batches that fit.
+	if budget := batchBudget(raw); budget > 0 {
+		link.batched.LimitFrame(budget)
+		if link.classicCodec != nil {
+			link.classicCodec.LimitFrame(budget)
+		}
+	}
 	return link, nil
 }
 

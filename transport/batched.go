@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/utils"
 )
@@ -39,6 +38,8 @@ type BatchedTransport struct {
 	lingerMs      int
 	maxBatchBytes int
 	maxBatchCount int
+	// frameLimit caps a batch below the carrier's frame limit (LimitFrame).
+	frameLimit atomic.Int64
 
 	running    atomic.Bool
 	lifecycle  sync.Mutex
@@ -72,6 +73,10 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 		b.lingerMs, b.maxBatchBytes, b.maxBatchCount, batchQueueDepth)
 	return b
 }
+
+// LimitFrame keeps every batch at most n bytes (0: no limit), for a carrier
+// that refuses bigger frames (FrameLimiter).
+func (b *BatchedTransport) LimitFrame(n int) { b.frameLimit.Store(int64(n)) }
 
 func (b *BatchedTransport) Start() error {
 	utils.Debugf("[BATCH] Start() called")
@@ -190,56 +195,34 @@ func (b *BatchedTransport) recordSendError(err error) {
 
 func (b *BatchedTransport) flushLoop() {
 	utils.Debugf("[BATCH] flushLoop: started")
+	// carry: the packet that would have taken the last batch past the
+	// carrier's frame limit; it starts the next one.
+	var carry []byte
 	for b.running.Load() {
-		var first []byte
-		select {
-		case <-b.stopCh:
-			utils.Debugf("[BATCH] flushLoop: stop signal, exiting")
-			return
-		case first = <-b.queue:
-			utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
-				len(first), len(b.queue), cap(b.queue))
-		}
-		batch := [][]byte{first}
-		size := 2 + len(first)
-
-		// Phase 1: absorb everything already queued (burst coalescing). This
-		// alone collapses a window's worth of segments into one message.
-	drainNow:
-		for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
+		first := carry
+		carry = nil
+		if first == nil {
 			select {
-			case p := <-b.queue:
-				batch = append(batch, p)
-				size += 2 + len(p)
-			default:
-				break drainNow
+			case <-b.stopCh:
+				utils.Debugf("[BATCH] flushLoop: stop signal, exiting")
+				return
+			case first = <-b.queue:
+				utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
+					len(first), len(b.queue), cap(b.queue))
 			}
 		}
-		utils.Debugf("[BATCH] flushLoop: phase1 drained to %d packets, %d bytes", len(batch), size)
 
-		// Phase 2: brief linger to catch stragglers arriving just after the
-		// burst. Negligible next to the channel RTT, but it fills batches
-		// during steady bulk transfer.
-		if b.lingerMs > 0 && size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
-			timer := time.NewTimer(time.Duration(b.lingerMs) * time.Millisecond)
-		linger:
-			for size < b.maxBatchBytes && len(batch) < b.maxBatchCount {
-				select {
-				case <-b.stopCh:
-					timer.Stop()
-					utils.Debugf("[BATCH] flushLoop: stop during linger, exiting")
-					return
-				case p := <-b.queue:
-					batch = append(batch, p)
-					size += 2 + len(p)
-				case <-timer.C:
-					break linger
-				}
-			}
-			timer.Stop()
-			utils.Debugf("[BATCH] flushLoop: phase2 linger done, %d packets, %d bytes",
-				len(batch), size)
+		// Everything already queued (burst coalescing), then a brief linger
+		// for stragglers: negligible next to the channel RTT, but it fills
+		// batches during steady bulk transfer.
+		batch, size, next, stopped := fillBatch(b.queue, b.stopCh, first,
+			b.maxBatchBytes, b.maxBatchCount, b.lingerMs, int(b.frameLimit.Load()))
+		if stopped {
+			utils.Debugf("[BATCH] flushLoop: stop during linger, exiting")
+			return
 		}
+		carry = next
+		utils.Debugf("[BATCH] flushLoop: collected %d packets, %d bytes", len(batch), size)
 
 		encoded := encodeBatch(batch)
 		utils.Debugf("[BATCH] flushLoop: sending batch of %d packets (%d raw -> %d wire bytes)",
