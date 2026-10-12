@@ -280,6 +280,37 @@ func TestDocInUseCheck(t *testing.T) {
 	}
 }
 
+// A client moving to a backup document and back, and a node losing its
+// document for a moment, are shown but never sent: both happened several
+// times a day and healed by themselves.
+func TestDocTripsAreNotAlerts(t *testing.T) {
+	docSeen.Lock()
+	docSeen.m = map[string]int{}
+	docSeen.Unlock()
+	c := Client{Name: "phone", Transport: "mailru", URL: testURL, Backups: []Doc{{"mailru", docB}}}
+	run := func(active string, lost bool) []finding {
+		d := &doctor{}
+		d.ok("node:phone", "node.ok", "phone", "1h", ph("online"), "0 B", "0 B")
+		d.docInUse(c, ipc.StatusPayload{Running: true, Connected: true, Active: active})
+		if lost {
+			d.silent(levelWarn, "doc:phone", "node.doc", "phone", 3, "phone")
+		}
+		return d.findings
+	}
+	m := monitor{confirm: 1}
+	m.update(run("mailru", false), langRU)
+	for i, fs := range [][]finding{
+		run("mailru-2", false), run("mailru-2", true), run("mailru", true), run("mailru", false),
+	} {
+		if fs[1].Level == levelOK && i < 2 {
+			t.Fatalf("run %d: not on the backup: %+v", i, fs)
+		}
+		if news := m.update(fs, langRU); len(news) != 0 {
+			t.Errorf("run %d alerts %+v", i, news)
+		}
+	}
+}
+
 func TestBotDocuments(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REFLUX_HOME", home)

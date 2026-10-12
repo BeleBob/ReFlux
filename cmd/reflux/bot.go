@@ -485,6 +485,9 @@ func (m *monitor) update(fs []finding, l lang) []alert {
 	cur := map[string]finding{}
 	var keys []string
 	for _, f := range fs {
+		if f.Sig == sigSilent {
+			continue
+		}
 		cur[f.Key] = f
 		keys = append(keys, f.Key)
 	}

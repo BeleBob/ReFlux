@@ -70,6 +70,12 @@ func (d *doctor) ok(key, msg string, a ...any)   { d.add(levelOK, key, "", msg, 
 func (d *doctor) warn(key, msg string, a ...any) { d.add(levelWarn, key, "", msg, a...) }
 func (d *doctor) fail(key, msg string, a ...any) { d.add(levelFail, key, "", msg, a...) }
 
+// sigSilent marks a finding that doctor, the bot's screens and the panel
+// show, but the bot never sends as news (monitor.update skips it).
+const sigSilent = "silent"
+
+func (d *doctor) silent(lv level, key, msg string, a ...any) { d.add(lv, key, sigSilent, msg, a...) }
+
 // quiet runs docker with its error output discarded: a failed check says
 // what went wrong in its own words.
 func quiet(stdout io.Writer, args ...string) error {
@@ -333,8 +339,10 @@ func (d *doctor) nodes(s Store) {
 			d.fail("node:"+c.Name, "node.stranded", c.Name)
 			continue
 		}
+		// Silent: a node reconnects to its document by itself, and a
+		// document that stays dead has news of its own (docsTick).
 		if n := d.docTrouble(c.Name); n >= 3 {
-			d.warn("doc:"+c.Name, "node.doc", c.Name, n, c.Name)
+			d.silent(levelWarn, "doc:"+c.Name, "node.doc", c.Name, n, c.Name)
 		}
 		st, ok := live[c.Name]
 		if !ok {
@@ -359,7 +367,9 @@ var docSeen = struct {
 }{m: map[string]int{}}
 
 // docInUse checks which document a Session client's traffic goes over: a
-// backup means the main document does not reach the client.
+// backup means the main document does not reach the client. Silent: the
+// client moves to a backup and back on a short drop of the main document,
+// several times a day, and a dead one has news of its own (docsTick).
 func (d *doctor) docInUse(c Client, st ipc.StatusPayload) {
 	if !c.session() {
 		return
@@ -374,9 +384,9 @@ func (d *doctor) docInUse(c Client, st ipc.StatusPayload) {
 	switch {
 	case !known:
 	case i > 0:
-		d.warn("docs:"+c.Name, "node.onbackup", c.Name, i+1, c.Name)
+		d.silent(levelWarn, "docs:"+c.Name, "node.onbackup", c.Name, i+1, c.Name)
 	default:
-		d.ok("docs:"+c.Name, "node.onmain", c.Name, len(c.Docs()))
+		d.silent(levelOK, "docs:"+c.Name, "node.onmain", c.Name, len(c.Docs()))
 	}
 }
 
