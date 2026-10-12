@@ -5,6 +5,20 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-12
+
+### Added
+
+- **A node can keep its scripted (`.flux`) transports current and self-heal, with no restart.** The new
+  `--script-auto-update` flag turns on a headless updater — the counterpart of the app's updater for a CLI or
+  exit node that has no GUI. It checks each `.flux` carrier's author feed on the usual schedule and installs
+  an update when the core vouches for it (first-party key, same wire); and when a carrier keeps failing to
+  connect it walks a recovery ladder: check for a newer package now, then roll back to the previous one, then
+  fall back to the native transport of the same service. An applied or rolled-back package is **hot-swapped**
+  into the live session, so only that one carrier blinks while it reconnects — the handshake, the other
+  carriers and the packet flow stay up. `--script-update-channel` selects `stable` or `nightly`. Off by
+  default, so node behaviour is unchanged unless asked for.
+
 ## [0.5.1] - 2026-10-11
 
 ### Fixed
