@@ -455,13 +455,13 @@ func cmdShow(s Store, args []string, stdout io.Writer) error {
 }
 
 // printAccess prints what a client needs: the fields for manual entry
-// (apps without link import) and the openflux:// link with its QR code.
+// (apps without link import) and the reflux:// link with its QR code.
 func printAccess(s Store, c Client, stdout io.Writer, pngPath string) error {
 	key, err := s.Key(c.Name)
 	if err != nil {
 		return err
 	}
-	link, err := share.MakeLink(shareConfig(c, key))
+	link, err := shownLink(c, key)
 	if err != nil {
 		return err
 	}
@@ -483,7 +483,7 @@ func printAccess(s Store, c Client, stdout io.Writer, pngPath string) error {
 	fmt.Fprintf(stdout, `  Encryption key  %s
   Legacy codec    off
 
-Link (OpenFlux apps: scan or paste):
+Link (ReFlux for Android 1.1.1+: scan or paste):
 %s
 %s`, key, link, qr)
 	if pngPath != "" {

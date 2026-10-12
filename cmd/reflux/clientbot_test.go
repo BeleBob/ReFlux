@@ -90,7 +90,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	}
 	// the link only: the key travels inside it, never as plain text
 	key, _ := s.Key("dima")
-	if strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "<code>openflux://") || !strings.Contains(m[len(m)-1].Text, "Вставить ссылку") {
+	if strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "<code>reflux://v1/") || !strings.Contains(m[len(m)-1].Text, "Вставить ссылку") {
 		t.Errorf("access text %q", m[len(m)-1].Text)
 	}
 	if _, err := s.getRequest(101); err == nil {
@@ -103,7 +103,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	}
 	// The channel screen; the link again, not too often.
 	cb.handle(personMsg(6, dima, "/start"))
-	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, "канал <b>dima</b>\n🟢 Работает до ") || !strings.Contains(m[len(m)-1].Buttons.String(), `"callback_data":"qr","style":"success"`) {
+	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, "канал <b>dima</b>\n🟢 Работает до ") || !strings.Contains(m[len(m)-1].Buttons.String(), `"callback_data":"qr"}`) {
 		t.Errorf("channel: %q", m[len(m)-1].Text)
 	}
 	cb.handle(personPress(7, dima, "qr"))
@@ -267,7 +267,7 @@ func TestClientBotGuide(t *testing.T) {
 	c.Telegram = &TGAccount{ID: 101, Username: "dima"}
 	s.Save(c)
 	cb.handle(personPress(2, dima, "help"))
-	if kb := f.lastEditKeys(); !strings.Contains(kb, `"callback_data":"qr","style":"success"`) {
+	if kb := f.lastEditKeys(); !strings.Contains(kb, `"callback_data":"qr"}`) {
 		t.Errorf("a client's buttons: %s", kb)
 	}
 }

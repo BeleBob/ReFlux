@@ -384,7 +384,7 @@ func TestBotManagesClients(t *testing.T) {
 	b.handle(msg(2, 42, "/show guest"))
 	key, _ := s.Key("guest")
 	m := f.messages()
-	if len(f.photos) != 1 || !strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+	if len(f.photos) != 1 || !strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "reflux://v1/") {
 		t.Fatalf("/show sent photos %q and %+v", f.photos, m[len(m)-1])
 	}
 	deadline := time.Now().Add(3 * time.Second)

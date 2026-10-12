@@ -161,7 +161,7 @@ func TestAddByNameThenLinkByInvite(t *testing.T) {
 	if c.Telegram == nil || c.Telegram.ID != 101 || !c.Expires.Equal(expires) {
 		t.Fatalf("not linked: %+v", c.Telegram)
 	}
-	if m := f.to(101); len(m) < 2 || !strings.Contains(m[0].Text, "<b>guest</b>") || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+	if m := f.to(101); len(m) < 2 || !strings.Contains(m[0].Text, "<b>guest</b>") || !strings.Contains(m[len(m)-1].Text, "reflux://v1/") {
 		t.Fatalf("person: %+v", m)
 	}
 	if clients, _ := s.List(); len(clients) != 1 {

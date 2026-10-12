@@ -62,6 +62,22 @@ ConfigOfferFile = /config/offer
 // shareConfig is what a client app needs to connect to c's node: one
 // document for a classic exit, or the Session with every document, their
 // priorities and the context.
+// refluxPrefix starts the links people see: ReFlux's own scheme instead of
+// the core's openflux:// (share.Prefix), the rest the same. ReFlux for
+// Android 1.1.1 and newer reads both.
+const refluxPrefix = "reflux://v1/"
+
+// shownLink is a channel's link as the bots, the panel and `reflux show`
+// give it. The ConfigOffer a node sends its app in-band (offer.go) keeps
+// openflux://, which every app version reads.
+func shownLink(c Client, key string) (string, error) {
+	link, err := share.MakeLink(shareConfig(c, key))
+	if err != nil {
+		return "", err
+	}
+	return refluxPrefix + strings.TrimPrefix(link, share.Prefix), nil
+}
+
 func shareConfig(c Client, key string) share.Config {
 	cfg := share.Config{Name: "ReFlux " + c.Name, Secret: key}
 	if !c.session() {

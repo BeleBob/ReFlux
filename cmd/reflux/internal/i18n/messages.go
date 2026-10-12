@@ -113,7 +113,7 @@ var Messages = map[string][2]string{
 	"ui.sent":           {"Sent", "Отправлено"},
 	"ui.unknown":        {"Unknown command: /help", "Неизвестная команда: /help"},
 	"ui.help":           {"🛰 <b>ReFlux</b>: alerts when something breaks or changes, and client management. Buttons do the same as the commands.", "🛰 <b>ReFlux</b>: уведомления, когда что-то ломается или меняется, и управление клиентами. Кнопки делают то же, что команды."},
-	"ui.show.photo":     {"<b>%s</b>: scan in the OpenFlux app (deleted in %d min)", "<b>%s</b>: отсканируйте в приложении OpenFlux (удалится через %d мин)"},
+	"ui.show.photo":     {"<b>%s</b>: scan in the ReFlux app (deleted in %d min)", "<b>%s</b>: отсканируйте в приложении ReFlux (удалится через %d мин)"},
 	"ui.show.failed":    {"could not send the QR code", "не удалось отправить QR-код"},
 	"ui.show.text": {"<b>%s</b>: access to the channel, pass it to its owner only (deleted in %d min).\nAccess: %s\n\nManual entry:\nTransport: <code>%s</code>\nDocument URL: <code>%s</code>\nEncryption key: <code>%s</code>\nLegacy codec: off\n\nLink:\n<code>%s</code>",
 		"<b>%s</b>: доступ к каналу, передайте только его владельцу (удалится через %d мин).\nДоступ: %s\n\nРучной ввод:\nТранспорт: <code>%s</code>\nСсылка на документ: <code>%s</code>\nКлюч шифрования: <code>%s</code>\nLegacy codec: выключен\n\nСсылка:\n<code>%s</code>"},

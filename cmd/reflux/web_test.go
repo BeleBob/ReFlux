@@ -195,7 +195,7 @@ func TestWebAddAndShow(t *testing.T) {
 	key, _ := wt.s.Key("friend")
 	body := rec.Body.String()
 	if rec.Code != http.StatusOK || !strings.Contains(body, key) || !strings.Contains(body, "data:image/png;base64,") ||
-		!strings.Contains(body, "openflux://") {
+		!strings.Contains(body, "reflux://v1/") {
 		t.Fatalf("show: %d", rec.Code)
 	}
 	if rec.Header().Get("Cache-Control") != "no-store" {
