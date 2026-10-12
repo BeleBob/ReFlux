@@ -82,7 +82,13 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 	case "mailru":
 		return mailru.NewMailruDocsTransport(url, base), nil
 	case "cupsonline":
-		return cupsonline.NewCupsonlineTransport(url, base, !o.IsExit), nil
+		// Our own transports carry our role in "exit"; one the peer asks for
+		// at runtime has none and is started on this process's side.
+		exit := o.IsExit
+		if v, ok := params["exit"].(bool); ok {
+			exit = v
+		}
+		return cupsonline.NewCupsonlineTransport(url, base, !exit), nil
 	case "oneme":
 		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
 		return oneme.NewOneMeTransport(roleParam(params, "exit", o.IsExit), str("token"), uid, base), nil

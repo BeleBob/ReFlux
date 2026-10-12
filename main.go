@@ -264,6 +264,7 @@ func main() {
 			"from --config), falling back to --transport. Only set this to override that derivation.")
 
 	flag.StringVar(&globalDocUrl, "url", "http://#", "Document URL. If u use Yandex.Docs transport")
+	urlFile := flag.String("url-file", "", "Read --url from this file, so the document URL stays out of the process list and shell history")
 	flag.StringVar(&maxToken, "maxToken", "", "MAX Web token. If u use MAX transport")
 	flag.StringVar(&maxUid, "maxUid", "", "MAX call user id. If u use MAX transport")
 	directDial := flag.String("direct-dial", "", "DirectTransport: exit address to dial (client). Requires --encryption-key-file")
@@ -295,6 +296,7 @@ func main() {
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
+	upstreamProxy := flag.String("upstream-proxy", "", "Exit (l4): open TCP connections through this SOCKS5 proxy, e.g. 127.0.0.1:10808 or socks5://user:pass@host:port")
 	httpProxyAddr := flag.String("http-proxy", "", "Client: also serve an HTTP proxy (CONNECT and plain requests) on this address, through the same tunnel")
 	flag.StringVar(&localIP, "local-ip", "", "Egress IP for exit node (l3 mode only, scoped RST drop)")
 
@@ -564,6 +566,9 @@ DEPRECATED (removed in v2)
 				}
 				spec.Params["network"] = n
 			}
+			if spec.Type == "cupsonline" {
+				spec.Params = map[string]interface{}{"exit": isExit}
+			}
 			confTransports = append(confTransports, spec)
 		}
 	}
@@ -609,6 +614,17 @@ DEPRECATED (removed in v2)
 	}
 
 	// Platform defaults. The recommended client path is utun on macOS and
+	if *urlFile != "" {
+		if globalDocUrl != "http://#" {
+			log.Fatal("--url-file and --url are exclusive")
+		}
+		u, err := readURLFile(*urlFile)
+		if err != nil {
+			log.Fatalf("--url-file: %v", err)
+		}
+		globalDocUrl = u
+	}
+
 	// SOCKS5 everywhere else (see README for details). Stream mode keeps
 	// SOCKS5 unless the full tunnel is asked for by name: it was a proxy
 	// first, and the apps' proxy profiles do not pass --inbound.
@@ -622,6 +638,25 @@ DEPRECATED (removed in v2)
 	}
 	if *mode == "" {
 		*mode = "l3"
+		// Only the l4 exit dials its own connections, so only it can use
+		// an upstream proxy.
+		if *role == roleExit && *upstreamProxy != "" {
+			*mode = "l4"
+		}
+	}
+	if *upstreamProxy != "" {
+		if *role != roleExit {
+			log.Fatal("--upstream-proxy applies to --role=exit only")
+		}
+		if *mode != "l4" {
+			log.Fatal("--upstream-proxy needs --mode=l4: an l3 exit forwards packets and dials nothing itself")
+		}
+		if err := tunnel.SetExitUpstream(*upstreamProxy); err != nil {
+			log.Fatalf("--upstream-proxy: %v", err)
+		}
+		if addr := tunnel.ExitUpstream(); addr != "" {
+			log.Printf("Exit TCP goes through SOCKS5 %s", addr)
+		}
 	}
 
 	if *codec != codecBatched && *codec != codecLegacy {
@@ -773,7 +808,8 @@ DEPRECATED (removed in v2)
 			urls["yandex"] = globalDocUrl
 		}
 		extra := map[string]map[string]interface{}{
-			"oneme": {"token": *onemeToken, "uid": *onemeUID, "exit": isExit},
+			"oneme":      {"token": *onemeToken, "uid": *onemeUID, "exit": isExit},
+			"cupsonline": {"exit": isExit},
 			"direct": {
 				"dial":    *directDial,
 				"listen":  *directListen,
@@ -805,6 +841,9 @@ DEPRECATED (removed in v2)
 			specs[0].Params = map[string]interface{}{
 				"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName,
 			}
+		}
+		if *transportType == "cupsonline" {
+			specs[0].Params = map[string]interface{}{"exit": isExit}
 		}
 	}
 
@@ -1314,6 +1353,9 @@ func runClient(trans transport.Transport, inbound, socksAddr, httpProxyAddr stri
 		// for platforms without a tun client (see README).
 		log.Printf("Running as CLIENT (SOCKS5 on %s, legacy gVisor path)", socksAddr)
 		tun := tunnel.NewTCPTunnelMode(trans, false, exitMode)
+		if err := tun.Err(); err != nil {
+			log.Fatal(err)
+		}
 		if httpProxyAddr != "" {
 			ln, err := net.Listen("tcp", httpProxyAddr)
 			if err != nil {
