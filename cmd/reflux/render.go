@@ -67,9 +67,8 @@ ConfigOfferFile = /config/offer
 // Android 1.1.1 and newer reads both.
 const refluxPrefix = "reflux://v1/"
 
-// shownLink is a channel's link as the bots, the panel and `reflux show`
-// give it. The ConfigOffer a node sends its app in-band (offer.go) keeps
-// openflux://, which every app version reads.
+// shownLink is a channel's link as the bots, the panel, `reflux show` and
+// the ConfigOffer a node sends its app (offer.go) give it.
 func shownLink(c Client, key string) (string, error) {
 	link, err := share.MakeLink(shareConfig(c, key))
 	if err != nil {

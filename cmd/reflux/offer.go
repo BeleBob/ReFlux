@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // Each node tells its client the client's current link (the core's
@@ -33,7 +31,7 @@ func (s Store) writeOffer(c Client, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	link, err := share.MakeLink(shareConfig(c, key))
+	link, err := shownLink(c, key)
 	if err != nil {
 		return err
 	}

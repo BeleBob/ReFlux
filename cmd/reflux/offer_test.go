@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/p1neappleXpress/OpenFlux/share"
 )
 
 // The node's offer holds the client's current link; its version moves
@@ -34,7 +32,7 @@ func TestOfferFollowsTheLink(t *testing.T) {
 	}
 	first := read()
 	key, _ := s.Key("phone")
-	if want, _ := share.MakeLink(shareConfig(c, key)); first.Link != want || first.Version != now.Unix() {
+	if want, _ := shownLink(c, key); first.Link != want || !strings.HasPrefix(want, refluxPrefix) || first.Version != now.Unix() {
 		t.Errorf("first offer %+v", first)
 	}
 	if st, _ := os.Stat(s.offerPath("phone")); st.Mode().Perm() != 0o600 {
