@@ -250,6 +250,61 @@ func (u *AutoUpdater) Run(ctx context.Context, every time.Duration) {
 	}
 }
 
+// Watch drives one transport's recovery ladder from a liveness probe until
+// ctx is done. It polls up() every interval and feeds the ladder both edges
+// and duration:
+//   - an up edge (down->up) is a fresh OnConnected;
+//   - a down edge (up->down) is one OnFailed;
+//   - each further `grace` of continuous down is another OnFailed, so a lasting
+//     outage escalates steadily instead of counting as a single failure.
+//
+// Flapping and sustained outages both reach the ladder this way, while the
+// ladder's own StableFor rule keeps a transport that only ever connects for an
+// instant from resetting (see RecoveryLadder). Run one Watch per enrolled
+// transport; `up` is typically the transport's IsConnected.
+func (u *AutoUpdater) Watch(ctx context.Context, id string, up func() bool, interval, grace time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	if grace <= 0 {
+		grace = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+
+	wasUp := false
+	downSince := u.now() // treat the pre-start state as down since now
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		now := u.now()
+		if up() {
+			if !wasUp {
+				u.OnConnected(id)
+			}
+			wasUp = true
+			downSince = time.Time{}
+			continue
+		}
+		// Down.
+		if wasUp {
+			u.OnFailed(id) // up -> down edge
+			downSince = now
+			wasUp = false
+			continue
+		}
+		if downSince.IsZero() {
+			downSince = now
+		} else if now.Sub(downSince) >= grace {
+			u.OnFailed(id) // still down a whole grace later
+			downSince = now
+		}
+	}
+}
+
 func (u *AutoUpdater) ids() []string {
 	u.mu.Lock()
 	defer u.mu.Unlock()

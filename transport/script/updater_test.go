@@ -147,6 +147,55 @@ func TestAutoUpdaterDailyLeavesNonAutoOKAlone(t *testing.T) {
 	}
 }
 
+func TestAutoUpdaterWatchSustainedDownEscalates(t *testing.T) {
+	r := newRig(t)
+	dir := t.TempDir()
+	r.install(dir, PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"})
+
+	fellBack := make(chan string, 4)
+	u := NewAutoUpdater(AutoUpdaterConfig{
+		Dir:      dir,
+		Auto:     true,
+		Policy:   RecoveryPolicy{RecheckAfter: 1, RollbackAfter: 2, FallbackAfter: 3, Window: time.Hour, StableFor: time.Hour},
+		Fetch:    r.get, // no index served: recheck/rollback are harmless no-ops
+		Fallback: func(id string) { fellBack <- id },
+	})
+	u.Enroll(demoInstalled(r, "1.0.0", 1))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Transport never comes up: Watch should raise failures every grace and
+	// walk the ladder to fallback.
+	go u.Watch(ctx, "demo", func() bool { return false }, 5*time.Millisecond, 8*time.Millisecond)
+	waitFor(t, fellBack, "demo")
+}
+
+func TestAutoUpdaterWatchHealthyStaysCalm(t *testing.T) {
+	r := newRig(t)
+	dir := t.TempDir()
+	r.install(dir, PackageManifest{ID: "demo", Name: "demo", Version: "1.0.0"})
+
+	fellBack := make(chan string, 4)
+	u := NewAutoUpdater(AutoUpdaterConfig{
+		Dir:      dir,
+		Auto:     true,
+		Policy:   RecoveryPolicy{RecheckAfter: 1, RollbackAfter: 2, FallbackAfter: 3, Window: time.Hour, StableFor: time.Hour},
+		Fetch:    r.get,
+		Fallback: func(id string) { fellBack <- id },
+	})
+	u.Enroll(demoInstalled(r, "1.0.0", 1))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Transport is up the whole time: no failures, so no escalation ever.
+	go u.Watch(ctx, "demo", func() bool { return true }, 5*time.Millisecond, 8*time.Millisecond)
+	select {
+	case id := <-fellBack:
+		t.Fatalf("a healthy transport must not escalate; fell back for %q", id)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
 func TestAutoUpdaterSkipsPlainJSAndMissingSource(t *testing.T) {
 	// A transport with no update source is simply not updatable; Installed()
 	// returns ok=false and it is never enrolled. Here we check the record
