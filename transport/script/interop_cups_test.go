@@ -291,10 +291,16 @@ func waitConnected(t *testing.T, name string, tr transport.Transport, within tim
 // not got yet until all have arrived: the channel is pub/sub with no history,
 // so a packet sent into a room the peer has not subscribed to yet is gone, as
 // on the real service (the Session above retransmits; this test plays that
-// part).
+// part). It re-sends only once the receiver has gone quiet: a JS transport
+// handles what arrives and what it sends on one event loop, and under -race
+// on a busy runner re-sending everything every few hundred ms piled up
+// thousands of duplicates in front of its own writes, so the next direction
+// never got a turn.
 func deliver(t *testing.T, from transport.Transport, to *collector, pkts [][]byte, within time.Duration) {
 	t.Helper()
+	const quiet = time.Second
 	deadline := time.Now().Add(within)
+	sent := time.Time{}
 	for {
 		to.mu.Lock()
 		var missing [][]byte
@@ -303,6 +309,7 @@ func deliver(t *testing.T, from transport.Transport, to *collector, pkts [][]byt
 				missing = append(missing, p)
 			}
 		}
+		last := to.last
 		to.mu.Unlock()
 		if len(missing) == 0 {
 			return
@@ -314,10 +321,13 @@ func deliver(t *testing.T, from transport.Transport, to *collector, pkts [][]byt
 			}
 			t.Fatalf("%d of %d packets never arrived (sizes %v)", len(missing), len(pkts), sizes)
 		}
-		for _, p := range missing {
-			_ = from.Send(p)
+		if sent.IsZero() || (time.Since(sent) > quiet && time.Since(last) > quiet) {
+			for _, p := range missing {
+				_ = from.Send(p)
+			}
+			sent = time.Now()
 		}
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
