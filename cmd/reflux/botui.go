@@ -982,7 +982,7 @@ func (b *bot) show(name string) {
 		fail(err)
 		return
 	}
-	link, err := share.MakeLink(shareConfig(c, key))
+	link, err := shownLink(c, key)
 	if err != nil {
 		fail(err)
 		return

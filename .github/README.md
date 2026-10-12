@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="Логотип ReFlux">
   <h1>ReFlux</h1>
-  <p>Сервер для OpenFlux: exit-ноды в Docker для нескольких клиентов, выход в интернет только через AmneziaWG.</p>
+  <p>Сервер туннелей ReFlux: exit-ноды в Docker для нескольких клиентов, выход в интернет только через AmneziaWG.</p>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Последний релиз"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="Статус CI"></a>
@@ -18,8 +18,8 @@
   <p><strong>Русский</strong> · <a href="README.en.md">English</a></p>
 </div>
 
-ReFlux — набор инструментов для развёртывания и обслуживания exit-нод
-[OpenFlux](https://github.com/p1neappleXpress/OpenFlux) на Linux-сервере.
+ReFlux — сервер туннелей: разворачивает и обслуживает exit-ноды (ядро —
+[OpenFlux](https://github.com/p1neappleXpress/OpenFlux)) на Linux-сервере.
 Каждый клиент получает отдельную ноду со своим ключом шифрования. Исходящий
 трафик клиентов проходит только через туннели AmneziaWG. Управление
 выполняется из командной строки, через Telegram-бот и веб-панель.
@@ -148,7 +148,7 @@ go vet ./...
 - [x] Установка одной командой и мастер настройки
 - [x] Telegram-боты и веб-панель
 - [x] Своё приложение для Android — [ReFlux для Android](https://github.com/BeleBob/ReFlux-Android)
-- [ ] Самообновление подписки через документ
+- [x] Самообновление подписки через документ
 - [ ] Обслуживание нескольких клиентов одной нодой с аутентификацией по ключу
 
 ## Происхождение и лицензия

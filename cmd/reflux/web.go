@@ -456,7 +456,7 @@ func (w *webServer) show(r *http.Request) (string, pageData, error) {
 	if err != nil {
 		return "error", pageData{}, err
 	}
-	link, err := share.MakeLink(shareConfig(c, key))
+	link, err := shownLink(c, key)
 	if err != nil {
 		return "error", pageData{}, err
 	}

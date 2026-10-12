@@ -301,7 +301,7 @@ func (cb *clientBot) channel(l lang, c Client, extending bool) screen {
 	text := tr(l, "cb.channel", html.EscapeString(c.Name), strings.Join(lines, "\n"))
 	var kb keyboard
 	if c.Active(now) {
-		kb = append(kb, []telegram.Button{cb.main(l, "b.cb.qr", "qr")})
+		kb = append(kb, []telegram.Button{cb.btn(l, "b.cb.qr", "qr")})
 	}
 	switch {
 	case extending:
@@ -434,7 +434,7 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	if err != nil {
 		return err
 	}
-	link, err := share.MakeLink(shareConfig(c, key))
+	link, err := shownLink(c, key)
 	if err != nil {
 		return err
 	}
@@ -471,7 +471,7 @@ func (cb *clientBot) help(u *telegram.User) screen {
 	}
 	row := []telegram.Button{cb.download(l)}
 	if c, ok := cb.s.clientOf(u.ID); ok && c.Active(time.Now()) {
-		row = append(row, cb.main(l, "b.cb.qr", "qr"))
+		row = append(row, cb.btn(l, "b.cb.qr", "qr"))
 	}
 	return screen{text, keyboard{row, {cb.btn(l, "b.back", "home")}}}
 }
