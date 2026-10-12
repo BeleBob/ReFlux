@@ -22,12 +22,18 @@ import (
 // panel, reflux invite) with the access time it gives; the person opens
 // t.me/<client bot>?start=<code> and gets their channel. A link works
 // once, for inviteFor; unused ones can be revoked.
+//
+// A link invite (Client set) gives an existing client, made without an
+// account, to whoever opens it first: the owner adds a client now and
+// links it to a person later.
 
 const inviteFor = 7 * 24 * time.Hour
 
 type invite struct {
 	Code    string    `json:"code"`
 	How     string    `json:"how"` // +30, +90 or never: what approving gives
+	// Client: a link invite's client, which keeps its own access.
+	Client string `json:"client,omitempty"`
 	Note    string    `json:"note,omitempty"`
 	Created time.Time `json:"created"`
 	Expires time.Time `json:"expires"`
@@ -50,16 +56,35 @@ func (s Store) newInvite(how, note string, now time.Time) (invite, error) {
 	if _, err := expiryFrom(how, "", time.Time{}, now); err != nil {
 		return invite{}, err
 	}
-	b := make([]byte, 10)
-	if _, err := rand.Read(b); err != nil {
-		return invite{}, err
-	}
 	note = strings.Join(strings.Fields(note), " ")
 	if len([]rune(note)) > maxNote {
 		return invite{}, fmt.Errorf("the note is too long: %d characters at most", maxNote)
 	}
-	inv := invite{Code: strings.ToLower(inviteEncoder.EncodeToString(b)), How: how, Note: note,
-		Created: now.UTC().Truncate(time.Second), Expires: now.Add(inviteFor).UTC().Truncate(time.Second)}
+	return s.saveNewInvite(invite{How: how, Note: note}, now)
+}
+
+// newLinkInvite makes a link invite for a client no account has yet.
+func (s Store) newLinkInvite(client string, now time.Time) (invite, error) {
+	c, err := s.Get(client)
+	if err != nil {
+		return invite{}, err
+	}
+	if c.Telegram != nil {
+		return invite{}, fmt.Errorf("%s is linked to %s already", c.Name, c.Telegram)
+	}
+	return s.saveNewInvite(invite{Client: c.Name}, now)
+}
+
+// saveNewInvite gives inv a random code of 16 base32 letters (80 bits) and
+// its dates, and saves it.
+func (s Store) saveNewInvite(inv invite, now time.Time) (invite, error) {
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		return invite{}, err
+	}
+	inv.Code = strings.ToLower(inviteEncoder.EncodeToString(b))
+	inv.Created = now.UTC().Truncate(time.Second)
+	inv.Expires = now.Add(inviteFor).UTC().Truncate(time.Second)
 	if err := os.MkdirAll(s.invitesDir(), 0o700); err != nil {
 		return inv, err
 	}
@@ -112,6 +137,9 @@ func (s Store) useInvite(code string, u telegram.User, now time.Time) (accessReq
 		os.Remove(s.invitePath(code))
 		return accessRequest{}, Client{}, inv, errNoInvite
 	}
+	if inv.Client != "" {
+		return s.useLinkInvite(inv, u, now)
+	}
 	text := inv.Note
 	if text == "" {
 		text = "invite"
@@ -128,6 +156,32 @@ func (s Store) useInvite(code string, u telegram.User, now time.Time) (accessReq
 		return r, c, inv, err
 	}
 	return r, c, inv, nil
+}
+
+// useLinkInvite links the invite's client to the account: a request made
+// and approved for that client, so the client bot sends the welcome and
+// the link. An account with a channel of its own keeps the invite unspent;
+// a client someone was linked to meanwhile spends it.
+func (s Store) useLinkInvite(inv invite, u telegram.User, now time.Time) (accessRequest, Client, invite, error) {
+	c, err := s.Get(inv.Client)
+	if err != nil || c.Telegram != nil {
+		os.Remove(s.invitePath(inv.Code))
+		return accessRequest{}, Client{}, inv, errNoInvite
+	}
+	if _, ok := s.clientOf(u.ID); ok {
+		return accessRequest{}, Client{}, inv, errWaiting
+	}
+	r, err := s.newRequest(u, reqAccess, "invite: "+c.Name, now)
+	if err != nil {
+		return r, Client{}, inv, err
+	}
+	os.Remove(s.invitePath(inv.Code))
+	c.Telegram = &TGAccount{ID: u.ID, Username: u.Username, Name: u.FirstName}
+	if err := s.Save(c); err != nil {
+		return r, c, inv, err
+	}
+	r.State, r.Client, r.Decided = reqApproved, c.Name, now.UTC().Truncate(time.Second)
+	return r, c, inv, s.saveRequest(r)
 }
 
 // inviteLink is the link to the client bot for an invite, or the bare
@@ -158,7 +212,11 @@ func cmdInvite(s Store, args []string, stdout io.Writer) error {
 			fmt.Fprintln(stdout, "No invites. Make one: reflux invite [--expires +30|+90|never] [--note <who>]")
 		}
 		for _, inv := range invs {
-			fmt.Fprintf(stdout, "%s  %-6s until %s  %s\n", inv.Code, inv.How, inv.Expires.Local().Format("2006-01-02 15:04"), inv.Note)
+			how := inv.How
+			if inv.Client != "" {
+				how = "link " + inv.Client
+			}
+			fmt.Fprintf(stdout, "%s  %-6s until %s  %s\n", inv.Code, how, inv.Expires.Local().Format("2006-01-02 15:04"), inv.Note)
 		}
 		return nil
 	}
@@ -172,11 +230,20 @@ func cmdInvite(s Store, args []string, stdout io.Writer) error {
 	fs := newFlagSet("invite")
 	how := fs.String("expires", "+30", "the access it gives: +N days or never")
 	note := fs.String("note", "", "who it is for, for you")
+	client := fs.String("client", "", "link this existing client to whoever opens the invite")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *client != "" {
+		inv, err := s.newLinkInvite(*client, now)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Link invite for %s (works once, until %s):\n%s\n", inv.Client, inv.Expires.Local().Format("2006-01-02 15:04"), s.inviteLink(inv.Code))
+		return nil
+	}
 	if fs.NArg() > 0 {
-		return errors.New("invite: reflux invite [--expires +30|never] [--note <who>] | list | revoke <code>")
+		return errors.New("invite: reflux invite [--expires +30|never] [--note <who>] | --client <name> | list | revoke <code>")
 	}
 	h := *how
 	if h != "never" && !strings.HasPrefix(h, "+") {

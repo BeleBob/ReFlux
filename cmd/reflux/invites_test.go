@@ -130,3 +130,48 @@ func TestInviteOnThePanelAndTheCLI(t *testing.T) {
 		t.Errorf("list:\n%s", out.String())
 	}
 }
+
+// The owner adds a client by its name alone, its documents from the pool,
+// and later sends a person a link that gives them that client.
+func TestAddByNameThenLinkByInvite(t *testing.T) {
+	s, f, owner, cb := bots(t)
+	writeJSON(s.clientBotPath(), clientBotConfig{Token: testToken, Username: "reflux_access_bot"})
+	writeFile(t, s.poolPath(), "mailru "+docB+"\nmailru "+docC+"\n")
+	owner.handle(msg(1, 42, "/add guest 30d"))
+	c, err := s.Get("guest")
+	if err != nil || c.Telegram != nil || len(c.Docs()) != 2 || c.Expires.IsZero() {
+		t.Fatalf("added %+v %v", c, err)
+	}
+	if m := f.to(42); !strings.Contains(m[len(m)-1].Buttons.String(), `"tgi:guest"`) {
+		t.Errorf("no link button after adding: %s", m[len(m)-1].Buttons)
+	}
+
+	owner.handle(press(2, 42, "tgi:guest", time.Now()))
+	invs := s.listInvites(time.Now())
+	if len(invs) != 1 || invs[0].Client != "guest" || !strings.Contains(f.lastEditText(), "https://t.me/reflux_access_bot?start="+invs[0].Code) {
+		t.Fatalf("link screen:\n%s\n%+v", f.lastEditText(), invs)
+	}
+	if !strings.Contains(owner.invitesScreen("").text, "клиент guest") {
+		t.Error("the invites screen does not say whose link it is")
+	}
+
+	expires := c.Expires
+	cb.handle(personMsg(3, dima, "/start "+invs[0].Code))
+	c, _ = s.Get("guest")
+	if c.Telegram == nil || c.Telegram.ID != 101 || !c.Expires.Equal(expires) {
+		t.Fatalf("not linked: %+v", c.Telegram)
+	}
+	if m := f.to(101); len(m) < 2 || !strings.Contains(m[0].Text, "<b>guest</b>") || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+		t.Fatalf("person: %+v", m)
+	}
+	if clients, _ := s.List(); len(clients) != 1 {
+		t.Errorf("a link invite made another client: %d", len(clients))
+	}
+	if len(s.listInvites(time.Now())) != 0 {
+		t.Error("the link invite is not spent")
+	}
+	// A linked client gets no link of its own.
+	if _, err := s.newLinkInvite("guest", time.Now()); err == nil {
+		t.Error("a link invite for a linked client")
+	}
+}

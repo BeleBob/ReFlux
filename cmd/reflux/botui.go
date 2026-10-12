@@ -256,6 +256,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.telegramScreen(arg), ""
 	case "tgme":
 		return b.link(arg, true), ""
+	case "tgi":
+		return b.linkInvite(arg), ""
 	case "tgoff":
 		return b.link(arg, false), ""
 	case "ren":
@@ -755,6 +757,9 @@ func (b *bot) telegramScreen(name string) screen {
 		now = html.EscapeString(c.Telegram.String())
 	}
 	kb := keyboard{{b.btn("b.tg.me", "tgme:"+c.Name)}}
+	if c.Telegram == nil {
+		kb = append(kb, []telegram.Button{b.btn("b.tg.invite", "tgi:"+c.Name)})
+	}
 	if c.Telegram != nil {
 		if n := nick(*c.Telegram); n != "" && n != c.Name {
 			kb = append(kb, []telegram.Button{b.btn("b.tg.rename", "rnk:"+c.Name, n)})
@@ -763,6 +768,20 @@ func (b *bot) telegramScreen(name string) screen {
 	}
 	kb = append(kb, []telegram.Button{b.btn("b.back", "c:"+c.Name), b.btn("b.home", "home")})
 	return screen{b.tr("ui.tg.title", html.EscapeString(c.Name)) + "\n" + b.tr("ui.client.telegram", now) + "\n\n" + b.tr("ui.tg.hint"), kb}
+}
+
+// linkInvite makes a one-time link to the client bot that links the
+// client to whoever opens it (invites.go).
+func (b *bot) linkInvite(name string) screen {
+	inv, err := b.s.newLinkInvite(name, time.Now())
+	if err != nil {
+		return b.failed(err, b.btn("b.back", "tg:"+name))
+	}
+	text := b.tr("ui.tg.invite", html.EscapeString(name), html.EscapeString(b.s.inviteLink(inv.Code)))
+	if _, ok, _ := b.s.loadClientBot(); !ok {
+		text += "\n\n" + b.tr("ui.tg.nobot")
+	}
+	return screen{text, keyboard{{b.btn("b.back", "tg:"+name), b.btn("b.home", "home")}}}
 }
 
 // link binds a client to the owner's own account (the one pressing the
@@ -839,14 +858,24 @@ func (b *bot) addPrompt() screen {
 	return screen{b.tr("ui.add.prompt"), keyboard{{b.btn("b.cancel", "home")}}}
 }
 
-// add creates a client from "<name> <document-url> [expiry]".
+// add creates a client from "<name> [document-url] [expiry]". Without a
+// link its documents come from the pool: a main one and, when one is free,
+// a backup. The client has no account yet; the card offers a link that
+// gives it to a person later (🔗 Telegram → 🎟 link).
 func (b *bot) add(args []string) screen {
-	if len(args) < 2 || len(args) > 3 {
+	if len(args) == 0 {
+		return screen{b.tr("ui.add.prompt"), keyboard{{b.btn("b.home", "home")}}}
+	}
+	name, url, rest := args[0], "", args[1:]
+	if len(rest) > 0 && strings.Contains(rest[0], "://") {
+		url, rest = rest[0], rest[1:]
+	}
+	if len(rest) > 1 {
 		return screen{b.tr("ui.add.prompt"), keyboard{{b.btn("b.home", "home")}}}
 	}
 	expires := "never"
-	if len(args) == 3 {
-		expires = args[2]
+	if len(rest) == 1 {
+		expires = rest[0]
 	}
 	when, err := parseExpiry(expires, time.Now())
 	if err != nil {
@@ -855,7 +884,22 @@ func (b *bot) add(args []string) screen {
 	var c Client
 	err = b.change(func() error {
 		var err error
-		if c, err = b.s.Add(args[0], "mailru", args[1]); err != nil {
+		if url == "" {
+			d, err := b.s.freeDoc(Client{Transport: "mailru"})
+			if err != nil {
+				return fmt.Errorf("%s: %w", b.tr("ui.add.nopool"), err)
+			}
+			if c, err = b.s.Add(name, d.Transport, d.URL); err != nil {
+				return err
+			}
+			// A backup when the pool has one; the document check adds it
+			// later otherwise.
+			if d, err := b.s.freeDoc(c); err == nil {
+				if withBackup, err := b.s.AddDoc(c.Name, d); err == nil {
+					c = withBackup
+				}
+			}
+		} else if c, err = b.s.Add(name, "mailru", url); err != nil {
 			return err
 		}
 		if !when.IsZero() {
@@ -874,6 +918,7 @@ func (b *bot) add(args []string) screen {
 	}
 	sc := b.clientScreen(c.Name)
 	sc.text = b.tr("ui.add.done", html.EscapeString(c.Name)) + "\n\n" + sc.text
+	sc.kb = append(keyboard{{b.btn("b.tg.invite", "tgi:"+c.Name)}}, sc.kb...)
 	return sc
 }
 

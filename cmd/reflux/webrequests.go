@@ -25,7 +25,7 @@ func (w *webServer) requests(r *http.Request) (string, pageData, error) {
 	var invs []map[string]string
 	for _, inv := range w.s.listInvites(time.Now()) {
 		invs = append(invs, map[string]string{"Code": inv.Code, "Link": w.s.inviteLink(inv.Code), "Note": inv.Note,
-			"How": tr(w.lang(), "rq.how."+howKey(inv.How)), "Until": inv.Expires.Local().Format("02.01 15:04")})
+			"How": inviteKind(w.lang(), inv), "Until": inv.Expires.Local().Format("02.01 15:04")})
 	}
 	return "requests", pageData{Title: tr(w.lang(), "web.nav.requests"), Active: "requests", Refresh: 30,
 		Body: map[string]any{"Rows": rows, "Free": w.s.freeCount(), "Invites": invs}}, err

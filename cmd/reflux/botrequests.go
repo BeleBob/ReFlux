@@ -148,7 +148,7 @@ func (b *bot) invitesScreen(note string) screen {
 	t.WriteString(b.tr("ui.invite.title", len(invs)))
 	var kb keyboard
 	for _, inv := range invs {
-		fmt.Fprintf(&t, "\n\n🎟 %s · %s\n<code>%s</code>", html.EscapeString(b.tr("rq.how."+howKey(inv.How))),
+		fmt.Fprintf(&t, "\n\n🎟 %s · %s\n<code>%s</code>", html.EscapeString(inviteKind(b.lang, inv)),
 			inv.Expires.Local().Format("02.01 15:04"), html.EscapeString(b.s.inviteLink(inv.Code)))
 		if inv.Note != "" {
 			t.WriteString("\n«" + html.EscapeString(inv.Note) + "»")
@@ -161,6 +161,14 @@ func (b *bot) invitesScreen(note string) screen {
 
 // howKey names an invite's access for its message id: 30, 90 or never.
 func howKey(how string) string { return strings.TrimPrefix(how, "+") }
+
+// inviteKind says what an invite gives: access for so long, or a client.
+func inviteKind(l lang, inv invite) string {
+	if inv.Client != "" {
+		return tr(l, "rq.how.link", inv.Client)
+	}
+	return tr(l, "rq.how."+howKey(inv.How))
+}
 
 // invitePress handles inv (the screen), inv:<how> (a new one) and
 // inv-:<code> (revoke).
