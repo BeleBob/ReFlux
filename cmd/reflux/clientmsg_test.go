@@ -45,7 +45,7 @@ func TestSOSFromTheClientBot(t *testing.T) {
 	}
 	// Someone without a channel gets the intro.
 	cb.handle(personPress(6, telegram.User{ID: 202}, "sos"))
-	if !strings.Contains(f.lastEditText(), "попросить доступ") {
+	if !strings.Contains(f.lastEditText(), "Запросить доступ") {
 		t.Errorf("no channel:\n%s", f.lastEditText())
 	}
 }

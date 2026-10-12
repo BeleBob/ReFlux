@@ -125,8 +125,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   request at once when the client bot gets `/start <code>`.
   The client bot (`clientbot.go`, token in `client-bot.json`, `reflux bot
   client`) runs inside `reflux bot run` next to the owner bot, private chats
-  only: asking, the person's own channel, link and QR (deleted after
-  `showKeep`), reminders (`client-bot-state.json`), texts in the person's
+  only: asking, the person's own channel (one green main button), link and QR
+  (deleted after `showKeep`), the guide (APK button, troubleshooting folded
+  in `<blockquote expandable>`), reminders (`client-bot-state.json`), texts in the person's
   language (`cb.*` messages).
   Image updates (`imageupdates.go`): the bot asks ghcr.io anonymously for the
   images' digests every 6 h (`updates.json`), offers an update once per new set,

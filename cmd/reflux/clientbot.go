@@ -34,6 +34,13 @@ const (
 	clientEndedFor = 3 * 24 * time.Hour // an expiry this recent is announced
 )
 
+// The app's newest release: the build most phones take, and the one for
+// every processor (old 32-bit phones), for the guide's buttons.
+const (
+	appDownloadURL  = "https://github.com/BeleBob/ReFlux-Android/releases/latest/download/ReFlux-android-arm64-v8a-release.apk"
+	appUniversalURL = "https://github.com/BeleBob/ReFlux-Android/releases/latest/download/ReFlux-android-universal-release.apk"
+)
+
 type clientBotConfig struct {
 	Token    string `json:"token"`
 	Username string `json:"username,omitempty"` // for invite links
@@ -118,6 +125,18 @@ func (cb *clientBot) btn(l lang, id, data string, a ...any) telegram.Button {
 	return telegram.Button{Text: tr(l, id, a...), Data: data}
 }
 
+// main is a screen's one main button, in green.
+func (cb *clientBot) main(l lang, id, data string) telegram.Button {
+	b := cb.btn(l, id, data)
+	b.Style = "success"
+	return b
+}
+
+// download opens the app's newest APK.
+func (cb *clientBot) download(l lang) telegram.Button {
+	return telegram.Button{Text: tr(l, "b.cb.download"), URL: appDownloadURL}
+}
+
 // run answers people until the process stops; delivering runs alongside.
 func (cb *clientBot) run() error {
 	offset, err := skipPending(cb.t)
@@ -186,7 +205,6 @@ func (cb *clientBot) seen(u *telegram.User) {
 }
 
 func (cb *clientBot) message(u *telegram.User, text string) screen {
-	l := langOf(u.LanguageCode)
 	if at, ok := cb.reporting[u.ID]; ok && !strings.HasPrefix(text, "/") {
 		delete(cb.reporting, u.ID)
 		if time.Since(at) < clientAskFor {
@@ -208,7 +226,7 @@ func (cb *clientBot) message(u *telegram.User, text string) screen {
 	case "/qr":
 		return cb.access(u)
 	case "/help":
-		return cb.help(l)
+		return cb.help(u)
 	}
 	return cb.home(u)
 }
@@ -238,7 +256,7 @@ func (cb *clientBot) press(u *telegram.User, data string) screen {
 		}
 		return sc
 	case "help":
-		return cb.help(l)
+		return cb.help(u)
 	case "ext":
 		return cb.extend(u)
 	case "sos":
@@ -252,45 +270,102 @@ func (cb *clientBot) press(u *telegram.User, data string) screen {
 // home is what a person sees: their channel, their request, or how to ask.
 func (cb *clientBot) home(u *telegram.User) screen {
 	l := langOf(u.LanguageCode)
-	e := html.EscapeString
 	r, rerr := cb.s.getRequest(u.ID)
 	if rerr == nil && r.State == reqBlocked {
 		return screen{tr(l, "cb.closed"), nil}
 	}
 	if c, ok := cb.s.clientOf(u.ID); ok {
-		now := time.Now()
-		p := accessPhrase(c, now)
-		state := tr(l, "cb.state.down")
-		if c.Active(now) {
-			if st, ok := nodeStatuses(cb.s, []Client{c})[c.Name]; ok {
-				v := clientView{c: c, status: &statusView{online: st.Connected}, seen: cb.s.lastSeen()[c.Name]}
-				state = v.onlineText(l)
-			}
-		}
-		text := tr(l, "cb.channel", e(c.Name), tr(l, p.ID, p.Args...), state)
-		if _, month, ok := cb.s.trafficNow(c.Name, now); ok {
-			text += "\n" + tr(l, "cb.traffic", humanBytes(month.Down), humanBytes(month.Up))
-		}
-		kb := keyboard{{cb.btn(l, "b.cb.qr", "qr"), cb.btn(l, "b.cb.help", "help")}, {cb.btn(l, "b.cb.sos", "sos")}}
-		switch {
-		case rerr == nil && r.State == reqPending:
-			text += "\n\n" + tr(l, "cb.extend.waiting")
-		case !c.Expires.IsZero() && c.Expires.Sub(now) < 7*24*time.Hour:
-			kb = append(kb, []telegram.Button{cb.btn(l, "b.cb.extend", "ext")})
-		}
-		return screen{text, append(kb, []telegram.Button{cb.btn(l, "b.refresh", "home")})}
+		return cb.channel(l, c, rerr == nil && r.State == reqPending)
 	}
 	if rerr == nil {
 		switch r.State {
 		case reqPending, reqApproved:
-			return screen{tr(l, "cb.waiting"), keyboard{{cb.btn(l, "b.refresh", "home"), cb.btn(l, "b.cb.withdraw", "wd")}}}
+			return screen{tr(l, "cb.waiting"), cb.waitingKeys(l)}
 		case reqRejected:
 			if again := r.Decided.Add(askAgainFrom); time.Now().Before(again) {
 				return screen{tr(l, "cb.rejected", again.Local().Format("02.01 15:04")), nil}
 			}
 		}
 	}
-	return screen{tr(l, "cb.intro"), keyboard{{cb.btn(l, "b.cb.ask", "ask")}, {cb.btn(l, "b.cb.help", "help")}}}
+	return screen{tr(l, "cb.intro"), keyboard{{cb.main(l, "b.cb.ask", "ask")}, {cb.btn(l, "b.cb.help", "help")}}}
+}
+
+// channel is a person's own screen: two lines on how their channel is,
+// and one main button. extending: their request for more time waits.
+func (cb *clientBot) channel(l lang, c Client, extending bool) screen {
+	now := time.Now()
+	lines := []string{accessLine(l, c, now)}
+	if c.Active(now) {
+		lines = append(lines, cb.appLine(l, c, now))
+	}
+	text := tr(l, "cb.channel", html.EscapeString(c.Name), strings.Join(lines, "\n"))
+	var kb keyboard
+	if c.Active(now) {
+		kb = append(kb, []telegram.Button{cb.main(l, "b.cb.qr", "qr")})
+	}
+	switch {
+	case extending:
+		text += "\n\n" + tr(l, "cb.extend.waiting")
+	case !c.Paused && !c.Expires.IsZero() && c.Expires.Sub(now) < 7*24*time.Hour:
+		ext := cb.btn(l, "b.cb.extend", "ext")
+		if !c.Active(now) {
+			ext.Style = "success"
+		}
+		kb = append(kb, []telegram.Button{ext})
+	}
+	kb = append(kb, []telegram.Button{cb.btn(l, "b.cb.help", "help"), cb.btn(l, "b.cb.sos", "sos")})
+	return screen{text, append(kb, []telegram.Button{cb.btn(l, "b.refresh", "home")})}
+}
+
+// accessLine says whether a channel works and until when.
+func accessLine(l lang, c Client, now time.Time) string {
+	switch {
+	case c.Paused:
+		return tr(l, "cb.st.paused")
+	case c.Expires.IsZero():
+		return tr(l, "cb.st.forever")
+	case !now.Before(c.Expires):
+		return tr(l, "cb.st.expired")
+	}
+	left := c.Expires.Sub(now)
+	date := "02.01"
+	if left < 48*time.Hour {
+		date = "02.01 15:04"
+	}
+	return tr(l, "cb.st.until", c.Expires.Local().Format(date), durationIn(l, left))
+}
+
+// appLine says whether the person's app is connected, with the month's
+// traffic; one that never connected is pointed to the guide.
+func (cb *clientBot) appLine(l lang, c Client, now time.Time) string {
+	var month uint64
+	if _, m, ok := cb.s.trafficNow(c.Name, now); ok {
+		month = m.Down + m.Up
+	}
+	st, running := nodeStatuses(cb.s, []Client{c})[c.Name]
+	seen := cb.s.lastSeen()[c.Name]
+	var line string
+	switch {
+	case !running:
+		line = tr(l, "cb.app.down")
+	case st.Connected:
+		line = tr(l, "cb.app.online")
+	case !seen.IsZero():
+		line = tr(l, "cb.app.seen", durationIn(l, now.Sub(seen)))
+	case month == 0:
+		return tr(l, "cb.app.never")
+	default:
+		line = tr(l, "cb.app.offline")
+	}
+	if month > 0 {
+		line += " · " + tr(l, "cb.month", humanBytes(month))
+	}
+	return line
+}
+
+// waitingKeys are a waiting request's buttons: the app to install meanwhile.
+func (cb *clientBot) waitingKeys(l lang) keyboard {
+	return keyboard{{cb.download(l)}, {cb.btn(l, "b.refresh", "home"), cb.btn(l, "b.cb.withdraw", "wd")}}
 }
 
 // ask files a request for a channel, and tells the owner at once.
@@ -304,7 +379,7 @@ func (cb *clientBot) ask(u *telegram.User, text string) screen {
 		return cb.home(u)
 	}
 	cb.tellOwner()
-	return screen{tr(l, "cb.sent"), keyboard{{cb.btn(l, "b.refresh", "home"), cb.btn(l, "b.cb.withdraw", "wd")}}}
+	return screen{tr(l, "cb.sent"), cb.waitingKeys(l)}
 }
 
 // extend asks the owner for more time on the person's channel.
@@ -373,7 +448,7 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	if err != nil {
 		return err
 	}
-	text := tr(l, "cb.show.text", e(c.Name), mins, e(link))
+	text := tr(l, "cb.show.text", e(link), mins)
 	msg, err := cb.t.Send(chat, text)
 	time.AfterFunc(showKeep, func() {
 		for _, id := range []int64{photo, msg} {
@@ -385,14 +460,20 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	return err
 }
 
-// help tells how to connect, with the owner's own words from
-// client-help.txt when there are any.
-func (cb *clientBot) help(l lang) screen {
-	text := tr(l, "cb.help")
+// help is the guide: four steps, what to try when it does not work
+// (folded away), and the owner's own words from client-help.txt when there
+// are any.
+func (cb *clientBot) help(u *telegram.User) screen {
+	l := langOf(u.LanguageCode)
+	text := tr(l, "cb.help") + "\n\n" + tr(l, "cb.help.faq", appUniversalURL)
 	if b, err := os.ReadFile(cb.s.clientHelpPath()); err == nil && strings.TrimSpace(string(b)) != "" {
 		text += "\n\n" + html.EscapeString(strings.TrimSpace(string(b)))
 	}
-	return screen{text, keyboard{{cb.btn(l, "b.back", "home")}}}
+	row := []telegram.Button{cb.download(l)}
+	if c, ok := cb.s.clientOf(u.ID); ok && c.Active(time.Now()) {
+		row = append(row, cb.main(l, "b.cb.qr", "qr"))
+	}
+	return screen{text, keyboard{row, {cb.btn(l, "b.back", "home")}}}
 }
 
 // deliver tells people what was decided — the link for an approved
@@ -416,7 +497,7 @@ func (cb *clientBot) deliver(now time.Time) {
 			if r.Kind == reqExtend {
 				_, err = cb.t.Send(r.ID, tr(l, "cb.extended", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)))
 			} else if _, err = cb.t.SendKeyboard(r.ID, tr(l, "cb.welcome", html.EscapeString(c.Name), tr(l, p.ID, p.Args...)),
-				keyboard{{cb.btn(l, "b.cb.help", "help"), cb.btn(l, "b.refresh", "home")}}); err == nil {
+				keyboard{{cb.main(l, "b.cb.help", "help"), cb.btn(l, "b.cb.menu", "home")}}); err == nil {
 				err = cb.sendAccess(r.ID, c, l)
 				cb.qrAt[r.ID] = now
 			}
@@ -529,7 +610,7 @@ func (cb *clientBot) redeem(u *telegram.User, code string) screen {
 	case err != nil && r.State == reqPending:
 		// Approving failed (no free document): the owner decides.
 		cb.tellOwner()
-		return screen{tr(l, "cb.sent"), keyboard{{cb.btn(l, "b.refresh", "home")}}}
+		return screen{tr(l, "cb.sent"), cb.waitingKeys(l)}
 	case err != nil:
 		return cb.home(u) // blocked, a channel or a request already
 	}

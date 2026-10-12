@@ -56,7 +56,7 @@ var dima = telegram.User{ID: 101, Username: "dima", FirstName: "Dima", LanguageC
 func TestClientBotFromRequestToLink(t *testing.T) {
 	s, f, owner, cb := bots(t)
 	cb.handle(personMsg(1, dima, "/start"))
-	if m := f.to(101); len(m) != 1 || !strings.Contains(m[0].Text, "попросить доступ") || !strings.Contains(m[0].Buttons.String(), `"ask"`) {
+	if m := f.to(101); len(m) != 1 || !strings.Contains(m[0].Text, "Запросить доступ") || !strings.Contains(m[0].Buttons.String(), `"callback_data":"ask","style":"success"`) {
 		t.Fatalf("intro %+v", m)
 	}
 	cb.handle(personPress(2, dima, "ask"))
@@ -85,12 +85,12 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	photos := f.photoCount()
 	cb.deliver(time.Now())
 	m := f.to(101)
-	if len(m) < 2 || !strings.Contains(m[len(m)-2].Text, "Доступ выдан") || f.photoCount() != photos+1 {
+	if len(m) < 2 || !strings.Contains(m[len(m)-2].Text, "Доступ открыт") || f.photoCount() != photos+1 {
 		t.Fatalf("delivery: %+v", m)
 	}
 	// the link only: the key travels inside it, never as plain text
 	key, _ := s.Key("dima")
-	if strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "openflux://") {
+	if strings.Contains(m[len(m)-1].Text, key) || !strings.Contains(m[len(m)-1].Text, "<code>openflux://") || !strings.Contains(m[len(m)-1].Text, "Вставить ссылку") {
 		t.Errorf("access text %q", m[len(m)-1].Text)
 	}
 	if _, err := s.getRequest(101); err == nil {
@@ -103,7 +103,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	}
 	// The channel screen; the link again, not too often.
 	cb.handle(personMsg(6, dima, "/start"))
-	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, "Ваш канал: <b>dima</b>") {
+	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, "канал <b>dima</b>\n🟢 Работает до ") || !strings.Contains(m[len(m)-1].Buttons.String(), `"callback_data":"qr","style":"success"`) {
 		t.Errorf("channel: %q", m[len(m)-1].Text)
 	}
 	cb.handle(personPress(7, dima, "qr"))
@@ -117,7 +117,7 @@ func TestClientBotFromRequestToLink(t *testing.T) {
 	}
 	// Somebody else gets only the intro.
 	cb.handle(personMsg(9, telegram.User{ID: 202, Username: "x"}, "/qr"))
-	if m := f.to(202); len(m) != 1 || strings.Contains(m[0].Text, key) || !strings.Contains(m[0].Text, "попросить доступ") {
+	if m := f.to(202); len(m) != 1 || strings.Contains(m[0].Text, key) || !strings.Contains(m[0].Text, "Запросить доступ") {
 		t.Errorf("a stranger's /qr: %+v", m)
 	}
 }
@@ -247,4 +247,62 @@ func TestClientBotSetup(t *testing.T) {
 	if _, ok, _ := s.loadClientBot(); ok {
 		t.Error("still on")
 	}
+}
+
+// The guide: four steps, the troubleshooting folded away, the APK to
+// download, and «Connect» only for someone with a working channel.
+func TestClientBotGuide(t *testing.T) {
+	s, f, _, cb := bots(t)
+	cb.handle(personMsg(1, dima, "/help"))
+	m := f.to(101)
+	if len(m) != 1 || !strings.Contains(m[0].Text, "4️⃣") || !strings.Contains(m[0].Text, "<blockquote expandable>") ||
+		!strings.Contains(m[0].Text, appUniversalURL) {
+		t.Fatalf("guide %+v", m)
+	}
+	kb := m[0].Buttons.String()
+	if !strings.Contains(kb, `"url":"`+appDownloadURL+`"`) || strings.Contains(kb, `"qr"`) {
+		t.Errorf("a stranger's buttons: %s", kb)
+	}
+	c, _ := s.Add("dima", "mailru", testURL)
+	c.Telegram = &TGAccount{ID: 101, Username: "dima"}
+	s.Save(c)
+	cb.handle(personPress(2, dima, "help"))
+	if kb := f.lastEditKeys(); !strings.Contains(kb, `"callback_data":"qr","style":"success"`) {
+		t.Errorf("a client's buttons: %s", kb)
+	}
+}
+
+// A channel whose access ended: no «Connect», «Extend» in green instead.
+func TestClientBotEndedChannel(t *testing.T) {
+	s, f, _, cb := bots(t)
+	c, _ := s.Add("dima", "mailru", testURL)
+	c.Telegram = &TGAccount{ID: 101, Username: "dima"}
+	c.Expires = time.Now().Add(-time.Hour)
+	s.Save(c)
+	cb.handle(personMsg(1, dima, "/start"))
+	m := f.to(101)
+	if len(m) != 1 || !strings.Contains(m[0].Text, "🔴 Срок доступа закончился") || strings.Contains(m[0].Text, "📱") {
+		t.Fatalf("ended %+v", m)
+	}
+	if kb := m[0].Buttons.String(); strings.Contains(kb, `"qr"`) || !strings.Contains(kb, `"callback_data":"ext","style":"success"`) {
+		t.Errorf("buttons: %s", kb)
+	}
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.Local)
+	c.Expires = now.Add(30 * time.Hour)
+	if got := accessLine(langRU, c, now); got != "🟢 Работает до 13.10 18:00 · ещё 30 ч" {
+		t.Errorf("soon: %q", got)
+	}
+	c.Expires = now.AddDate(0, 0, 8)
+	if got := accessLine(langEN, c, now); got != "🟢 Works until 20.10 · 8d left" {
+		t.Errorf("later: %q", got)
+	}
+}
+
+func (f *fakeTG) lastEditKeys() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.editedKB) == 0 {
+		return ""
+	}
+	return f.editedKB[len(f.editedKB)-1].String()
 }

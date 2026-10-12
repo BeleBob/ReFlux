@@ -62,10 +62,14 @@ type Update struct {
 	Callback *Callback `json:"callback_query"`
 }
 
-// Button is an inline button; its data comes back in a tgCallback.
+// Button is an inline button: its data comes back in a Callback, or with
+// URL it opens a link (http(s) or tg:// only). Style colors it: "success"
+// (green), "primary" (blue) or "danger" (red); empty is the app's own.
 type Button struct {
-	Text string `json:"text"`
-	Data string `json:"callback_data"`
+	Text  string `json:"text"`
+	Data  string `json:"callback_data,omitempty"`
+	URL   string `json:"url,omitempty"`
+	Style string `json:"style,omitempty"`
 }
 
 // Error is an error the API answered with.
