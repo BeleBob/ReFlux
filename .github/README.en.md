@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="ReFlux logo">
   <h1>ReFlux</h1>
-  <p>A server for OpenFlux: exit nodes in Docker for several clients, out to the internet only through AmneziaWG.</p>
+  <p>The ReFlux tunnel server: exit nodes in Docker for several clients, out to the internet only through AmneziaWG.</p>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Latest release"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -18,8 +18,8 @@
   <p><a href="README.md">Русский</a> · <strong>English</strong></p>
 </div>
 
-ReFlux deploys and maintains [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
-exit nodes on a Linux server. Every client gets a node of its own with its
+ReFlux is a tunnel server: it deploys and maintains exit nodes (their core
+is [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)) on a Linux server. Every client gets a node of its own with its
 own encryption key. Clients' traffic leaves only through AmneziaWG tunnels.
 It is managed from the command line, a Telegram bot and a web panel.
 
@@ -141,7 +141,7 @@ they can be offered to the original project.
 - [x] One-command install and a setup wizard
 - [x] Telegram bots and a web panel
 - [x] An Android app of its own: [ReFlux for Android](https://github.com/BeleBob/ReFlux-Android)
-- [ ] Subscription self-update through the document
+- [x] Subscription self-update through the document
 - [ ] Several clients on one node with key authentication
 
 ## Origin and license
