@@ -607,7 +607,7 @@ URL = YOUR_YANDEX_DOC_URL
 | `--config` | | | Файл `.conf`; флаги важнее него |
 | `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |
 | `--ipc-socket` | | | Unix-сокет для приложения (запросы капчи, cookies) |
-| `--config-offer-file` | | | Exit: JSON-файл `{"link","version"}`, ссылку `openflux://` из которого получает клиент Session (`ConfigOffer`, при каждом рукопожатии и изменении) |
+| `--config-offer-file` | | | Exit: JSON-файл `{"link","version"}`, ссылку `reflux://` или `openflux://` из которого получает клиент Session (`ConfigOffer`, при каждом рукопожатии и изменении) |
 | `--share` | | `false` | Выходная нода: напечатать ссылку `openflux://` и QR-код для клиентов |
 | `--share-host` | | (первый публичный IPv4) | Выходная нода: адрес для `direct` в этой ссылке |
 | `--node-wizard` | | | Единственный аргумент: запускает протокол развёртывания по JSON-over-stdio вместо обычного запуска CLI (см. [Ключевые особенности](#ключевые-особенности)) |
