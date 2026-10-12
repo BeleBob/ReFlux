@@ -91,7 +91,7 @@ func TestTrafficInTheBots(t *testing.T) {
 		t.Errorf("owner's card:\n%s", sc.text)
 	}
 	cb.handle(personMsg(1, dima, "/start"))
-	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, "За месяц: ↓ "+humanBytes(month.Down)) {
+	if m := f.to(101); !strings.Contains(m[len(m)-1].Text, humanBytes(month.Down+month.Up)+" за месяц") {
 		t.Errorf("client bot: %q", m[len(m)-1].Text)
 	}
 	if _, _, ok := s.trafficNow("nobody", now); ok {

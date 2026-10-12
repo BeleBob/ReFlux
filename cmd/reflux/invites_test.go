@@ -80,7 +80,7 @@ func TestInviteInTheBots(t *testing.T) {
 	// The person opens the link.
 	cb.handle(personMsg(3, dima, "/start "+invs[0].Code))
 	m := f.to(101)
-	if len(m) == 0 || !strings.Contains(m[0].Text, "Доступ выдан") {
+	if len(m) == 0 || !strings.Contains(m[0].Text, "Доступ открыт") {
 		t.Fatalf("person: %+v", m)
 	}
 	if o := f.to(42); !strings.Contains(o[len(o)-1].Text, "По приглашению пришёл <b>Dima (@dima)</b>: клиент <b>dima</b>") {

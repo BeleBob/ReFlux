@@ -28,11 +28,13 @@ type fakeTG struct {
 	arrive  []telegram.Update
 	calls   int
 	sent    []sentMsg
-	failing bool     // sendMessage fails
-	photos  []string // captions
-	deleted []int64
-	edited  []string
-	methods []string
+	// editedKB: the buttons of each edit in edited
+	editedKB []rawJSON
+	failing  bool     // sendMessage fails
+	photos   []string // captions
+	deleted  []int64
+	edited   []string
+	methods  []string
 }
 
 type sentMsg struct {
@@ -77,9 +79,13 @@ func newFakeTG(t *testing.T) *fakeTG {
 			f.deleted = append(f.deleted, p.ID)
 			reply(true)
 		case "editMessageText":
-			var p struct{ Text string }
+			var p struct {
+				Text    string
+				Buttons rawJSON `json:"reply_markup"`
+			}
 			json.NewDecoder(r.Body).Decode(&p)
 			f.edited = append(f.edited, p.Text)
+			f.editedKB = append(f.editedKB, p.Buttons)
 			reply(map[string]any{"message_id": 1})
 		case "answerCallbackQuery", "setMyCommands":
 			reply(true)
