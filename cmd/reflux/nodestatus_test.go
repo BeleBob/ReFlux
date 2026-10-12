@@ -74,7 +74,7 @@ func TestListShowsWhoIsOnline(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("REFLUX_HOME", home)
 	fakeDocker(t, "")
-	for _, n := range []string{"laptop", "phone", "tablet"} {
+	for _, n := range []string{"laptop", "phone", "tablet", "watch", "pad"} {
 		if err := run([]string{"add", n, "--url", testURL + n, "--no-apply"}, nil, io.Discard); err != nil {
 			t.Fatal(err)
 		}
@@ -94,6 +94,10 @@ func TestListShowsWhoIsOnline(t *testing.T) {
 	}
 	serve("phone", ipc.StatusPayload{Running: true, Connected: true, BytesOut: 1_400_000_000, BytesIn: 52_000_000})
 	serve("tablet", ipc.StatusPayload{Running: true})
+	// A Session exit still says connected an hour after its client left;
+	// the time it last heard the client tells.
+	serve("watch", ipc.StatusPayload{Running: true, Connected: true, HeardMs: time.Now().Add(-time.Hour).UnixMilli()})
+	serve("pad", ipc.StatusPayload{Running: true, Connected: true, HeardMs: time.Now().Add(-20 * time.Second).UnixMilli()})
 	// laptop: no socket (stopped, or an image without IPCSocket).
 
 	var out strings.Builder
@@ -109,6 +113,8 @@ func TestListShowsWhoIsOnline(t *testing.T) {
 	for name, want := range map[string]string{
 		"phone":  "online 1.4 GB 52 MB",
 		"tablet": "offline 0 B 0 B",
+		"watch":  "offline 0 B 0 B",
+		"pad":    "online 0 B 0 B",
 		"laptop": "not running - - -",
 	} {
 		if !strings.HasSuffix(lines[name], want) {
