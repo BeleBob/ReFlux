@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	godebug "runtime/debug"
 	"strconv"
@@ -103,14 +105,40 @@ const (
 	codecLegacy  = "legacy"
 )
 
-// transportHasCookies reports whether the given transport uses HTTP cookies
-// that can be refreshed via the NegotiatedTransport control channel.
+// transportHasCookies reports whether the given transport keeps state in the
+// cookie store: HTTP cookies that can be refreshed via the
+// NegotiatedTransport control channel, or - a script - what its setup page
+// was given (see sessionCookieKey).
 func transportHasCookies(t string) bool {
 	switch t {
-	case "yandex", "vyandex", "boards", "mailru", "cupsonline":
+	case "yandex", "vyandex", "boards", "mailru", "cupsonline", "script":
 		return true
 	}
 	return false
+}
+
+// defaultCookieStorePath is the jar used without --cookie-store: one per
+// transport type in the current directory, and one per script - two scripts
+// must not share a jar. A script is named by --script-name, else by its
+// file.
+func defaultCookieStorePath(transportType, scriptName, scriptPath string) string {
+	if transportType == "script" {
+		name := scriptName
+		if name == "" && scriptPath != "" {
+			name = strings.TrimSuffix(filepath.Base(scriptPath), filepath.Ext(scriptPath))
+		}
+		name = strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+				return r
+			}
+			return '_'
+		}, name)
+		if name = strings.Trim(name, "."); name != "" {
+			return "./cookies-script-" + name + ".json"
+		}
+	}
+	return fmt.Sprintf("./cookies-%s.json", transportType)
 }
 
 // sessionCookieKey is cookieKey for a transport of a Session. A script
@@ -217,14 +245,15 @@ func main() {
 
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
 	inbound := flag.String("inbound", "", "tun | socks5 (client only; default: tun on macOS, socks5 elsewhere)")
-	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme, cupsonline, mailru)")
+	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme, cupsonline, mailru, telemost)")
 	mode := flag.String("mode", "", "Exit-node mode: l3 (default; Linux as root, or Windows as Administrator with WinDivert) or l4 (works everywhere)")
 
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
 	negotiate := flag.Bool("negotiate", false, "Require encrypted, session-bound IPv4 capability negotiation on both peers (no legacy fallback)")
 	maxPacket := flag.Int("max-packet-size", transport.MaxNegotiatedPacket, "Maximum IPv4 packet in negotiated mode (1280..65000); not the Internet path MTU")
 	cookieStorePath := flag.String("cookie-store", "",
-		"Path to the cookie jar file. Default: ./cookies-<transport>.json in the current directory. "+
+		"Path to the cookie jar file. Default: ./cookies-<transport>.json in the current directory "+
+			"(./cookies-script-<name>.json for a script). "+
 			"Ignored for transports without cookies (direct, oneme).")
 	encryptionKeyFile := flag.String("encryption-key-file", "",
 		"Optional: encrypt the transport with AES-256-GCM using a shared secret read from this file. "+
@@ -253,6 +282,8 @@ func main() {
 	scriptPath := flag.String("script-path", "", "Path to the script transport's <name>.flux or <name>.js (needs <name>.js.sig beside a bare .js)")
 	scriptPubkey := flag.String("script-pubkey", "", "Hex-encoded ed25519 public key the script transport's signature is checked against")
 	scriptName := flag.String("script-name", "", "Carrier name for the script transport (default: the name in its own info())")
+	scriptAutoUpdate := flag.Bool("script-auto-update", false, "Node: keep .flux transports current and self-heal (check/apply auto-OK updates, roll back, hot-swap without a restart)")
+	scriptUpdateChannel := flag.String("script-update-channel", "stable", "Node: update channel for --script-auto-update (stable | nightly)")
 	configPath := flag.String("config", "",
 		"Path to an OpenFlux .conf file. Command-line flags override values from the file.")
 	shareFlag := flag.Bool("share", false,
@@ -306,6 +337,7 @@ TRANSPORT  (single-transport mode)
   -t, --transport=vyandex      Yandex.Volga over HTTP relay + WS.
   -t, --transport=oneme        MAX (VK) over WebRTC.
   -t, --transport=cupsonline   Cups.online interview rooms.
+  -t, --transport=telemost     Yandex Telemost conference (--url <link>), striped over several participants.
   -t, --transport=mailru       Mail.ru Docs over WebSocket.
   -t, --transport=direct       Plain TCP to a self-hosted exit.
   -t, --transport=script       A signed JS (goja) transport. Session only
@@ -370,7 +402,8 @@ TRANSPORT MODIFIERS
                                on both peers. No legacy fallback.
       --max-packet-size=N      Max IPv4 packet in negotiated mode
                                (1280..65000). Default 65000.
-      --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json.
+      --cookie-store=<path>    Cookie jar file. Default: ./cookies-<transport>.json
+                               (./cookies-script-<name>.json for a script).
       --ipc-socket=<path>      Unix domain socket for the mobile bridge.
                                Empty = no IPC server.
       --share                  Exit: print an openflux:// link and QR code for
@@ -405,6 +438,25 @@ DEPRECATED (removed in v2)
 
 	os.Args = expandShortFlags(os.Args)
 	flag.Parse()
+
+	// OPENFLUX_DNS overrides DNS resolution to a specific nameserver (e.g.
+	// "8.8.8.8:53"). Needed for the CLI on Android, where a static (CGO-off)
+	// binary has no usable /etc/resolv.conf and Go falls back to [::1]:53.
+	if dns := os.Getenv("OPENFLUX_DNS"); dns != "" {
+		if !strings.Contains(dns, ":") {
+			dns += ":53"
+		}
+		net.DefaultResolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 5 * time.Second}
+				if network == "tcp" || network == "tcp4" || network == "tcp6" {
+					return d.DialContext(ctx, "tcp", dns)
+				}
+				return d.DialContext(ctx, "udp", dns)
+			},
+		}
+	}
 
 	// isExit is the session/encryption-directionality role: which side of a
 	// negotiated or encrypted pair this process plays. bench-sink is the
@@ -667,7 +719,7 @@ DEPRECATED (removed in v2)
 	if transportHasCookies(*transportType) {
 		path := *cookieStorePath
 		if path == "" {
-			path = fmt.Sprintf("./cookies-%s.json", *transportType)
+			path = defaultCookieStorePath(*transportType, *scriptName, *scriptPath)
 		}
 		s, err := transport.NewCookieStore(path)
 		if err != nil {
@@ -744,6 +796,13 @@ DEPRECATED (removed in v2)
 				"path": *scriptPath, "pubkey": *scriptPubkey, "name": *scriptName,
 			}
 		}
+	}
+
+	// Telemost's media runs over WebRTC's own UDP sockets, which neither the
+	// macOS bypass routes (TCP only) nor the Windows interface binding cover:
+	// under the full tunnel they would loop into the tunnel they carry.
+	if *role == roleClient && *inbound == inboundTUN && hasTelemost(specs) {
+		log.Fatalf("Telemost does not work under --inbound=tun yet: use --inbound=socks5 (the apps' proxy mode)")
 	}
 
 	// Validate --codec with the multi-transport path. Session always uses
@@ -852,11 +911,18 @@ DEPRECATED (removed in v2)
 			log.Fatalf("bootstrap transports: %v", err)
 		}
 
+		// Headless auto-update for .flux carriers (the app's ScriptUpdater has
+		// no equivalent on a CLI/exit node): keep them current and self-heal by
+		// hot-swapping a reloaded package into the live Session.
+		if *scriptAutoUpdate {
+			startNodeScriptUpdater(context.Background(), managerInst, specs, config, *scriptUpdateChannel)
+		}
+
 		// Persist each cookie-carrying transport's jar and replay what was
 		// saved; the Manager routes cookie control messages by name.
 		if store != nil {
 			for _, spec := range specs {
-				if !transportHasCookies(spec.Type) && spec.Type != "script" {
+				if !transportHasCookies(spec.Type) {
 					continue
 				}
 				if err := managerInst.UseCookieStore(store, spec.Name, sessionCookieKey(spec, maxUid)); err != nil {
@@ -917,7 +983,7 @@ DEPRECATED (removed in v2)
 		// Session needs one), or a bench role.
 		// The types the classic path serves; the registry builds them.
 		switch *transportType {
-		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "mailru":
+		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "mailru", "telemost":
 		default:
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}
@@ -937,7 +1003,9 @@ DEPRECATED (removed in v2)
 		// Persist cookie exchanger for the legacy path.
 		if store != nil {
 			if ce, ok := inner.(transport.CookieExchanger); ok {
-				key := cookieKey(*transportType, globalDocUrl, maxUid)
+				// The key the Session path uses too, so a jar carries over
+				// when a key is added or removed.
+				key := sessionCookieKey(specs[0], maxUid)
 				if jar := store.Load(key); jar != nil {
 					_ = ce.ApplyCookies(jar)
 				}
@@ -1028,6 +1096,20 @@ DEPRECATED (removed in v2)
 				pp.Capabilities&transport.CapabilityICMPErrors != 0,
 				pp.MaxPacketSize)
 		}
+	}
+
+	// A Telemost participant that vanishes without closing its socket lingers
+	// on the SFU as a ghost for ~50 s; stop cleanly on a signal so the lanes
+	// leave the room and a quick restart finds it empty.
+	if hasTelemost(specs) {
+		sigCh := make(chan os.Signal, 1)
+		notifySignals(sigCh)
+		go func() {
+			<-sigCh
+			log.Printf("Signal received, leaving Telemost room cleanly...")
+			_ = trans.Stop()
+			os.Exit(0)
+		}()
 	}
 
 	switch *role {
@@ -1303,4 +1385,14 @@ func runClientTUN(trans transport.Transport) {
 	tc.RestoreDefault()
 	log.Printf("Shutdown complete")
 	os.Exit(0)
+}
+
+// hasTelemost reports whether any configured transport is a Telemost one.
+func hasTelemost(specs []transportSpec) bool {
+	for _, sp := range specs {
+		if sp.Type == "telemost" {
+			return true
+		}
+	}
+	return false
 }
