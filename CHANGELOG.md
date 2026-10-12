@@ -5,6 +5,23 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-13
+
+### Fixed
+
+- **The Mail.ru carrier dropped every connection with "access deny" (code 4004).** The current Mail.ru editor
+  server (R7/OnlyOffice 2026.2.1.2268) validates cursor and `saveChanges` writes against the live document
+  model and closes the socket on any synthetic one, so the transport's old trick of stuffing tunnel bytes into
+  the cursor field stopped working entirely. The data path now rides the document's **chat channel**
+  (`type:"message"`), which the server relays verbatim to the other participant without validating it against
+  the document: tunnelled bytes are tagged and base64-encoded there, the server's echo of our own chat and a
+  human's chat are skipped on receive, and the old cursor keep-alive and `saveChanges` "editor activity" are
+  gone (the Socket.IO ping/pong keeps the socket up). Both the native transport and its scripted (`.flux`)
+  port carry data this way now.
+- **The scripted Mail.ru carrier could not connect at all (HTTP 409 on the WebSocket upgrade).** `ws.open`
+  now offers permessage-deflate when a script asks for it (`{compress: true}`) — Mail.ru's nginx rejects the
+  upgrade without it — and sends `Accept-Language`, the same two fixes the native transport already carried.
+
 ## [0.6.0] - 2026-10-12
 
 ### Added
