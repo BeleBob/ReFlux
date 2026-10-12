@@ -79,6 +79,11 @@ type StatusPayload struct {
 	// on this side, so an exit says whether its client is there by this.
 	// Sessions only.
 	HeardMs int64 `json:"heard_ms,omitempty"`
+	// Carriers is how many carriers a Session has, Attached the ones
+	// connected to their document on this side, a peer there or not: a
+	// node with carriers and none attached cannot be reached. Sessions only.
+	Carriers int      `json:"carriers,omitempty"`
+	Attached []string `json:"attached,omitempty"`
 }
 
 type CommandPayload struct {

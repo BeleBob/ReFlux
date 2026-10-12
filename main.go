@@ -1002,10 +1002,10 @@ DEPRECATED (removed in v2)
 		if managerInst != nil {
 			utils.SafeGo("ipc-status", func() {
 				sess := managerInst.Session()
-				ipcStatusLoop(statusServer, managerInst, sess.ActiveTransport, sess.ActiveTransports, sess.PeerHeard)
+				ipcStatusLoop(statusServer, managerInst, sess.ActiveTransport, sess.ActiveTransports, sess.PeerHeard, sess.Carriers)
 			})
 		} else {
-			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil, nil) })
+			utils.SafeGo("ipc-status", func() { ipcStatusLoop(statusServer, trans, nil, nil, nil, nil) })
 		}
 	}
 
@@ -1088,9 +1088,9 @@ type statusSource interface {
 }
 
 // ipcStatusLoop reports to the app every second: whether a carrier reaches
-// the peer, traffic totals, uptime and (Sessions) the active carrier and
-// when the peer was last heard.
-func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string, heard func() time.Time) {
+// the peer, traffic totals, uptime and (Sessions) the active carrier, when
+// the peer was last heard and which carriers hold their document.
+func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, activeAll func() []string, heard func() time.Time, carriers func() ([]string, int)) {
 	started := time.Now()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -1113,6 +1113,9 @@ func ipcStatusLoop(srv *ipc.Server, src statusSource, active func() string, acti
 			if t := heard(); !t.IsZero() {
 				p.HeardMs = t.UnixMilli()
 			}
+		}
+		if carriers != nil {
+			p.Attached, p.Carriers = carriers()
 		}
 		_ = srv.SendStatus(p)
 	}

@@ -21,7 +21,7 @@ func (f fixedStats) Stats() transport.TransportStats {
 // A classic carrier without a Session reports its traffic too: the app's
 // speed counters read it.
 func TestIPCStatusWithoutSession(t *testing.T) {
-	p := firstStatus(t, nil)
+	p := firstStatus(t, nil, nil)
 	if !p.Connected || p.BytesIn != 1500 || p.BytesOut != 700 || p.Active != "" || p.HeardMs != 0 {
 		t.Fatalf("status = %+v", p)
 	}
@@ -31,17 +31,26 @@ func TestIPCStatusWithoutSession(t *testing.T) {
 // true while it holds its document, after its client went away.
 func TestIPCStatusTellsWhenThePeerWasHeard(t *testing.T) {
 	heard := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	if p := firstStatus(t, func() time.Time { return heard }); p.HeardMs != heard.UnixMilli() {
+	if p := firstStatus(t, func() time.Time { return heard }, nil); p.HeardMs != heard.UnixMilli() {
 		t.Fatalf("heard_ms = %d, want %d", p.HeardMs, heard.UnixMilli())
 	}
-	if p := firstStatus(t, func() time.Time { return time.Time{} }); p.HeardMs != 0 {
+	if p := firstStatus(t, func() time.Time { return time.Time{} }, nil); p.HeardMs != 0 {
 		t.Fatalf("never heard: heard_ms = %d", p.HeardMs)
 	}
 }
 
-// firstStatus serves fixedStats with heard over a socket and returns the
-// first status an IPC client reads.
-func firstStatus(t *testing.T, heard func() time.Time) ipc.StatusPayload {
+// A Session says which carriers hold their document: a node with none
+// attached cannot be reached, a client there or not.
+func TestIPCStatusTellsWhichCarriersAreAttached(t *testing.T) {
+	p := firstStatus(t, nil, func() ([]string, int) { return []string{"mailru"}, 2 })
+	if p.Carriers != 2 || len(p.Attached) != 1 || p.Attached[0] != "mailru" {
+		t.Fatalf("carriers %d attached %v", p.Carriers, p.Attached)
+	}
+}
+
+// firstStatus serves fixedStats with heard and carriers over a socket and
+// returns the first status an IPC client reads.
+func firstStatus(t *testing.T, heard func() time.Time, carriers func() ([]string, int)) ipc.StatusPayload {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ofipc")
 	if err != nil {
@@ -54,7 +63,7 @@ func firstStatus(t *testing.T, heard func() time.Time) ipc.StatusPayload {
 		t.Fatal(err)
 	}
 	defer srv.Close()
-	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil, nil, heard)
+	go ipcStatusLoop(srv, fixedStats{in: 1500, out: 700}, nil, nil, heard, carriers)
 
 	c, err := ipc.Dial(path)
 	if err != nil {
