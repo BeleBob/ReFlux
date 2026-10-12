@@ -204,6 +204,18 @@ func (m *Manager) Remove(name string) error {
 	return nil
 }
 
+// Raw returns the transport currently attached under name, or nil. It follows
+// a ReloadWith hot-swap, so a caller that polls liveness (the auto-updater's
+// Watch) always sees the live instance, not a stale one.
+func (m *Manager) Raw(name string) transport.Transport {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if e, ok := m.entries[name]; ok {
+		return e.Raw
+	}
+	return nil
+}
+
 // Transports returns the names of attached transports in priority order.
 func (m *Manager) Transports() []string {
 	m.mu.RLock()
