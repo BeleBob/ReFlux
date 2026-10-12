@@ -210,7 +210,7 @@ func TestBotPoolScreen(t *testing.T) {
 	for _, m := range f.to(101) {
 		toClient = append(toClient, m.Text)
 	}
-	if all := strings.Join(toClient, "\n"); !strings.Contains(all, "появился запасной документ") || !strings.Contains(all, "переехал на новый документ") || f.photoCount() < 2 {
+	if all := strings.Join(toClient, "\n"); !strings.Contains(all, "с запасным документом") || !strings.Contains(all, "старая больше не работает") || f.photoCount() < 2 {
 		t.Errorf("client not given the new links: %q", toClient)
 	}
 	sc := owner.poolScreen()

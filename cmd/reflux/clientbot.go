@@ -353,7 +353,7 @@ func (cb *clientBot) access(u *telegram.User) screen {
 	return screen{}
 }
 
-// sendAccess sends a channel's QR and fields to its person's chat.
+// sendAccess sends a channel's QR and link to its person's chat.
 func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	key, err := cb.s.Key(c.Name)
 	if err != nil {
@@ -373,16 +373,7 @@ func (cb *clientBot) sendAccess(chat int64, c Client, l lang) error {
 	if err != nil {
 		return err
 	}
-	var text string
-	if c.session() {
-		var docs strings.Builder
-		for i, d := range c.Docs() {
-			docs.WriteString(tr(l, "ui.show.doc", i+1, e(d.Transport), docPriority(i), e(d.URL)) + "\n")
-		}
-		text = tr(l, "cb.show.session", e(c.Name), mins, docs.String(), e(c.context()), e(key), e(link))
-	} else {
-		text = tr(l, "cb.show.text", e(c.Name), mins, e(c.Transport), e(c.URL), e(key), e(link))
-	}
+	text := tr(l, "cb.show.text", e(c.Name), mins, e(link))
 	msg, err := cb.t.Send(chat, text)
 	time.AfterFunc(showKeep, func() {
 		for _, id := range []int64{photo, msg} {
