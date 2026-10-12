@@ -67,3 +67,28 @@ func TestSecondReconnectWhileOneIsWaitingReturnsAtOnce(t *testing.T) {
 		t.Fatal("a second scheduled reconnect waited out its own backoff instead of yielding")
 	}
 }
+
+// The keep-alive is a real editor cursor now (the server drops a connection
+// on a malformed one), so the receiving side must know it and skip it, like
+// the old "---KA---" older peers still send.
+func TestHandleMessageSkipsKeepAliveCursors(t *testing.T) {
+	tr := NewMailruDocsTransport("Vuri/test", transport.DefaultConfig())
+	var got []string
+	tr.Receive(func(b []byte) { got = append(got, string(b)) })
+	keepAlive := `{"cursor":"` + keepAliveCursor + `","time":1790800029352,"user":"anonX","useridoriginal":"anonX"}`
+	msg := `42["message",{"type":"cursor","messages":[` + keepAlive + "," + cursorEntry("---KA---") + "," +
+		cursorEntry(b64("data")) + "," + keepAlive + `]}]`
+	tr.handleMessage(&DocSession{}, []byte(msg))
+	if !reflect.DeepEqual(got, []string{"data"}) {
+		t.Fatalf("delivered %q, want only [data]", got)
+	}
+}
+
+// The document server denies cursors of about 3 KB and more: the Session
+// keeps its batches under MaxFrame.
+func TestMaxFrameIsUnderTheServerLimit(t *testing.T) {
+	var fl transport.FrameLimiter = NewMailruDocsTransport("Vuri/test", transport.DefaultConfig())
+	if n := fl.MaxFrame(); n <= 0 || n > 3000 {
+		t.Fatalf("MaxFrame = %d, want 1..3000", n)
+	}
+}

@@ -36,6 +36,21 @@ const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gec
 
 var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 
+// mailruMaxFrame is the largest frame a cursor message carries: since
+// 2026-10-12 the document server answers a cursor of about 3 KB and more
+// with "access deny" (3060 bytes passed, 3072 did not), so batches stay at
+// 3000 (transport.FrameLimiter).
+const mailruMaxFrame = 3000
+
+// keepAliveCursor is the keep-alive a quiet connection writes: a cursor as
+// the editor sends it (its real length and payload), since the server now
+// drops a connection on a malformed one, as it did on the old "18;---KA---".
+// The receiving side skips its payload.
+const (
+	keepAlivePayload = "BgAAADYAMgA3AAMAAAA="
+	keepAliveCursor  = "14;" + keepAlivePayload
+)
+
 // saveChangesMessageTemplate — шаблон saveChanges-сообщения в формате
 // веб-клиента Mail.ru: две подстановки %s — UserId и UserShortId в
 // excelAdditionalInfo. Остальные поля (op-ы в changes, анкоры, версия)
@@ -45,6 +60,10 @@ var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 //
 // Поля isCoAuthoring/releaseLocks = false — особенность именно mail.ru
 // (у yandex.docs там true/true).
+//
+// Since 2026-10-12 the server answers this template with "access deny" and
+// drops the connection, so the transport no longer sends it; it stays for
+// the signed JS port, which is compared with BuildSaveChanges.
 const saveChangesMessageTemplate = `42["message",{"type":"saveChanges","changes":"[\"76;AgAAADEA//8BAOwbfF7pEAAALQEAAAMAAAAAAAAAAAAAAAAAAAAAAAAA9v///xoAAAAyADAAMgA2AC4AMgAuADEALgAyADIANgA4AA==\",\"35;BgAAADYAMgA3AAEAHAABAAAAAAAAAAEAAABhAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAQAAAAEAAABzAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAgAAAAEAAABkAAAAAAMAAAA=\"]","startSaveChanges":true,"endSaveChanges":true,"isCoAuthoring":false,"isExcel":false,"deleteIndex":null,"excelAdditionalInfo":"{\"UserId\":\"%s\",\"UserShortId\":\"%s\",\"CursorInfo\":\"14;BgAAADYAMgA3AAMAAAA=\"}","unlock":false,"releaseLocks":false}]`
 
 type MailruDocsInfo struct {
@@ -234,7 +253,6 @@ func (t *MailruDocsTransport) Start() error {
 
 	t.baseUserID = randUserID()
 	utils.SafeGo("mailru.keepAlive", t.keepAliveLoop)
-	utils.SafeGo("mailru.editorActivity", t.editorActivityLoop)
 	t.connectToDoc(0)
 
 	return nil
@@ -491,7 +509,10 @@ func (t *MailruDocsTransport) writerLoop() {
 		}
 
 		payload := base64.StdEncoding.EncodeToString(pending)
-		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
+		// The prefix is the packet's real length: since 2026-10-12 the
+		// document server drops a connection ("access deny") whose cursor
+		// declares another, as Yandex's has done for a while.
+		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(pending), payload)
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
 			utils.Debugf("[M-DOCS] Write error: %v", err)
 			time.Sleep(15 * time.Millisecond)
@@ -500,6 +521,10 @@ func (t *MailruDocsTransport) writerLoop() {
 		pending = nil
 	}
 }
+
+// MaxFrame is transport.FrameLimiter: the batches above stay under the
+// cursor size the document server accepts.
+func (t *MailruDocsTransport) MaxFrame() int { return mailruMaxFrame }
 
 // keepAliveLoop writes a keep-alive only into a quiet connection: any
 // write (tunnel data, a Session ping, a Socket.IO pong) does its job. Each
@@ -510,7 +535,7 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 	interval := t.GetConfig().KeepAliveInterval
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`
+	keepAliveMsg := `42["message",{"type":"cursor","cursor":"` + keepAliveCursor + `"}]`
 
 	for t.IsRunning() {
 		<-ticker.C
@@ -528,68 +553,12 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 	}
 }
 
-// editorActivityLoop периодически отправляет в документ saveChanges-сообщение
-// в формате веб-клиента Mail.ru: значения UserId/UserShortId подставляются
-// из текущей сессии, остальное — фиксированный шаблон (см.
-// saveChangesMessageTemplate). Задержка между отправками — случайная в
-// диапазоне [0.5 с, 5 с], чтобы поток выглядел как правки живого человека:
-// ровный по сути, но не метрономом. Сообщение уходит через ту же сессию, что
-// writerLoop и keepAliveLoop, и так же терпит переподключение — если сессии
-// сейчас нет, итерация просто пропускается.
-func (t *MailruDocsTransport) editorActivityLoop() {
-	const (
-		minDelay = 500 * time.Millisecond
-		maxDelay = 5 * time.Second
-	)
-	for t.IsRunning() {
-		span := int64(maxDelay - minDelay)
-		delay := minDelay + time.Duration(rand.Int63n(span+1))
-
-		select {
-		case <-time.After(delay):
-		case <-t.Done():
-			return
-		}
-
-		t.Mu.RLock()
-		session := t.session
-		t.Mu.RUnlock()
-		if session == nil || session.Conn == nil {
-			continue
-		}
-
-		// A link that only lets the document be read ("edit": false) is not allowed to save: the
-		// server closes the connection (no close frame) on the first saveChanges, over and over.
-		if !canEdit(session.Info.Permissions) {
-			continue
-		}
-
-		msg := buildSaveChanges(session)
-		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
-			utils.Debugf("[M-DOCS] saveChanges write error: %v", err)
-		}
-	}
-}
-
 // canEdit says whether the document may be edited through the link this session joined with.
 // The server reports it in the document's permissions; a document that does not say is treated
 // as editable, as the transport always did.
 func canEdit(permissions map[string]interface{}) bool {
 	edit, ok := permissions["edit"].(bool)
 	return !ok || edit
-}
-
-// buildSaveChanges собирает saveChanges-сообщение под конкретную сессию:
-// UserId — настоящий id участника (info.EditorUserID, при отсутствии —
-// сгенерированный session.UserID), UserShortId — производная от UserId
-// (в веб-клиенте Mail.ru это UserId без последнего символа). Остальное — из
-// шаблона.
-func buildSaveChanges(session *DocSession) []byte {
-	userID := session.Info.EditorUserID
-	if userID == "" {
-		userID = session.UserID
-	}
-	return BuildSaveChanges(userID)
 }
 
 // BuildSaveChanges is the saveChanges message for one participant: a pure
@@ -644,6 +613,9 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 	if strings.Contains(text, "cursor") {
 		for _, base64Str := range cursorPayloads(text) {
+			if base64Str == keepAlivePayload {
+				continue
+			}
 			decoded, err := base64.StdEncoding.DecodeString(base64Str)
 			if err != nil {
 				utils.Debugf("[M-DOCS] Base64 decode error: %v", err)

@@ -53,7 +53,7 @@ func TestKeepAliveOnlyWhenTheConnectionIsQuiet(t *testing.T) {
 			if strings.HasPrefix(string(m), "40{") {
 				c.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"ns1"}`))
 			}
-			if strings.Contains(string(m), "---KA---") {
+			if strings.Contains(string(m), `"cursor":"`+keepAliveCursor+`"`) {
 				keepAlives.Add(1)
 			}
 		}

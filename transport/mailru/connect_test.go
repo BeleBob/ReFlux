@@ -110,10 +110,11 @@ func TestAuthWaitsForNamespaceConnect(t *testing.T) {
 	}
 	for {
 		f := next("data")
-		if strings.Contains(f, "---KA---") {
+		if strings.Contains(f, keepAliveCursor) {
 			continue
 		}
-		want := `"cursor":"18;` + base64.StdEncoding.EncodeToString([]byte("pkt")) + `"`
+		// The prefix is the packet's length: the server denies any other.
+		want := `"cursor":"3;` + base64.StdEncoding.EncodeToString([]byte("pkt")) + `"`
 		if !strings.Contains(f, want) {
 			t.Fatalf("data frame = %.80q, want %s", f, want)
 		}
