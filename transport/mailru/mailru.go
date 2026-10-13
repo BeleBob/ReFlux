@@ -775,7 +775,12 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return MailruDocsInfo{}, &StatusError{Code: resp.StatusCode}
+		// The body names the error: {"error":"BAD/WEBLINK/URL",...}.
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&e)
+		return MailruDocsInfo{}, &StatusError{Code: resp.StatusCode, Reason: e.Error}
 	}
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
