@@ -22,8 +22,8 @@ type nodeRequest struct {
 }
 
 // nodeProvisioner creates a channel on this host. The heavy lifting is
-// node-install.sh's plan/apply (as root); a cupsonline transport with an empty
-// url means "make the rooms yourself". See docs/plans.
+// node-install.sh's plan/apply (as root); a cupsonline or avito transport with
+// an empty url means "make the rooms yourself". See docs/plans.
 type nodeProvisioner interface {
 	Ensure(ctx context.Context, r nodeRequest) error
 }
@@ -38,6 +38,8 @@ type scriptProvisioner struct {
 	exec func(ctx context.Context, stdin string, name string, args ...string) ([]byte, error)
 	// rooms makes cups.online rooms; cupsonline.CreateRoomList for real.
 	rooms func(ctx context.Context) (string, error)
+	// avitoRooms makes Avito Code rooms (no sign-in); nil leaves Avito out.
+	avitoRooms func(ctx context.Context) (string, error)
 	// docs supplies carrier documents (vyandex/mailru/boards); nil or an
 	// unconfigured factory means those carriers are skipped.
 	docs DocFactory
@@ -58,10 +60,12 @@ func runCmd(ctx context.Context, stdin string, name string, args ...string) ([]b
 	return c.CombinedOutput()
 }
 
-// channelTransports fills a cupsonline transport with empty url with fresh
-// cups.online rooms, asks the DocFactory for document carriers, and drops a
+// channelTransports fills a cupsonline or avito transport with empty url with
+// fresh rooms, asks the DocFactory for document carriers, and drops a
 // document carrier no factory can serve. A pool with no transports at all gets
-// cups.online rooms, so a channel always has a document for readChannel.
+// what anyone can make without signing in: cups.online rooms, and Avito Code
+// rooms when they can be made now (cups.online alone otherwise), so a channel
+// always has a carrier for readChannel.
 func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provision.ChannelTransport, owner string) ([]provision.ChannelTransport, error) {
 	out := make([]provision.ChannelTransport, 0, len(ts)+1)
 	for _, t := range ts {
@@ -72,6 +76,16 @@ func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provisio
 			rooms, err := p.rooms(ctx)
 			if err != nil {
 				return nil, fmt.Errorf("cups.online: %w", err)
+			}
+			t.URL = rooms
+		case t.Type == "avito" && t.URL == "":
+			if p.avitoRooms == nil {
+				continue
+			}
+			rooms, err := p.avitoRooms(ctx)
+			if err != nil {
+				p.logf("pool owner %s: avito: %v", owner, err)
+				continue
 			}
 			t.URL = rooms
 		case docCarrier(t.Type) && t.URL == "":
@@ -93,6 +107,13 @@ func (p *scriptProvisioner) channelTransports(ctx context.Context, ts []provisio
 			return nil, fmt.Errorf("cups.online: %w", err)
 		}
 		out = append(out, provision.ChannelTransport{Type: "cupsonline", URL: rooms})
+		if p.avitoRooms != nil {
+			if rooms, err := p.avitoRooms(ctx); err != nil {
+				p.logf("pool owner %s: avito: %v", owner, err)
+			} else {
+				out = append(out, provision.ChannelTransport{Type: "avito", URL: rooms})
+			}
+		}
 	}
 	return provision.CheckTransports(out)
 }

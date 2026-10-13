@@ -186,7 +186,7 @@ func (c *Config) Check() error {
 				return fmt.Errorf("config: pool %q: %w", p.ID, err)
 			}
 		} else if hasEmptyCups(p.Transports) {
-			return fmt.Errorf("config: pool %q: cupsonline без url требует autoNode", p.ID)
+			return fmt.Errorf("config: pool %q: cupsonline или avito без url требует autoNode", p.ID)
 		}
 	}
 	if len(c.Plans) == 0 {
@@ -242,11 +242,17 @@ func withoutDirect(ts []provision.ChannelTransport) []provision.ChannelTransport
 	return out
 }
 
-// hasEmptyCups reports a cupsonline transport that the service would create
-// rooms for: only possible with autoNode.
+// selfMade: a room carrier (cups.online, Avito Code) without its rooms, which
+// the service makes for each channel without any sign-in.
+func selfMade(t provision.ChannelTransport) bool {
+	return (t.Type == "cupsonline" || t.Type == "avito") && strings.TrimSpace(t.URL) == ""
+}
+
+// hasEmptyCups reports a room carrier that the service would create rooms
+// for: only possible with autoNode.
 func hasEmptyCups(ts []provision.ChannelTransport) bool {
 	for _, t := range ts {
-		if t.Type == "cupsonline" && strings.TrimSpace(t.URL) == "" {
+		if selfMade(t) {
 			return true
 		}
 	}
@@ -254,12 +260,12 @@ func hasEmptyCups(ts []provision.ChannelTransport) bool {
 }
 
 // checkAutoTransports validates the transports of an autoNode pool: any type
-// except a cupsonline-with-empty-url is checked like provision does; two of a
-// type are refused.
+// except a room carrier without rooms (selfMade) is checked like provision
+// does; two of a type are refused.
 func checkAutoTransports(ts []provision.ChannelTransport) error {
 	seen := map[string]bool{}
 	for _, t := range ts {
-		if t.Type == "cupsonline" && strings.TrimSpace(t.URL) == "" {
+		if selfMade(t) {
 			t.Type = strings.TrimSpace(t.Type)
 		} else if _, err := provision.CheckTransports([]provision.ChannelTransport{t}); err != nil {
 			return err

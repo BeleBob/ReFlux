@@ -5,6 +5,22 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- **The node wizard installs every transport**: Telemost (a conference link),
+  Avito Code (rooms made at once, no sign-in) and signed `.flux` JS transports
+  (the app sends the package; the node keeps it current, `ScriptAutoUpdate`).
+  `node-install.sh` takes `telemost=`, `avito=` and `script=` lines;
+  `deploy/test/config-test.sh` checks the installer's config and node.conf
+  under the VDS's shell.
+- **Trial channels get Avito too.** A pool without transports (opensub's
+  personal channels) gets cups.online and Avito Code rooms, both made without
+  any sign-in; tried live: a tunnel through rooms made this way carries
+  traffic (about 100 KB/s cups.online, 80 KB/s Avito on one client). Telemost
+  conferences need a Yandex sign-in to be made (401 without one), and the JS
+  whiteboards (MTS-Link, Bitrix24, PRUFFME, Yandex Boards) join an existing
+  board as a guest but cannot make one.
+
 ## [0.10.0] - 2026-10-13 (meepo161/OpenFlux)
 
 ### Added

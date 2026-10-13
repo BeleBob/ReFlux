@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/subscription"
+	"github.com/p1neappleXpress/OpenFlux/transport/avito"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 )
 
@@ -62,7 +63,7 @@ func New(cfg *Config, opt Options) (*Server, error) {
 	if opt.Provisioner != nil {
 		s.prov = opt.Provisioner
 	} else {
-		s.prov = &scriptProvisioner{cfg: cfg, logf: s.logf, exec: runCmd, rooms: cupsonline.CreateRoomList, docs: accountDocFactory{}}
+		s.prov = &scriptProvisioner{cfg: cfg, logf: s.logf, exec: runCmd, rooms: cupsonline.CreateRoomList, avitoRooms: func(ctx context.Context) (string, error) { return avito.CreateRoomList(ctx, "") }, docs: accountDocFactory{}}
 	}
 	s.lim = newLimiter(func() time.Time { return s.now() })
 	if s.dummyHash, err = hashPassword("dummy-password-for-timing", s.cost()); err != nil {
