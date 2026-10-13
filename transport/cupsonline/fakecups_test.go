@@ -42,6 +42,10 @@ type fakeCups struct {
 	stall      chan struct{}
 	created    int
 	maxCursors int
+	// dropEvery > 0 swallows every dropEvery-th cursor update instead of
+	// relaying it, as the real server does to a room sending near its limit.
+	dropEvery int
+	relayed   int
 }
 
 type fakeConn struct {
@@ -266,6 +270,11 @@ func (f *fakeCups) relay(room, user string, cursors []any) {
 
 	f.mu.Lock()
 	f.maxCursors = max(f.maxCursors, len(cursors))
+	f.relayed++
+	if f.dropEvery > 0 && f.relayed%f.dropEvery == 0 {
+		f.mu.Unlock()
+		return
+	}
 	if f.pack {
 		msg = "{}\n" + msg
 	}

@@ -157,6 +157,33 @@ func TestStripedStreamSurvivesDroppedSocket(t *testing.T) {
 	<-done
 }
 
+// The server swallows some messages (a room near its limit): on the striped
+// wire a message holds whole pieces, so a lost one costs only its pieces,
+// which are resent, and the stream never falls out of step.
+func TestStripedStreamSurvivesLostMessages(t *testing.T) {
+	f := newFakeCups(t)
+	f.locked(func() { f.dropEvery = 7 })
+	cfg := fastConfig()
+	cfg.SendInterval = time.Millisecond
+	exit, client := startStripedPair(t, cfg)
+	const n = 300
+	for _, dir := range []struct {
+		name     string
+		from, to *peer
+	}{{"up", client, exit}, {"down", exit, client}} {
+		t.Run(dir.name, func(t *testing.T) {
+			var got atomic.Int64
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				expectInOrderCounting(t, dir.to, n, 30*time.Second, &got)
+			}()
+			sendWindowed(t, dir.from, n, &got, done)
+			<-done
+		})
+	}
+}
+
 // The point of the stripe: every room has its own send clock, so three rooms
 // carry about three times what one does.
 func TestStripedRoomsAddUp(t *testing.T) {

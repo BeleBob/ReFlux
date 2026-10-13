@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -501,6 +503,11 @@ func unpackRooms(s string) ([]string, error) {
 	return ids, err
 }
 
+func envInt(name string) int {
+	n, _ := strconv.Atoi(os.Getenv(name))
+	return n
+}
+
 // stripeNewRooms: rooms an exit or the wizard creates now get the striped
 // list, unless CUPS_STRIPE=0 asks for the old wire (for peers older than
 // 0.7.1).
@@ -532,6 +539,7 @@ type channelStats struct {
 	batchesRecv atomic.Uint64
 	reconnects  atomic.Uint64
 	dropped     atomic.Uint64
+	rpcErrors   atomic.Uint64 // the server turned a message down
 }
 
 // ---- WS ----
@@ -579,6 +587,9 @@ type cupsWS struct {
 	// stripe has something for it.
 	pull atomic.Pointer[func(max int) [][]byte]
 	wake chan struct{}
+	// framed: on the striped wire every message carries whole packets only
+	// (see pullLoop), so it is read on its own, without a stream buffer.
+	framed bool
 
 	stats *channelStats
 }
@@ -738,8 +749,12 @@ func (w *cupsWS) connectAndServe() error {
 		header.Add("Cookie", c.Name+"="+c.Value)
 	}
 
+	dial := netbind.DialContext
+	if w.framed {
+		dial = dialLane
+	}
 	dialer := websocket.Dialer{
-		NetDialContext:   netbind.DialContext,
+		NetDialContext:   dial,
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
 		ReadBufferSize:   w.config.ReadBufferSize,
 		WriteBufferSize:  w.config.WriteBufferSize,
@@ -907,21 +922,35 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 
 // pullLoop is sendLoop for a stripe lane. Right before each message may leave
 // (SendInterval after the last one) it takes from the stripe as many pieces
-// as fill one message, so what the room cannot carry yet waits in the
+// as fit in one message, so what the room cannot carry yet waits in the
 // stripe's queue, where CoDel sees it, and a piece's send time is when it
-// really leaves - the stripe's loss detection and round trip go by it. The
-// pieces are framed like a batch ([len u16][piece]...) and one may run over
-// into the next message; the far side reassembles the stream per sender.
+// really leaves - the stripe's loss detection and round trip go by it.
+//
+// Every message carries whole pieces only ([len u16][piece]...): the server
+// may turn a message down or lose it when a room sends near its limit, and a
+// piece cut across two messages would then throw the far side's reading of
+// the rest of the stream out of step. This way a lost message costs exactly
+// its pieces, which the stripe resends. A piece is at most one message
+// (stripePieceBytes), so the one that does not fit opens the next message.
 func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
-	var buf []byte
 	var hdr [2]byte
+	var next []byte // a pulled piece that did not fit the last message
+	buf := make([]byte, 0, w.config.MaxMessageData)
 	idle := time.NewTimer(time.Hour)
 	defer idle.Stop()
+	add := func(p []byte) bool {
+		if len(buf)+2+len(p) > w.config.MaxMessageData {
+			return false
+		}
+		binary.BigEndian.PutUint16(hdr[:], uint16(len(p)))
+		buf = append(buf, hdr[:]...)
+		buf = append(buf, p...)
+		w.stats.packetsSent.Add(1)
+		w.stats.bytesSent.Add(uint64(len(p)))
+		return true
+	}
 	for w.ctx.Err() == nil {
 		if !w.connected.Load() {
-			// A new socket starts a new stream on the far side: a piece cut
-			// in half by the drop is lost either way, and the stripe resends.
-			buf = buf[:0]
 			if !sleepCtx(w.ctx, 50*time.Millisecond) {
 				return
 			}
@@ -932,20 +961,28 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 				return
 			}
 		}
-		for len(buf) < w.config.MaxMessageData {
+		buf = buf[:0]
+		if next != nil && add(next) {
+			next = nil
+		}
+		for next == nil {
 			pieces := src(1)
 			if len(pieces) == 0 {
 				break
 			}
 			for _, p := range pieces {
-				binary.BigEndian.PutUint16(hdr[:], uint16(len(p)))
-				buf = append(buf, hdr[:]...)
-				buf = append(buf, p...)
-				w.stats.packetsSent.Add(1)
-				w.stats.bytesSent.Add(uint64(len(p)))
+				if next != nil || !add(p) {
+					next = p
+				}
 			}
 		}
 		if len(buf) == 0 {
+			if next != nil {
+				// Bigger than a message: the stripe never cuts one so big.
+				w.stats.dropped.Add(1)
+				next = nil
+				continue
+			}
 			idle.Reset(lanePollIdle)
 			select {
 			case <-w.ctx.Done():
@@ -956,17 +993,34 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 			idle.Stop()
 			continue
 		}
-		n := min(len(buf), w.config.MaxMessageData)
 		w.lastSend = time.Now()
-		if err := w.sendChunk(buf[:n]); err != nil {
+		if err := w.sendChunk(buf); err != nil {
 			w.stats.dropped.Add(1)
 			utils.Debugf("[CUPS] lane send (%s): %v", w.roomUUID, err)
-			buf = buf[:0]
 			continue
 		}
 		w.stats.batchesSent.Add(1)
-		buf = append(buf[:0], buf[n:]...)
 	}
+}
+
+// laneSendBuffer caps the kernel's send buffer on a stripe lane's socket, to
+// about two messages (a full one is ~25 KB of cursor JSON). The server takes
+// a room's messages only so fast; with the default buffer hundreds of KB sat
+// in the socket, the stripe saw round trips of seconds, resent on timeout
+// what was only queued, and the resends queued too. Small, the write blocks
+// instead, the lane's clock slows to what the server takes, and the backlog
+// stays in the stripe's queue where CoDel manages it.
+const laneSendBuffer = 64 << 10
+
+func dialLane(ctx context.Context, network, addr string) (net.Conn, error) {
+	c, err := netbind.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteBuffer(laneSendBuffer)
+	}
+	return c, nil
 }
 
 // lanePollIdle is how long an idle stripe lane sleeps before it asks the
@@ -1094,6 +1148,14 @@ func (w *cupsWS) handleReply(raw []byte) {
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return
 	}
+	if e, ok := obj["error"]; ok {
+		// A message of ours the server would not take (it never reached the
+		// peer): the stripe resends its pieces; worth seeing when it happens.
+		if n := w.stats.rpcErrors.Add(1); n == 1 || n%100 == 0 {
+			utils.Debugf("[CUPS] room %s turned down a message (%d so far): %v", shortRoom(w.roomUUID), n, e)
+		}
+		return
+	}
 	push, ok := obj["push"].(map[string]interface{})
 	if !ok {
 		return
@@ -1143,6 +1205,10 @@ func (w *cupsWS) handleReply(raw []byte) {
 		return
 	}
 	chunk := decoded[2 : 2+dataLen]
+	if w.framed {
+		w.readWhole(chunk)
+		return
+	}
 
 	// Append to the running stream and pull out whole packets; a packet split
 	// across messages completes once the rest of it arrives.
@@ -1182,6 +1248,29 @@ func (w *cupsWS) handleReply(raw []byte) {
 		delete(w.recvBufs, sender)
 	default:
 		w.recvBufs[sender] = rest
+	}
+	if count > 0 {
+		w.stats.packetsRecv.Add(uint64(count))
+		w.stats.bytesRecv.Add(uint64(total))
+		w.stats.batchesRecv.Add(1)
+	}
+}
+
+// readWhole hands on the packets of one message on the striped wire, where a
+// message holds whole packets only (pullLoop).
+func (w *cupsWS) readWhole(chunk []byte) {
+	count, total := 0, 0
+	for len(chunk) >= 2 {
+		ln := int(binary.BigEndian.Uint16(chunk))
+		if ln == 0 || 2+ln > len(chunk) {
+			break
+		}
+		if w.onData != nil {
+			w.onData(chunk[2 : 2+ln])
+		}
+		chunk = chunk[2+ln:]
+		count++
+		total += ln
 	}
 	if count > 0 {
 		w.stats.packetsRecv.Add(uint64(count))
@@ -1245,6 +1334,14 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	}
 
 	t.baseURL = baseRoomURL
+	// Measuring knobs: CUPS_SEND_MS (SendInterval), CUPS_MSG_BYTES
+	// (MaxMessageData, at most 8192: the stripe's pieces are cut for it).
+	if ms := envInt("CUPS_SEND_MS"); ms > 0 {
+		t.config.SendInterval = time.Duration(ms) * time.Millisecond
+	}
+	if n := envInt("CUPS_MSG_BYTES"); n >= 2048 && n <= 8192 {
+		t.config.MaxMessageData = n
+	}
 	// Both roles accept a room list: the client always needs one, and an
 	// exit node given one re-joins those rooms instead of creating new
 	// ones, so a restart doesn't hand the phone a new string every time.
@@ -1294,6 +1391,7 @@ func (t *CupsonlineTransport) Start() error {
 			ctx:         t.ctx,
 			sendQueue:   make(chan []byte, t.config.SendQueueSize),
 			wake:        make(chan struct{}, 1),
+			framed:      t.striped,
 			stats:       &channelStats{idx: i, roomUUID: s.id},
 		}
 		// Command ids 1 and 2 are connect and subscribe.
