@@ -58,7 +58,7 @@ func (s *Server) adminInfo(w http.ResponseWriter, _ *http.Request) {
 			pools = append(pools, pl)
 			continue
 		}
-		if _, err := s.links.link(p, p.Channel); err != nil {
+		if _, err := s.links.link(p, p.Channel, nil); err != nil {
 			pl.OK, pl.Error = false, err.Error()
 			if p.AutoNode {
 				s.start(nodeRequest{Pool: p, Channel: p.Channel})

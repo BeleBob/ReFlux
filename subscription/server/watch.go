@@ -38,7 +38,7 @@ func (s *Server) start(r nodeRequest) {
 		s.w.mu.Unlock()
 		return
 	}
-	if _, err := s.links.link(r.Pool, r.Channel); err == nil {
+	if _, err := s.links.link(r.Pool, r.Channel, nil); err == nil {
 		s.w.mu.Unlock()
 		return
 	}

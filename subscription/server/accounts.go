@@ -350,8 +350,8 @@ func (s *Server) handleAccount(w http.ResponseWriter, _ *http.Request, u *User, 
 	writeJSON(w, http.StatusOK, s.account(u, d.ID))
 }
 
-func (s *Server) handleSubscription(w http.ResponseWriter, _ *http.Request, u *User, _ *Device) {
-	writeJSON(w, http.StatusOK, s.document(s.userStatus(u), u.Expires, s.userPools(u), u.ID))
+func (s *Server) handleSubscription(w http.ResponseWriter, r *http.Request, u *User, _ *Device) {
+	writeJSON(w, http.StatusOK, s.document(s.userStatus(u), u.Expires, s.userPools(u), u.ID, clientTransports(r)))
 }
 
 func (s *Server) handleTrial(w http.ResponseWriter, r *http.Request, u *User, d *Device) {
