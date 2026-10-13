@@ -5,6 +5,9 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+node-install.sh installs **node-v1.5.0**: the node core with Avito, the 0.7.2
+fixes, ScriptAutoUpdate and everything below.
+
 ### Changed
 
 - Merged p1neappleXpress 0.7.2 (section below): an Avito socket that dropped no
