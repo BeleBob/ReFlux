@@ -75,11 +75,24 @@ type CupsonlineConfig struct {
 	MaxCursors      int
 	BatchTimeout    time.Duration
 
-	// SendInterval is the least time between two messages on one channel.
-	// cups.online throttles inbound, and firing messages back to back stalls
-	// the write and drops the connection, so the transport paces itself below
-	// that. Four channels each send at this rate.
+	// SendInterval is the least time between two messages on one channel: a
+	// floor against micro-bursts, not the main throttle. On the striped wire
+	// the pace is set by SendWindow (ack feedback), so this only keeps two
+	// messages from leaving the same instant.
 	SendInterval time.Duration
+
+	// SendWindow is how many cursor RPCs a striped lane keeps in flight
+	// before it waits for a reply. cups.online relays a room only so fast
+	// (benchmarked ~130-200 KB/s delivered per room, the shard decides);
+	// firing faster than that is dropped silently from the relay fan-out, so
+	// a lane with no feedback wastes most of what it sends (measured 71% loss
+	// at the old 12 ms cadence) and the stripe then spends retransmissions on
+	// the drops and stalls the tunnel's TCP head-of-line. Bounding the RPCs in
+	// flight makes a slow room (or a slow uplink) push back instead: the lane
+	// sends again only once the server has answered, so it self-paces to each
+	// room's true rate with no relay loss. 3 was the knee in the live sweep
+	// (2 underran, 4 began to overrun); 0 turns the gate off.
+	SendWindow int
 
 	SendQueueSize int
 
@@ -115,15 +128,21 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 
 		BatchMaxPackets: 256,
 		BatchMaxBytes:   22000,
-		// 8192 байт данных → 2 байта заголовка → ~684 курсора → провод ~34 KB;
-		// проверено: сервер принимает без ошибок.
-		MaxMessageData: 8192,
-		MaxCursors:     1000,
-		BatchTimeout:   2 * time.Millisecond,
-		// 12ms (~83 msg/s per channel) — calibrated by bench_tune.py:
-		// 8192B@12ms = 447 KB/s per lane (2.8× vs old 4096@18ms=159 KB/s);
-		// 10ms triggers 403.
+		// 12288 bytes of data → ~2050 cursor integers → ~38 KB on the wire;
+		// the live relay bench delivers 0% loss up to here, ~200 KB/s per
+		// room (vs 134 at 8192), while 16000 trips the server's 1009
+		// "message too big". The far side reassembles by the length prefix,
+		// so a peer that still chunks at 8192 interops.
+		MaxMessageData: 12288,
+		// 12288 data bytes pack into ~1025 cursor integers; the live server
+		// takes well over 2000 in one message, so this headroom is safe.
+		MaxCursors:   1100,
+		BatchTimeout: 2 * time.Millisecond,
+		// A small floor only; SendWindow is the throttle now. (The old 12 ms
+		// fixed cadence ignored how fast the room actually relayed and lost
+		// ~71% of what it sent — see SendWindow.)
 		SendInterval: 12 * time.Millisecond,
+		SendWindow:   3,
 
 		// В очереди кадры кодека (до ~8 KB), а не IP-пакеты: очередь длиннее
 		// — это уже не буфер, а секунды задержки.
@@ -584,9 +603,16 @@ type cupsWS struct {
 
 	// pull, when set, makes this room a stripe lane: sendLoop takes pieces
 	// from the stripe instead of sendQueue (see pullLoop). wake says the
-	// stripe has something for it.
+	// stripe has something for it, or that an in-flight RPC was answered.
 	pull atomic.Pointer[func(max int) [][]byte]
 	wake chan struct{}
+	// inflight counts cursor RPCs sent on this socket and not yet answered;
+	// dataIDs are their command ids. The puller waits while inflight reaches
+	// the window (see pullLoop); a reply decrements it (see handleReply).
+	// Both are reset with the socket.
+	window   int
+	inflight atomic.Int64
+	dataIDs  sync.Map
 	// framed: on the striped wire every message carries whole packets only
 	// (see pullLoop), so it is read on its own, without a stream buffer.
 	framed bool
@@ -780,6 +806,11 @@ func (w *cupsWS) connectAndServe() error {
 	conn.SetReadLimit(int64(w.config.MaxMessageBytes))
 	// Fresh socket, fresh stream: drop any half-assembled packet from before.
 	w.recvBufs = nil
+	// The replies to RPCs sent on the old socket will never come; start the
+	// in-flight count and its ids clean so the puller isn't stuck at the
+	// window forever.
+	w.inflight.Store(0)
+	w.dataIDs.Range(func(k, _ any) bool { w.dataIDs.Delete(k); return true })
 
 	if err := w.writeJSON(map[string]interface{}{
 		"id": 1, "connect": map[string]interface{}{"token": a.connToken, "name": "js"},
@@ -956,6 +987,23 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 			}
 			continue
 		}
+		// Ack gate: wait while this room already has its window of RPCs
+		// unanswered, so a slow room (or uplink) holds the data in the
+		// stripe's queue instead of flooding the server with messages it
+		// drops from the relay. A reply (or the stripe) sends to wake.
+		for w.window > 0 && w.inflight.Load() >= int64(w.window) && w.connected.Load() {
+			idle.Reset(lanePollIdle)
+			select {
+			case <-w.ctx.Done():
+				return
+			case <-w.wake:
+			case <-idle.C:
+			}
+			idle.Stop()
+		}
+		if !w.connected.Load() {
+			continue
+		}
 		if d := w.config.SendInterval - time.Since(w.lastSend); d > 0 {
 			if !sleepCtx(w.ctx, d) {
 				return
@@ -994,7 +1042,12 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 			continue
 		}
 		w.lastSend = time.Now()
-		if err := w.sendChunk(buf); err != nil {
+		id := w.nextID()
+		w.dataIDs.Store(id, struct{}{})
+		w.inflight.Add(1)
+		if err := w.sendChunkID(buf, id); err != nil {
+			w.dataIDs.Delete(id)
+			w.inflight.Add(-1)
 			w.stats.dropped.Add(1)
 			utils.Debugf("[CUPS] lane send (%s): %v", w.roomUUID, err)
 			continue
@@ -1047,6 +1100,12 @@ func (w *cupsWS) pace() error {
 // packed into cursor integers. The length lets the peer strip the zero
 // padding exactly before stitching the byte stream back.
 func (w *cupsWS) sendChunk(chunk []byte) error {
+	return w.sendChunkID(chunk, w.nextID())
+}
+
+// sendChunkID is sendChunk with the command id chosen by the caller, so the
+// striped puller can track the id it just put in flight.
+func (w *cupsWS) sendChunkID(chunk []byte, id int64) error {
 	payload := make([]byte, 2+len(chunk))
 	binary.BigEndian.PutUint16(payload[:2], uint16(len(chunk)))
 	copy(payload[2:], chunk)
@@ -1061,7 +1120,7 @@ func (w *cupsWS) sendChunk(chunk []byte) error {
 				"user":    w.auth().userUUID,
 			},
 		},
-		"id": w.nextID(),
+		"id": id,
 	}
 	return w.writeJSON(msg)
 }
@@ -1147,6 +1206,20 @@ func (w *cupsWS) handleReply(raw []byte) {
 	var obj map[string]interface{}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return
+	}
+	// A reply to one of our cursor RPCs (ok or error) frees a slot in the
+	// ack gate and wakes the puller. Keepalive and handshake replies carry
+	// ids too but are not in dataIDs, so they're left alone.
+	if idf, ok := obj["id"].(float64); ok {
+		if _, had := w.dataIDs.LoadAndDelete(int64(idf)); had {
+			if w.inflight.Add(-1) < 0 {
+				w.inflight.Store(0)
+			}
+			select {
+			case w.wake <- struct{}{}:
+			default:
+			}
+		}
 	}
 	if e, ok := obj["error"]; ok {
 		// A message of ours the server would not take (it never reached the
@@ -1339,8 +1412,20 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	if ms := envInt("CUPS_SEND_MS"); ms > 0 {
 		t.config.SendInterval = time.Duration(ms) * time.Millisecond
 	}
-	if n := envInt("CUPS_MSG_BYTES"); n >= 2048 && n <= 8192 {
+	if n := envInt("CUPS_MSG_BYTES"); n >= 2048 && n <= 12288 {
 		t.config.MaxMessageData = n
+	}
+	// CUPS_WINDOW overrides the ack gate's depth (0 turns it off).
+	if s := os.Getenv("CUPS_WINDOW"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			t.config.SendWindow = n
+		}
+	}
+	// CUPS_ROOMS sets how many rooms a fresh exit creates (= stripe lanes).
+	// Each room relays ~130-200 KB/s, so throughput scales with rooms; the
+	// client follows whatever list the exit prints.
+	if n := envInt("CUPS_ROOMS"); n > 0 && n <= transport.MaxLanes() {
+		t.config.NumRooms = n
 	}
 	// Both roles accept a room list: the client always needs one, and an
 	// exit node given one re-joins those rooms instead of creating new
@@ -1391,6 +1476,7 @@ func (t *CupsonlineTransport) Start() error {
 			ctx:         t.ctx,
 			sendQueue:   make(chan []byte, t.config.SendQueueSize),
 			wake:        make(chan struct{}, 1),
+			window:      t.config.SendWindow,
 			framed:      t.striped,
 			stats:       &channelStats{idx: i, roomUUID: s.id},
 		}

@@ -13,12 +13,13 @@ import (
 // a dropped socket lost, so the tunnel sees one ordered link instead of
 // frames that overtake each other between rooms.
 
-// stripePieceBytes is a quarter of a cups message (MaxMessageData 8192) less
-// the piece's length prefix and the stripe's header and flag: four full
-// pieces fill a message exactly, and a short one (the tail of a frame, an
-// ack) leaves room for others. Pieces as big as a whole message left the
-// average message half empty - the next piece never fitted beside a tail -
-// and the server takes a room's messages at a rate, not its bytes.
+// stripePieceBytes is sized so a few whole pieces fill a cups message
+// (MaxMessageData, now 12288) with room to spare, less the piece's length
+// prefix and the stripe's header and flag. Pieces this size let ~6 of them
+// ride one message; a short one (the tail of a frame, an ack) leaves room
+// for others. Pieces as big as a whole message left the average message half
+// empty - the next piece never fitted beside a tail - and the server takes a
+// room's messages at a rate, not its bytes.
 const stripePieceBytes = 8192/4 - 2 - 10
 
 // stripeOptions: a cups room loses nothing while its socket is up, so no

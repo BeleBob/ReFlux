@@ -78,6 +78,10 @@ type StripedTransport struct {
 
 const maxStripeLanes = 64
 
+// MaxLanes is the most lanes a stripe runs, so a carrier can cap how many
+// rooms/channels it opens.
+func MaxLanes() int { return maxStripeLanes }
+
 // FramePuller is a lane whose send clock takes frames from a source on every
 // tick (up to max of them) instead of draining a queue filled by Send.
 type FramePuller interface {
