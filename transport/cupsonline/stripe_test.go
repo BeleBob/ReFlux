@@ -69,7 +69,13 @@ func expectInOrder(t *testing.T, p *peer, n int, within time.Duration) {
 // It gives up when the receiving side has.
 func sendWindowed(t *testing.T, from *peer, n int, received *atomic.Int64, rxDone <-chan struct{}) {
 	t.Helper()
-	const window = 192 << 10
+	window := int64(192 << 10)
+	if raceEnabled {
+		// A runner under -race moves far less than 192 KB in CoDel's 150 ms
+		// target, so the stripe's queue would drop frames the in-order
+		// tests count on.
+		window = 16 << 10
+	}
 	var sent int64
 	for i := 0; i < n; i++ {
 		f := seqFrame(i)
