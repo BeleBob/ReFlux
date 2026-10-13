@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
 )
@@ -61,6 +62,71 @@ func TestSessionRehandshakesAfterExitRestart(t *testing.T) {
 	eventually(t, "the client to reach the restarted exit", func() bool {
 		_ = client.Send(testIPv4(40, 6))
 		return got.Load() > 0
+	})
+}
+
+// A client pings only quiet carriers, so one in steady use never learned
+// that its exit answers pings and never took the exit's silence for a
+// restart: when `reflux apply` restarted a node on 2026-10-13, the phone in
+// use kept sending into the old session for good.
+func TestSessionRehandshakesAfterExitRestartUnderTraffic(t *testing.T) {
+	client, exit, _, ew := linkedSessions(t, "direct")
+	fastKeepalive(client, exit)
+	startPair(t, client, exit)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+				_ = exit.Send(testIPv4(40, 6))
+			}
+		}
+	}()
+	time.Sleep(10 * client.keepaliveInterval) // no carrier is ever quiet
+	close(stop)
+	<-done
+	_ = exit.Stop()
+
+	restarted := restartOn(t, true, ew["direct"])
+	var got atomic.Int32
+	restarted.Receive(func([]byte) { got.Add(1) })
+	if err := restarted.Start(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the client to reach the restarted exit", func() bool {
+		_ = client.Send(testIPv4(40, 6))
+		return got.Load() > 0
+	})
+}
+
+// The first probe goes out soon after the handshake, not at the first
+// keepalive tick: a node restarted in its first seconds would strand a
+// client that did not know yet.
+func TestSessionProbesKeepaliveSoonAfterHandshake(t *testing.T) {
+	client, exit, _, _ := linkedSessions(t, "direct")
+	fastKeepalive(client, exit)
+	client.keepaliveInterval = time.Hour // no tick in this test
+	client.keepaliveProbeDelay = 20 * time.Millisecond
+	startPair(t, client, exit)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+				_ = exit.Send(testIPv4(40, 6))
+			}
+		}
+	}()
+	eventually(t, "the client to learn that the exit answers pings", func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.peerKeepalive
 	})
 }
 
