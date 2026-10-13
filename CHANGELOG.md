@@ -5,6 +5,8 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.11.0] / node-v1.5.0 - 2026-10-14 (meepo161/OpenFlux)
+
 node-install.sh installs **node-v1.5.0**: the node core with Avito, the 0.7.2
 fixes, ScriptAutoUpdate and everything below.
 
