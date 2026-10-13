@@ -5,6 +5,17 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-13 (meepo161/OpenFlux)
+
+### Added
+
+- **opensub gives each app links with the transports it runs.** The app lists
+  them in `X-OpenFlux-Transports`; an app without the header gets the set links
+  carried before (yandex, vyandex, boards, mailru, cupsonline), since it drops a
+  link with a type it does not know and the whole location with it. Telemost
+  reaches subscribers this way (`share.Shareable` is the one list), and
+  `provision` takes Telemost conference links.
+
 ### Changed
 
 - Merged p1neappleXpress 0.7.1 (section below): the avito carrier, cups.online
