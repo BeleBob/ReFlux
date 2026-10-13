@@ -221,6 +221,22 @@ func TestSetTransportsChecksBeforeTheServer(t *testing.T) {
 	}
 }
 
+// A Telemost conference link is kept without its query; anything else is not one.
+func TestCheckTransportsTelemost(t *testing.T) {
+	const room = "https://telemost.yandex.ru/j/88936358186517"
+	for _, in := range []string{room, room + "/", room + "?utm=x", " " + room + "#a "} {
+		got, err := CheckTransports([]ChannelTransport{{Type: "telemost", URL: in}})
+		if err != nil || got[0].URL != room {
+			t.Errorf("%q: %v %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"https://telemost.yandex.ru/j/123abc", "https://telemost.yandex.ru/j/12", "https://example.com/j/88936358186517", "http://telemost.yandex.ru/j/88936358186517", ""} {
+		if _, err := CheckTransports([]ChannelTransport{{Type: "telemost", URL: in}}); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
+}
+
 func TestChannelMode(t *testing.T) {
 	for in, want := range map[string]string{"": "l4", "l4": "l4", " L3 ": "l3", "l3": "l3"} {
 		got, err := CheckMode(in)
@@ -245,4 +261,3 @@ func TestChannelMode(t *testing.T) {
 		t.Error("a bad mode is refused before it reaches the server")
 	}
 }
-

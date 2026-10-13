@@ -19,16 +19,18 @@ import (
 type ChannelTransport struct {
 	// Type is vyandex (a Yandex document), yandex (the same document
 	// through the older Yandex Docs transport), mailru (a Mail.ru public
-	// document), boards (a Yandex board open to guests) or cupsonline
-	// (cups.online rooms).
+	// document), boards (a Yandex board open to guests), cupsonline
+	// (cups.online rooms) or telemost (a Yandex Telemost conference).
 	Type string `json:"type"`
 	// URL is the document link, or cups.online's packed room list.
 	URL string `json:"url"`
 }
 
 // transportPriority is what node-install.sh's write_node_conf gives each
-// carrier, and so what the channel's link must say too.
-var transportPriority = map[string]int{"vyandex": 100, "yandex": 95, "mailru": 90, "boards": 80, "cupsonline": 70}
+// carrier, and so what the channel's link must say too. node-install.sh does
+// not set up Telemost yet: a channel with it is written by hand, with
+// Priority = 85. TODO: confirm Telemost's priority with the core's owner.
+var transportPriority = map[string]int{"vyandex": 100, "yandex": 95, "mailru": 90, "telemost": 85, "boards": 80, "cupsonline": 70}
 
 const directPriority = 50
 
@@ -39,6 +41,7 @@ var (
 	yandexDocURL = regexp.MustCompile(`^https://(docs|disk)\.yandex\.(ru|com|by|kz|uz)/(edit/d/[A-Za-z0-9_-]{16,200}|i/[A-Za-z0-9_-]{6,64})$`)
 	boardsURL    = regexp.MustCompile(`^https://boards\.yandex\.ru/whiteboard/\?hash=[0-9a-f]{32}$`)
 	cupsRoomList = regexp.MustCompile(`^[A-Za-z0-9_-]{8,}$`)
+	telemostURL  = regexp.MustCompile(`^https://telemost\.yandex\.ru/j/[0-9]{6,32}$`)
 )
 
 // CheckTransports cleans the links (no query, fragment or trailing slash),
@@ -81,6 +84,11 @@ func CheckTransports(ts []ChannelTransport) ([]ChannelTransport, error) {
 		case "cupsonline":
 			if !cupsRoomList.MatchString(t.URL) || len(t.URL) > 4096 {
 				return nil, errors.New("неверный список комнат cups.online")
+			}
+		case "telemost":
+			t.URL = cleanLink(t.URL)
+			if !telemostURL.MatchString(t.URL) {
+				return nil, errors.New("нужна ссылка на конференцию Телемоста вида https://telemost.yandex.ru/j/…")
 			}
 		}
 		out = append(out, t)

@@ -208,8 +208,9 @@ func (s *Server) cost() int {
 	return 12
 }
 
-// document is what the apps get: the user's or key's status and locations.
-func (s *Server) document(status string, expires int64, pools []string, owner string) subscription.Document {
+// document is what the apps get: the user's or key's status and locations,
+// with the transports the app runs.
+func (s *Server) document(status string, expires int64, pools []string, owner string, set transportSet) subscription.Document {
 	d := subscription.Document{
 		Version:     1,
 		Title:       s.cfg.Title,
@@ -221,7 +222,7 @@ func (s *Server) document(status string, expires int64, pools []string, owner st
 		Profiles:    []subscription.Profile{},
 	}
 	if status == subscription.StatusActive {
-		d.Profiles = s.profiles(pools, owner)
+		d.Profiles = s.profiles(pools, owner, set)
 	}
 	return d
 }
@@ -269,7 +270,7 @@ func (s *Server) handleKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "Такого ключа нет.")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.document(status, expires, pools, k.ID))
+	writeJSON(w, http.StatusOK, s.document(status, expires, pools, k.ID, clientTransports(r)))
 }
 
 func (s *Server) handlePlans(w http.ResponseWriter, _ *http.Request) {
