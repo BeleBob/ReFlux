@@ -3,7 +3,6 @@ package cupsonline
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -381,24 +381,31 @@ func fmtUptime(d time.Duration) string {
 // parseRoomList pulls room uuids out of --url: the packed base64 list the
 // exit node prints, bare or as ?rooms=, or a single ?room=.
 func parseRoomList(rawURL string) []string {
+	ids, _ := parseRooms(rawURL)
+	return ids
+}
+
+// parseRooms is parseRoomList plus whether the list is in the striped format
+// (transport.PackRooms): a single ?room= (a phpbox exit) never is.
+func parseRooms(rawURL string) ([]string, bool) {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return nil
+		return nil, false
 	}
 	if u, err := url.Parse(rawURL); err == nil {
 		q := u.Query()
 		if packed := q.Get("rooms"); packed != "" {
-			if ids, err := unpackRooms(packed); err == nil {
-				return ids
+			if ids, striped, err := transport.UnpackRooms(packed); err == nil {
+				return ids, striped
 			}
 		} else if single := q.Get("room"); single != "" {
-			return []string{single}
+			return []string{single}, false
 		}
 	}
-	if ids, err := unpackRooms(rawURL); err == nil {
-		return ids
+	if ids, striped, err := transport.UnpackRooms(rawURL); err == nil {
+		return ids, striped
 	}
-	return nil
+	return nil, false
 }
 
 func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration) ([]*cupsAuth, error) {
@@ -466,7 +473,7 @@ func CreateRoomList(ctx context.Context) (string, error) {
 	for i, a := range auths {
 		ids[i] = a.roomUUID
 	}
-	return packRooms(ids), nil
+	return transport.PackRooms(ids, stripeNewRooms()), nil
 }
 
 // CreateRoom creates one room and returns its uuid: what a phpbox exit, which
@@ -486,22 +493,18 @@ func CreateRoom(ctx context.Context) (string, error) {
 	return auths[0].roomUUID, nil
 }
 
-func packRooms(ids []string) string {
-	raw, _ := json.Marshal(ids)
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
+// packRooms packs a list in the old, unstriped format.
+func packRooms(ids []string) string { return transport.PackRooms(ids, false) }
 
 func unpackRooms(s string) ([]string, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil {
-		return nil, fmt.Errorf("base64 decode: %w", err)
-	}
-	var ids []string
-	if err := json.Unmarshal(raw, &ids); err != nil {
-		return nil, fmt.Errorf("json decode: %w", err)
-	}
-	return ids, nil
+	ids, _, err := transport.UnpackRooms(s)
+	return ids, err
 }
+
+// stripeNewRooms: rooms an exit or the wizard creates now get the striped
+// list, unless CUPS_STRIPE=0 asks for the old wire (for peers older than
+// 0.7.1).
+func stripeNewRooms() bool { return os.Getenv("CUPS_STRIPE") != "0" }
 
 // sleepCtx waits for d, or less if ctx ends first; it reports whether the
 // whole wait went by.
@@ -570,6 +573,12 @@ type cupsWS struct {
 	recvBufs map[string][]byte
 
 	sendQueue chan []byte
+
+	// pull, when set, makes this room a stripe lane: sendLoop takes pieces
+	// from the stripe instead of sendQueue (see pullLoop). wake says the
+	// stripe has something for it.
+	pull atomic.Pointer[func(max int) [][]byte]
+	wake chan struct{}
 
 	stats *channelStats
 }
@@ -813,6 +822,10 @@ func (w *cupsWS) keepAliveLoop(stop chan struct{}) {
 }
 
 func (w *cupsWS) sendLoop() {
+	if src := w.pull.Load(); src != nil {
+		w.pullLoop(*src)
+		return
+	}
 	batch := make([][]byte, 0, w.config.BatchMaxPackets)
 	totalBytes := 0
 	timer := time.NewTimer(w.config.BatchTimeout)
@@ -891,6 +904,74 @@ func (w *cupsWS) sendBatch(batch [][]byte) error {
 	w.stats.batchesSent.Add(1)
 	return nil
 }
+
+// pullLoop is sendLoop for a stripe lane. Right before each message may leave
+// (SendInterval after the last one) it takes from the stripe as many pieces
+// as fill one message, so what the room cannot carry yet waits in the
+// stripe's queue, where CoDel sees it, and a piece's send time is when it
+// really leaves - the stripe's loss detection and round trip go by it. The
+// pieces are framed like a batch ([len u16][piece]...) and one may run over
+// into the next message; the far side reassembles the stream per sender.
+func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
+	var buf []byte
+	var hdr [2]byte
+	idle := time.NewTimer(time.Hour)
+	defer idle.Stop()
+	for w.ctx.Err() == nil {
+		if !w.connected.Load() {
+			// A new socket starts a new stream on the far side: a piece cut
+			// in half by the drop is lost either way, and the stripe resends.
+			buf = buf[:0]
+			if !sleepCtx(w.ctx, 50*time.Millisecond) {
+				return
+			}
+			continue
+		}
+		if d := w.config.SendInterval - time.Since(w.lastSend); d > 0 {
+			if !sleepCtx(w.ctx, d) {
+				return
+			}
+		}
+		for len(buf) < w.config.MaxMessageData {
+			pieces := src(1)
+			if len(pieces) == 0 {
+				break
+			}
+			for _, p := range pieces {
+				binary.BigEndian.PutUint16(hdr[:], uint16(len(p)))
+				buf = append(buf, hdr[:]...)
+				buf = append(buf, p...)
+				w.stats.packetsSent.Add(1)
+				w.stats.bytesSent.Add(uint64(len(p)))
+			}
+		}
+		if len(buf) == 0 {
+			idle.Reset(lanePollIdle)
+			select {
+			case <-w.ctx.Done():
+				return
+			case <-w.wake:
+			case <-idle.C:
+			}
+			idle.Stop()
+			continue
+		}
+		n := min(len(buf), w.config.MaxMessageData)
+		w.lastSend = time.Now()
+		if err := w.sendChunk(buf[:n]); err != nil {
+			w.stats.dropped.Add(1)
+			utils.Debugf("[CUPS] lane send (%s): %v", w.roomUUID, err)
+			buf = buf[:0]
+			continue
+		}
+		w.stats.batchesSent.Add(1)
+		buf = append(buf[:0], buf[n:]...)
+	}
+}
+
+// lanePollIdle is how long an idle stripe lane sleeps before it asks the
+// stripe again without being woken (acks and resends wake it too).
+const lanePollIdle = 50 * time.Millisecond
 
 // pace waits out the rest of SendInterval since the last message, so the
 // channel never floods the server. Returns errStopped if the transport is
@@ -1130,6 +1211,10 @@ type CupsonlineTransport struct {
 	config    CupsonlineConfig
 	isClient  bool
 	clientErr error
+	// striped: the rooms are the lanes of a stripe (the list says so, or an
+	// exit creates new rooms); otherwise frames go round-robin, the old wire.
+	striped bool
+	stripe  atomic.Pointer[transport.StripedTransport]
 
 	// roomList is the packed list of the rooms this transport keeps
 	// channels to, as clients need it in --url; "" until Start got them.
@@ -1163,7 +1248,10 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	// Both roles accept a room list: the client always needs one, and an
 	// exit node given one re-joins those rooms instead of creating new
 	// ones, so a restart doesn't hand the phone a new string every time.
-	t.roomIDs = parseRoomList(rawURL)
+	t.roomIDs, t.striped = parseRooms(rawURL)
+	if len(t.roomIDs) == 0 && !isClient {
+		t.striped = stripeNewRooms()
+	}
 	if isClient && len(t.roomIDs) == 0 {
 		t.clientErr = fmt.Errorf("client mode: --url must contain base64 room list")
 	}
@@ -1205,6 +1293,7 @@ func (t *CupsonlineTransport) Start() error {
 			config:      t.config,
 			ctx:         t.ctx,
 			sendQueue:   make(chan []byte, t.config.SendQueueSize),
+			wake:        make(chan struct{}, 1),
 			stats:       &channelStats{idx: i, roomUUID: s.id},
 		}
 		// Command ids 1 and 2 are connect and subscribe.
@@ -1219,12 +1308,19 @@ func (t *CupsonlineTransport) Start() error {
 		wss[i] = ws
 	}
 	t.wss = wss
+	if t.striped {
+		// Wires every room in as a lane (sets each one's pull) before the
+		// send loops start, so they come up pulling.
+		if err := t.startStripe(); err != nil {
+			return err
+		}
+	}
 	for _, ws := range wss {
 		go ws.run()
 		go ws.sendLoop()
 	}
 
-	utils.Debugf("[CUPS] transport started: %d channels", len(t.wss))
+	utils.Debugf("[CUPS] transport started: %d channels, striped=%v", len(t.wss), t.striped)
 	t.SetConnected(true)
 
 	go t.statsLoop()
@@ -1282,7 +1378,7 @@ func (t *CupsonlineTransport) enterRooms() ([]roomSlot, error) {
 		ids[i] = a.roomUUID
 	}
 	fmt.Printf("\n=== COPY THIS TO CLIENT ===\n")
-	fmt.Printf("%s\n", packRooms(ids))
+	fmt.Printf("%s\n", transport.PackRooms(ids, t.striped))
 	fmt.Printf("===========================\n")
 	fmt.Printf("Save it and pass it back as --url to reuse these rooms after a restart.\n\n")
 	t.setRoomList(ids)
@@ -1307,7 +1403,7 @@ func (t *CupsonlineTransport) OnRoomList(f func(packed string)) {
 }
 
 func (t *CupsonlineTransport) setRoomList(ids []string) {
-	packed := packRooms(ids)
+	packed := transport.PackRooms(ids, t.striped)
 	t.roomsMu.Lock()
 	changed := packed != t.roomList
 	t.roomList = packed
@@ -1345,6 +1441,9 @@ func (t *CupsonlineTransport) joinListed() []roomSlot {
 func (t *CupsonlineTransport) Stop() error {
 	t.cancel()
 	t.SetConnected(false)
+	if st := t.stripe.Load(); st != nil {
+		_ = st.Stop()
+	}
 	return t.BaseTransport.Stop()
 }
 
@@ -1358,6 +1457,9 @@ func (t *CupsonlineTransport) Stop() error {
 func (t *CupsonlineTransport) Send(data []byte) error {
 	if len(data) > t.config.MaxPayloadBytes {
 		return fmt.Errorf("cups: посылка %d байт больше предела %d", len(data), t.config.MaxPayloadBytes)
+	}
+	if st := t.stripe.Load(); st != nil {
+		return st.Send(data)
 	}
 	ws := t.pickRoom()
 	if ws == nil {

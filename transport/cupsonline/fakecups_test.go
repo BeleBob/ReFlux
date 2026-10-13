@@ -64,6 +64,9 @@ func newFakeCups(t *testing.T) *fakeCups {
 		pageHits:  map[string]int{},
 		failPages: map[string]int{},
 	}
+	// These tests drive the round-robin wire; stripe_test.go turns the
+	// stripe back on for its own.
+	t.Setenv("CUPS_STRIPE", "0")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live-coding/", f.page)
 	mux.HandleFunc("/sub/", f.subToken)
