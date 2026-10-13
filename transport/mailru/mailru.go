@@ -51,6 +51,18 @@ const (
 	keepAliveCursor  = "14;" + keepAlivePayload
 )
 
+// extendSessionMsg tells the document server the editor is in use, as the
+// editor does while its user is active (sdkjs extendSession). The server
+// closes a session it believes idle for an hour (disconnectReason 4002
+// "idle session expires"), whatever the traffic: tunnel cursors do not
+// count, so every connection dropped once an hour and the tunnel paused
+// until it rejoined.
+const extendSessionMsg = `42["message",{"type":"extendSession","idletime":0}]`
+
+// extendSessionEvery is how often a connection renews its session, well
+// inside the hour; a variable for tests.
+var extendSessionEvery = 10 * time.Minute
+
 // saveChangesMessageTemplate — шаблон saveChanges-сообщения в формате
 // веб-клиента Mail.ru: две подстановки %s — UserId и UserShortId в
 // excelAdditionalInfo. Остальные поля (op-ы в changes, анкоры, версия)
@@ -253,6 +265,8 @@ func (t *MailruDocsTransport) Start() error {
 
 	t.baseUserID = randUserID()
 	utils.SafeGo("mailru.keepAlive", t.keepAliveLoop)
+	every := extendSessionEvery
+	utils.SafeGo("mailru.extendSession", func() { t.extendSessionLoop(every) })
 	t.connectToDoc(0)
 
 	return nil
@@ -531,6 +545,28 @@ func (t *MailruDocsTransport) MaxFrame() int { return mailruMaxFrame }
 // keep-alive is relayed to every editor of the document, so one sent
 // regardless of traffic woke both peers' radios every interval: on a
 // phone the cellular modem then never went idle.
+// extendSessionLoop renews the current connection's session every interval
+// (see extendSessionMsg).
+func (t *MailruDocsTransport) extendSessionLoop(every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for t.IsRunning() {
+		select {
+		case <-ticker.C:
+		case <-t.Done():
+			return
+		}
+		t.Mu.Lock()
+		session := t.session
+		t.Mu.Unlock()
+		if session != nil && session.Conn != nil {
+			if err := session.safeWrite(websocket.TextMessage, []byte(extendSessionMsg)); err != nil {
+				utils.Debugf("[M-DOCS] extendSession write error: %v", err)
+			}
+		}
+	}
+}
+
 func (t *MailruDocsTransport) keepAliveLoop() {
 	interval := t.GetConfig().KeepAliveInterval
 	ticker := time.NewTicker(interval)
@@ -582,6 +618,16 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 	if text == "3" {
+		return
+	}
+
+	// The server warns before it closes an idle session; the editor answers
+	// by renewing it.
+	if strings.Contains(text, `"type":"session"`) && strings.Contains(text, `"code":4002`) {
+		utils.Debugf("[M-DOCS] the server says the session is about to expire: renewing it")
+		if session != nil && session.Conn != nil {
+			session.safeWrite(websocket.TextMessage, []byte(extendSessionMsg))
+		}
 		return
 	}
 
