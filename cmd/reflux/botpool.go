@@ -19,18 +19,30 @@ import (
 // in its minute loop, the owner's news about it, the client's new link, and
 // the documents screen with the dead list and its "check again" buttons.
 
-// docsTick runs the automatic document check when it is due. It takes the
+// docsTick runs the automatic document check when it is due, and checks
+// at once the documents their nodes have lost (docwatch.go). It takes the
 // store lock (skipping a busy minute) and b.mu only to tell the news.
 func (b *bot) docsTick(now time.Time) {
 	st, err := b.s.loadDocsState()
-	if err != nil || now.Sub(st.Checked) < docCheckEvery {
+	if err != nil {
+		return
+	}
+	round := now.Sub(st.Checked) >= docCheckEvery
+	off := docsOff(now)
+	if !round && len(off) == 0 {
 		return
 	}
 	unlock, err := b.s.Lock(0)
 	if err != nil {
 		return
 	}
-	changes, changed, err := b.s.checkDocs(now)
+	var changes []docChange
+	var changed bool
+	if round {
+		changes, changed, err = b.s.checkDocs(now) // the lost ones too
+	} else {
+		changes, changed, err = b.s.checkClientDocs(now, off)
+	}
 	if changed {
 		if err := apply(b.s, io.Discard); err != nil {
 			log.Printf("bot: documents: apply: %v", err)
@@ -39,7 +51,7 @@ func (b *bot) docsTick(now time.Time) {
 	if err != nil {
 		log.Printf("bot: documents: %v", err)
 		// Not every minute: the next try waits its turn too.
-		if st, e := b.s.loadDocsState(); e == nil {
+		if st, e := b.s.loadDocsState(); e == nil && round {
 			st.Checked = now
 			b.s.saveDocsState(st)
 		}

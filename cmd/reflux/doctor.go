@@ -351,7 +351,9 @@ func (d *doctor) nodes(s Store) {
 			d.add(levelWarn, "node:"+c.Name, levelOK.String(), "node.nostatus", c.Name)
 			continue
 		}
-		if up := time.Duration(st.UptimeMs) * time.Millisecond; noDocument(st, up) {
+		up := time.Duration(st.UptimeMs) * time.Millisecond
+		observeDocs(c, st, up, now)
+		if noDocument(st, up) {
 			d.fail("node:"+c.Name, "node.nodoc", c.Name, c.Name)
 			continue
 		}

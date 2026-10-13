@@ -91,6 +91,23 @@ type docChange struct {
 // replaces the clients'. It returns the changes and whether nodes need an
 // apply. The caller holds the store lock.
 func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
+	return s.checkTargets(now, nil)
+}
+
+// checkClientDocs checks only these client documents, between the rounds
+// (the fast path, docwatch.go): the verdicts count as a round's would, but
+// the pool, the backups and the round's schedule are left alone. The
+// caller holds the store lock.
+func (s Store) checkClientDocs(now time.Time, urls []string) ([]docChange, bool, error) {
+	if len(urls) == 0 {
+		return nil, false, nil
+	}
+	return s.checkTargets(now, urls)
+}
+
+// checkTargets is checkDocs over every document (only nil) or over the
+// client documents in only.
+func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, error) {
 	clients, err := s.List()
 	if err != nil {
 		return nil, false, err
@@ -106,16 +123,23 @@ func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
 	var targets []target
 	for _, c := range clients {
 		for _, d := range c.Docs() {
-			targets = append(targets, target{d, c.Name})
+			if only == nil || contains(only, d.URL) {
+				targets = append(targets, target{d, c.Name})
+			}
 		}
 	}
-	pool, err := s.poolStatus()
-	if err != nil {
-		return nil, false, err
+	if only != nil && len(targets) == 0 {
+		return nil, false, nil
 	}
-	for _, p := range pool {
-		if p.free() {
-			targets = append(targets, target{p.Doc, ""})
+	if only == nil {
+		pool, err := s.poolStatus()
+		if err != nil {
+			return nil, false, err
+		}
+		for _, p := range pool {
+			if p.free() {
+				targets = append(targets, target{p.Doc, ""})
+			}
 		}
 	}
 	docs := make([]Doc, len(targets))
@@ -154,6 +178,9 @@ func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
 			changed = changed || ch.Err == nil
 		}
 		changes = append(changes, ch)
+	}
+	if only != nil {
+		return changes, changed, s.saveDocsState(st)
 	}
 	st.Checked = now
 	if err := s.saveDocsState(st); err != nil {
