@@ -5,12 +5,24 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-// A document is dead for good when the editor API refuses it or the link
-// cannot edit it; a bad moment of the service is not a verdict.
+// A document is dead for good only when the editor API says it or its
+// owner's account is gone or blocked, or the link cannot edit it. A bad
+// moment of the service is not a verdict: on 2026-10-13 the API answered
+// 408 to a live document, and a check that hit it twice would have taken
+// the client's working document away.
 func TestCheckDocument(t *testing.T) {
+	refuse := func(status int, reason string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			if reason != "" {
+				json.NewEncoder(w).Encode(map[string]string{"error": reason, "error_description": "test"})
+			}
+		}
+	}
 	answer := func(status int, edit bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if status != http.StatusOK {
@@ -36,9 +48,17 @@ func TestCheckDocument(t *testing.T) {
 	}{
 		{"alive", answer(http.StatusOK, true), false, false},
 		{"deleted", answer(http.StatusNotFound, true), true, true},
-		{"bad link", answer(http.StatusBadRequest, true), true, true},
+		{"link not found", refuse(http.StatusBadRequest, "BAD/WEBLINK/URL"), true, true},
+		{"gone", refuse(http.StatusGone, ""), true, true},
+		{"withheld", refuse(http.StatusUnavailableForLegalReasons, ""), true, true},
+		{"blocked", refuse(http.StatusForbidden, "USER/BLOCKED"), true, true},
 		{"read-only link", answer(http.StatusOK, false), true, true},
+		{"bad request", refuse(http.StatusBadRequest, "BAD/REQUEST"), false, true},
+		{"forbidden without a reason", refuse(http.StatusForbidden, ""), false, true},
+		{"timeout", refuse(http.StatusRequestTimeout, ""), false, true},
+		{"conflict", refuse(http.StatusConflict, ""), false, true},
 		{"service trouble", answer(http.StatusBadGateway, true), false, true},
+		{"gateway timeout", refuse(http.StatusGatewayTimeout, ""), false, true},
 		{"rate limited", answer(http.StatusTooManyRequests, true), false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,6 +73,10 @@ func TestCheckDocument(t *testing.T) {
 			}
 			if c.name == "read-only link" && !errors.Is(err, ErrReadOnly) {
 				t.Errorf("err = %v, want ErrReadOnly", err)
+			}
+			// The reason is what the owner sees in the dead list.
+			if c.name == "link not found" && (err == nil || !strings.Contains(err.Error(), "BAD/WEBLINK/URL")) {
+				t.Errorf("err = %v, want the API's reason in it", err)
 			}
 		})
 	}

@@ -16,12 +16,16 @@ import (
 // the pool's free ones (reflux-egress check-docs). A document that fails
 // docDeadAfter checks in a row goes to the dead list (docstate.go); its
 // client gets a free pool document in its place, the node restarts, and
-// the client bot sends the new link. A dead document comes back only when
-// the owner has it checked again and it passes, after a quarantine.
+// the client bot sends the new link. Only an answer that the document or
+// its owner's account is gone or blocked counts (mailru.CheckDocument): a
+// timeout or a refusal without a reason says nothing about the document.
+// A dead document is checked again every deadRecheckEvery and whenever the
+// owner asks; one that opens comes back after a quarantine.
 
 const (
-	docCheckEvery = 15 * time.Minute
-	docDeadAfter  = 2
+	docCheckEvery    = 15 * time.Minute
+	docDeadAfter     = 2
+	deadRecheckEvery = 12 * time.Hour
 )
 
 // runDockerIn runs the docker CLI with stdin; tests replace it.
@@ -87,6 +91,23 @@ type docChange struct {
 // replaces the clients'. It returns the changes and whether nodes need an
 // apply. The caller holds the store lock.
 func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
+	return s.checkTargets(now, nil)
+}
+
+// checkClientDocs checks only these client documents, between the rounds
+// (the fast path, docwatch.go): the verdicts count as a round's would, but
+// the pool, the backups and the round's schedule are left alone. The
+// caller holds the store lock.
+func (s Store) checkClientDocs(now time.Time, urls []string) ([]docChange, bool, error) {
+	if len(urls) == 0 {
+		return nil, false, nil
+	}
+	return s.checkTargets(now, urls)
+}
+
+// checkTargets is checkDocs over every document (only nil) or over the
+// client documents in only.
+func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, error) {
 	clients, err := s.List()
 	if err != nil {
 		return nil, false, err
@@ -102,16 +123,23 @@ func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
 	var targets []target
 	for _, c := range clients {
 		for _, d := range c.Docs() {
-			targets = append(targets, target{d, c.Name})
+			if only == nil || contains(only, d.URL) {
+				targets = append(targets, target{d, c.Name})
+			}
 		}
 	}
-	pool, err := s.poolStatus()
-	if err != nil {
-		return nil, false, err
+	if only != nil && len(targets) == 0 {
+		return nil, false, nil
 	}
-	for _, p := range pool {
-		if p.free() {
-			targets = append(targets, target{p.Doc, ""})
+	if only == nil {
+		pool, err := s.poolStatus()
+		if err != nil {
+			return nil, false, err
+		}
+		for _, p := range pool {
+			if p.free() {
+				targets = append(targets, target{p.Doc, ""})
+			}
 		}
 	}
 	docs := make([]Doc, len(targets))
@@ -150,6 +178,9 @@ func (s Store) checkDocs(now time.Time) ([]docChange, bool, error) {
 			changed = changed || ch.Err == nil
 		}
 		changes = append(changes, ch)
+	}
+	if only != nil {
+		return changes, changed, s.saveDocsState(st)
 	}
 	st.Checked = now
 	if err := s.saveDocsState(st); err != nil {
@@ -269,6 +300,25 @@ func (s Store) recheckDead(urls []string, now time.Time) (back, still int, err e
 		return 0, still, err
 	}
 	return len(revived), still, s.quarantine(revived, "", now)
+}
+
+// recheckDue checks again the dead documents last checked deadRecheckEvery
+// ago or earlier (recheckDead). The caller holds the store lock.
+func (s Store) recheckDue(now time.Time) (back, still int, err error) {
+	st, err := s.loadDocsState()
+	if err != nil {
+		return 0, 0, err
+	}
+	var due []string
+	for _, d := range st.deadDocs() {
+		if now.Sub(d.Checked) >= deadRecheckEvery {
+			due = append(due, d.URL)
+		}
+	}
+	if len(due) == 0 {
+		return 0, 0, nil
+	}
+	return s.recheckDead(due, now)
 }
 
 func contains(list []string, s string) bool {
