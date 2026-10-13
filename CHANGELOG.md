@@ -5,6 +5,18 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- Merged p1neappleXpress 0.6.0 and 0.6.1 (sections below): the Mail.ru carrier
+  now carries the tunnel over the document's chat channel (the Mail.ru server
+  closes the socket on synthetic cursor writes, so the old path is dead), the
+  scripted Mail.ru carrier connects again, and a node can keep its `.flux`
+  transports updated and self-healing (`--script-auto-update`). The fork's
+  fix that unlocks the document when a second editor joins stays on the new
+  path. Client and node must both run this version for Mail.ru.
+- The «official» script the node wizard offers is pinned at
+  p1neappleXpress c9076e7 (node-v1.3.1).
+
 ## [0.8.0] - 2026-10-11 (meepo161/OpenFlux)
 
 ### Added
@@ -187,6 +199,36 @@ this fork.
   script following p1neappleXpress/OpenFlux (`provision.PinnedFor`).
 
 ## [0.4.2] - 2026-10-07 (p1neappleXpress/OpenFlux)
+## [0.6.1] - 2026-10-13 (p1neappleXpress/OpenFlux)
+
+### Fixed
+
+- **The Mail.ru carrier dropped every connection with "access deny" (code 4004).** The current Mail.ru editor
+  server (R7/OnlyOffice 2026.2.1.2268) validates cursor and `saveChanges` writes against the live document
+  model and closes the socket on any synthetic one, so the transport's old trick of stuffing tunnel bytes into
+  the cursor field stopped working entirely. The data path now rides the document's **chat channel**
+  (`type:"message"`), which the server relays verbatim to the other participant without validating it against
+  the document: tunnelled bytes are tagged and base64-encoded there, the server's echo of our own chat and a
+  human's chat are skipped on receive, and the old cursor keep-alive and `saveChanges` "editor activity" are
+  gone (the Socket.IO ping/pong keeps the socket up). Both the native transport and its scripted (`.flux`)
+  port carry data this way now.
+- **The scripted Mail.ru carrier could not connect at all (HTTP 409 on the WebSocket upgrade).** `ws.open`
+  now offers permessage-deflate when a script asks for it (`{compress: true}`) — Mail.ru's nginx rejects the
+  upgrade without it — and sends `Accept-Language`, the same two fixes the native transport already carried.
+
+## [0.6.0] - 2026-10-12 (p1neappleXpress/OpenFlux)
+
+### Added
+
+- **A node can keep its scripted (`.flux`) transports current and self-heal, with no restart.** The new
+  `--script-auto-update` flag turns on a headless updater — the counterpart of the app's updater for a CLI or
+  exit node that has no GUI. It checks each `.flux` carrier's author feed on the usual schedule and installs
+  an update when the core vouches for it (first-party key, same wire); and when a carrier keeps failing to
+  connect it walks a recovery ladder: check for a newer package now, then roll back to the previous one, then
+  fall back to the native transport of the same service. An applied or rolled-back package is **hot-swapped**
+  into the live session, so only that one carrier blinks while it reconnects — the handshake, the other
+  carriers and the packet flow stay up. `--script-update-channel` selects `stable` or `nightly`. Off by
+  default, so node behaviour is unchanged unless asked for.
 
 ## [0.5.1] - 2026-10-11
 
