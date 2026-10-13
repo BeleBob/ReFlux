@@ -541,6 +541,10 @@ DEPRECATED (removed in v2)
 		if v, ok := confValue(conf.Interface, "Bonding"); ok && !setFlags["bonding"] {
 			*bondingFlag = confBool(v, false)
 		}
+		// A node channel with .flux carriers keeps them current (node-install.sh writes it).
+		if v, ok := confValue(conf.Interface, "ScriptAutoUpdate"); ok && !setFlags["script-auto-update"] {
+			*scriptAutoUpdate = confBool(v, false)
+		}
 		if v, ok := confValue(conf.Interface, "Sensitive"); ok && !setFlags["sensitive"] && !setFlags["sensetive"] {
 			*sensitive = confBool(v, *sensitive)
 		}

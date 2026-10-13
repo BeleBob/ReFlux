@@ -48,7 +48,12 @@
 # (vyandex= or its old name url=: a Yandex document; yandex=: a Yandex
 # document through the older Yandex Docs transport; boards=: a Yandex board
 # open to guests; mailru=: a Mail.ru
-# public document; cupsonline=: the packed room list), autoupdate=yes|no,
+# public document; cupsonline=: the packed room list; telemost=: a Yandex
+# Telemost conference; avito=: Avito Code's packed room list; script=: a .flux
+# JS transport, one line each, "ID,PUBKEY,PARAMETER,SETTINGS,PACKAGE": the
+# package id, the author's key (hex), the primary parameter (unpadded
+# base64url), the settings its wizard saved, the .flux (base64; empty keeps the
+# one on the server)), autoupdate=yes|no,
 # and optionally cookies: the channel's Yandex sign-in as the core's cookie store JSON,
 # base64-encoded. It goes to /var/lib/openflux-node/<channel>/cookies.json
 # (0600, owned by the node user) and is never printed. apply and remove
@@ -271,6 +276,9 @@ pick_port() {
 # ---- input ------------------------------------------------------------------
 
 CHANNEL=""; URL=""; YANDEX=""; MAILRU=""; BOARDS=""; CUPS=""; KEY=""; PORT=""; COOKIES=""; AUTOUPDATE=""; MODE=""
+TELEMOST=""; AVITO=""; SCRIPTS=""
+NL='
+'
 
 # read_config [FILE]: reads stdin, or FILE and then deletes it.
 read_config() {
@@ -289,6 +297,9 @@ read_config() {
             mailru=*) MAILRU=${line#mailru=} ;;
             boards=*) BOARDS=${line#boards=} ;;
             cupsonline=*) CUPS=${line#cupsonline=} ;;
+            telemost=*) TELEMOST=${line#telemost=} ;;
+            avito=*) AVITO=${line#avito=} ;;
+            script=*) SCRIPTS="$SCRIPTS${line#script=}$NL" ;;
             key=*) KEY=${line#key=} ;;
             port=*) PORT=${line#port=} ;;
             cookies=*) COOKIES=${line#cookies=} ;;
@@ -314,6 +325,9 @@ valid_boards() {
 valid_mailru() {
     printf '%s' "$1" | grep -Eq '^https://cloud\.mail\.ru/public/[A-Za-z0-9_-]{2,64}/[A-Za-z0-9_-]{2,128}$'
 }
+valid_telemost() {
+    printf '%s' "$1" | grep -Eq '^https://telemost\.yandex\.ru/j/[0-9]{6,32}$'
+}
 # The cups.online room list: base64url of a JSON list of room ids.
 valid_rooms() { [ ${#1} -ge 8 ] && [ ${#1} -le 4096 ] && printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_-]+$'; }
 valid_port() {
@@ -327,10 +341,56 @@ check_transports() {
     [ -z "$MAILRU" ] || valid_mailru "$MAILRU" || fail input "ссылка Mail.ru должна быть вида https://cloud.mail.ru/public/..."
     [ -z "$BOARDS" ] || valid_boards "$BOARDS" || fail input "ссылка на доску должна быть вида https://boards.yandex.ru/whiteboard/?hash=..."
     [ -z "$CUPS" ] || valid_rooms "$CUPS" || fail input "неверный список комнат cups.online"
+    [ -z "$TELEMOST" ] || valid_telemost "$TELEMOST" || fail input "ссылка на Телемост должна быть вида https://telemost.yandex.ru/j/..."
+    [ -z "$AVITO" ] || valid_rooms "$AVITO" || fail input "неверный список комнат Avito"
+    check_scripts
     [ -z "$COOKIES" ] || [ -n "$URL" ] || [ -n "$YANDEX" ] || fail input "вход в Яндекс нужен только каналу с документом Яндекса"
     case "$AUTOUPDATE" in ""|yes|no) ;; *) fail input "autoupdate: yes или no" ;; esac
     case "$MODE" in ""|l4|l3) ;; *) fail input "режим ноды: l4 или l3" ;; esac
 }
+
+# b64url_decode TEXT: unpadded base64url to what it encodes.
+b64url_decode() {
+    b=$(printf '%s' "$1" | tr '_-' '/+')
+    case $((${#b} % 4)) in 2) b="$b==" ;; 3) b="$b=" ;; esac
+    printf '%s' "$b" | base64 -d 2>/dev/null
+}
+
+# script_field LINE N: the Nth field of a script= line.
+script_field() { printf '%s' "$1" | cut -d, -f"$2"; }
+
+# check_scripts: each script= line is a package id once, the author's key, a
+# parameter that fits a node.conf line, settings and a package in base64.
+check_scripts() {
+    seen=" "
+    set -f
+    old_ifs=$IFS
+    IFS=$NL
+    for line in $SCRIPTS; do
+        IFS=$old_ifs
+        id=$(script_field "$line" 1)
+        printf '%s' "$id" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,31}$' || fail input "JS-транспорт: неверный идентификатор пакета"
+        case "$seen" in *" $id "*) fail input "JS-транспорт $id выбран дважды" ;; esac
+        seen="$seen$id "
+        valid_key "$(script_field "$line" 2)" || fail input "JS-транспорт $id: нужен ключ автора (64 hex)"
+        param=$(script_field "$line" 3)
+        # Lengths by ${#}: a large {m,n} makes some greps blow up compiling the pattern.
+        # grep sees no line in an empty value: those are checked by -z.
+        [ -z "$param" ] || { [ ${#param} -le 5600 ] && printf '%s' "$param" | grep -Eq '^[A-Za-z0-9_-]+$'; } || fail input "JS-транспорт $id: неверный параметр"
+        value=$(b64url_decode "$param")
+        case "$value" in *"#"*|*";"*|*"$NL"*|*"$(printf '\r')"*) fail input "JS-транспорт $id: параметр не помещается в node.conf" ;; esac
+        settings=$(script_field "$line" 4)
+        [ -z "$settings" ] || { [ ${#settings} -le 16384 ] && printf '%s' "$settings" | grep -Eq '^[A-Za-z0-9+/_=-]+$'; } || fail input "JS-транспорт $id: неверные настройки"
+        pkg=$(script_field "$line" 5)
+        [ -z "$pkg" ] || printf '%s' "$pkg" | grep -Eq '^[A-Za-z0-9+/=]+$' || fail input "JS-транспорт $id: пакет не в base64"
+        IFS=$NL
+    done
+    IFS=$old_ifs
+    set +f
+}
+
+# script_ids: the packages of the script= lines, one per line, in order.
+script_ids() { printf '%s' "$SCRIPTS" | cut -d, -f1; }
 
 # transport_names: the channel's transports for people, primary first.
 transport_names() {
@@ -338,8 +398,11 @@ transport_names() {
     [ -n "$URL" ] && names="Яндекс Документ"
     [ -n "$YANDEX" ] && names="${names:+$names, }Yandex Docs"
     [ -n "$MAILRU" ] && names="${names:+$names, }Mail.ru Документ"
+    [ -n "$TELEMOST" ] && names="${names:+$names, }Яндекс Телемост"
     [ -n "$BOARDS" ] && names="${names:+$names, }Яндекс Доска"
+    [ -n "$AVITO" ] && names="${names:+$names, }Avito"
     [ -n "$CUPS" ] && names="${names:+$names, }cups.online"
+    for id in $(script_ids); do names="${names:+$names, }JS: $id"; done
     printf '%s' "$names"
 }
 
@@ -350,7 +413,16 @@ session_context() {
     if [ -n "$URL" ]; then printf '%s' "$URL"
     elif [ -n "$YANDEX" ]; then printf '%s' "$YANDEX"
     elif [ -n "$MAILRU" ]; then printf '%s' "$MAILRU"
-    elif [ -n "$BOARDS" ]; then printf '%s' "$BOARDS"; fi
+    elif [ -n "$TELEMOST" ]; then printf '%s' "$TELEMOST"
+    elif [ -n "$BOARDS" ]; then printf '%s' "$BOARDS"
+    elif [ -n "$AVITO" ]; then printf '%s' "$AVITO"
+    else
+        # The scripts share one priority: the first with a parameter, as the core picks.
+        for line in $SCRIPTS; do
+            value=$(b64url_decode "$(script_field "$line" 3)")
+            [ -n "$value" ] && { printf '%s' "$value"; break; }
+        done
+    fi
 }
 
 # write_cookies: decodes COOKIES into the channel's cookie store, which the
@@ -431,6 +503,7 @@ cmd_plan() {
         l3_ready plan
         set -- "$@" "Режим l3: каналу даётся CAP_NET_RAW, а пока он работает, исходящие TCP-RST ядра с адреса сервера отбрасываются правилом iptables. Это касается и других сервисов на этом адресе"
     fi
+    [ -n "$SCRIPTS" ] && set -- "$@" "Положить пакеты JS-транспортов в $STATE_ROOT/$CHANNEL/scripts: нода сама обновляет их из каталога транспортов"
     names=$(transport_names)
     if [ -n "$names" ]; then
         set -- "$@" "Запустить openflux-node@$CHANNEL: $names и direct на порту $PORT/tcp (резерв)"
@@ -710,12 +783,90 @@ EOF
     # set-transports keeps the channel's context: links already handed out were made with it.
     if [ "${CONTEXT_KEEP:-}" = 1 ]; then context=$KEPT_CONTEXT; else context=$(session_context); fi
     [ -n "$context" ] && printf 'URL = %s\n' "$context"
+    [ -n "$SCRIPTS" ] && printf 'ScriptAutoUpdate = yes\n'
     [ -n "$URL" ] && printf '\n[Transport vyandex]\nType = vyandex\nPriority = 100\nURL = %s\n' "$URL"
     [ -n "$YANDEX" ] && printf '\n[Transport yandex]\nType = yandex\nPriority = 95\nURL = %s\n' "$YANDEX"
     [ -n "$MAILRU" ] && printf '\n[Transport mailru]\nType = mailru\nPriority = 90\nURL = %s\n' "$MAILRU"
+    [ -n "$TELEMOST" ] && printf '\n[Transport telemost]\nType = telemost\nPriority = 85\nURL = %s\n' "$TELEMOST"
     [ -n "$BOARDS" ] && printf '\n[Transport boards]\nType = boards\nPriority = 80\nURL = %s\n' "$BOARDS"
+    [ -n "$AVITO" ] && printf '\n[Transport avito]\nType = avito\nPriority = 75\nURL = %s\n' "$AVITO"
     [ -n "$CUPS" ] && printf '\n[Transport cupsonline]\nType = cupsonline\nPriority = 70\nURL = %s\n' "$CUPS"
+    write_script_sections
     printf '\n[Transport direct]\nType = direct\nPriority = 50\nListen = 0.0.0.0:%s\n' "$PORT"
+}
+
+# write_script_sections: a [Transport script], [Transport script-2], ... per
+# script= line, named as the apps name them, each running its package from
+# the channel's state directory, where the node's updater keeps it current.
+write_script_sections() {
+    n=0
+    set -f
+    old_ifs=$IFS
+    IFS=$NL
+    for line in $SCRIPTS; do
+        IFS=$old_ifs
+        n=$((n + 1))
+        name=script
+        [ "$n" -gt 1 ] && name="script-$n"
+        id=$(script_field "$line" 1)
+        printf '\n[Transport %s]\nType = script\nPriority = 60\nName = %s\nPath = %s\nPubkey = %s\n' \
+            "$name" "$id" "$STATE_ROOT/$CHANNEL/scripts/$id.flux" "$(script_field "$line" 2)"
+        value=$(b64url_decode "$(script_field "$line" 3)")
+        [ -n "$value" ] && printf 'URL = %s\n' "$value"
+        settings=$(script_field "$line" 4)
+        [ -n "$settings" ] && printf 'Params = %s\n' "$settings"
+        IFS=$NL
+    done
+    IFS=$old_ifs
+    set +f
+}
+
+# install_scripts: writes the packages the config carries into the channel's
+# state directory (owned by the node user, so its updater can replace them).
+# A line without a package keeps the file already there. Returns 1 with
+# SCRIPT_ERROR set when it cannot.
+install_scripts() {
+    sdir="$STATE_ROOT/$CHANNEL/scripts"
+    [ -n "$SCRIPTS" ] || return 0
+    mkdir -p "$sdir" || { SCRIPT_ERROR="не удалось создать $sdir"; return 1; }
+    set -f
+    old_ifs=$IFS
+    IFS=$NL
+    for line in $SCRIPTS; do
+        IFS=$old_ifs
+        id=$(script_field "$line" 1)
+        pkg=$(script_field "$line" 5)
+        if [ -n "$pkg" ]; then
+            if ! printf '%s' "$pkg" | base64 -d > "$sdir/.$id.flux.tmp" 2>/dev/null || [ ! -s "$sdir/.$id.flux.tmp" ]; then
+                rm -f "$sdir/.$id.flux.tmp"
+                SCRIPT_ERROR="пакет JS-транспорта $id не распаковался"
+                IFS=$old_ifs; set +f
+                return 1
+            fi
+            mv -f "$sdir/.$id.flux.tmp" "$sdir/$id.flux"
+        elif [ ! -s "$sdir/$id.flux" ]; then
+            SCRIPT_ERROR="пакета JS-транспорта $id нет на сервере: передайте его"
+            IFS=$old_ifs; set +f
+            return 1
+        fi
+        IFS=$NL
+    done
+    IFS=$old_ifs
+    set +f
+    chown -R "$NODE_USER:$NODE_USER" "$sdir" && chmod 0750 "$sdir"
+}
+
+# prune_scripts: removes packages the channel no longer runs.
+prune_scripts() {
+    sdir="$STATE_ROOT/$CHANNEL/scripts"
+    [ -d "$sdir" ] || return 0
+    keep=" $(script_ids | tr '\n' ' ') "
+    for f in "$sdir"/*.flux; do
+        [ -e "$f" ] || continue
+        id=${f##*/}
+        id=${id%.flux}
+        case "$keep" in *" $id "*) ;; *) rm -f "$f" ;; esac
+    done
 }
 
 cmd_apply() {
@@ -767,6 +918,7 @@ cmd_apply() {
     if [ -n "$COOKIES" ]; then
         write_cookies || apply_fail cookies "не удалось сохранить вход в Яндекс на сервере"
     fi
+    install_scripts || apply_fail scripts "$SCRIPT_ERROR"
 
     if [ ! -f "$UNIT_FILE" ]; then
         write_unit
@@ -1054,7 +1206,7 @@ cmd_set_transports() {
     valid_port "$PORT" || fail set-transports "порт канала $CHANNEL не читается"
     printf '%s\n' "$PORT" > "$dir/port" && chown "root:$NODE_USER" "$dir/port" && chmod 0644 "$dir/port"
     check_transports
-    [ -n "$URL$YANDEX$MAILRU$BOARDS$CUPS" ] || fail input "нужен хотя бы один документ: без него канал не нужен"
+    [ -n "$URL$YANDEX$MAILRU$BOARDS$CUPS$TELEMOST$AVITO$SCRIPTS" ] || fail input "нужен хотя бы один документ: без него канал не нужен"
 
     # The context is the URL line before the first [Transport] section.
     KEPT_CONTEXT=$(awk '/^\[/{exit} /^URL = /{sub(/^URL = /,""); print; exit}' "$dir/node.conf")
@@ -1067,6 +1219,10 @@ cmd_set_transports() {
     write_node_conf > "$tmp" && chown "root:$NODE_USER" "$tmp" && chmod 0640 "$tmp" && mv -f "$tmp" "$dir/node.conf" \
         || { rm -f "$tmp"; fail set-transports "не удалось записать node.conf"; }
     [ -n "$COOKIES" ] && { write_cookies || fail set-transports "не удалось сохранить вход в Яндекс на сервере"; }
+    if ! install_scripts; then
+        set_transports_rollback
+        fail set-transports "$SCRIPT_ERROR"
+    fi
     if [ "$MODE" != "$PREV_MODE" ]; then
         set_channel_mode "$CHANNEL" "$MODE"
         systemctl daemon-reload >/dev/null 2>&1
@@ -1083,6 +1239,7 @@ cmd_set_transports() {
         fail set-transports "нода не поднялась с новыми транспортами, вернули прежние: $logs"
     fi
     rm -f "$dir/node.conf.prev"
+    prune_scripts
     printf '{"ok":true,"channel":"%s","transports":"%s","mode":"%s"}\n' "$CHANNEL" "$(json_escape "$(transport_names)")" "$MODE"
 }
 
@@ -1105,17 +1262,25 @@ cmd_show() {
         "$CHANNEL" "$(json_escape "$state")" "${port:-0}" "$(json_escape "$context")" "$(channel_mode "$CHANNEL")" "$key"
     first=1
     awk '
-        function flush() { if (type != "") print type " " url; type = ""; url = "" }
-        /^\[Transport /       { flush(); section = 1; next }
-        /^\[/                 { flush(); section = 0; next }
-        section && /^Type = / { sub(/^Type = /, ""); type = $0; next }
-        section && /^URL = /  { sub(/^URL = /, ""); url = $0; next }
-        END                   { flush() }
-    ' "$dir/node.conf" | while read -r type url; do
+        function flush() { if (type != "") print type "|" url "|" name "|" pubkey "|" params; type = ""; url = ""; name = ""; pubkey = ""; params = "" }
+        /^\[Transport /          { flush(); section = 1; next }
+        /^\[/                    { flush(); section = 0; next }
+        section && /^Type = /    { sub(/^Type = /, ""); type = $0; next }
+        section && /^URL = /     { sub(/^URL = /, ""); url = $0; next }
+        section && /^Name = /    { sub(/^Name = /, ""); name = $0; next }
+        section && /^Pubkey = /  { sub(/^Pubkey = /, ""); pubkey = $0; next }
+        section && /^Params = /  { sub(/^Params = /, ""); params = $0; next }
+        END                      { flush() }
+    ' "$dir/node.conf" | while IFS='|' read -r type url name pubkey params; do
         [ "$type" = direct ] && continue
         [ "$first" = 1 ] || printf ','
         first=0
-        printf '{"type":"%s","url":"%s"}' "$(json_escape "$type")" "$(json_escape "$url")"
+        if [ "$type" = script ]; then
+            printf '{"type":"script","url":"%s","script":"%s","pubkey":"%s","params":"%s"}' \
+                "$(json_escape "$url")" "$(json_escape "$name")" "$(json_escape "$pubkey")" "$(json_escape "$params")"
+        else
+            printf '{"type":"%s","url":"%s"}' "$(json_escape "$type")" "$(json_escape "$url")"
+        fi
     done
     printf ']}\n'
 }

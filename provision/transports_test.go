@@ -22,7 +22,7 @@ func TestCheckTransportsCleansAndOrders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []ChannelTransport{{"vyandex", testVolga}, {"mailru", testMailru}, {"cupsonline", testRooms}}
+	want := []ChannelTransport{{Type: "vyandex", URL: testVolga}, {Type: "mailru", URL: testMailru}, {Type: "cupsonline", URL: testRooms}}
 	if len(got) != len(want) {
 		t.Fatalf("got %+v", got)
 	}
@@ -38,18 +38,18 @@ func TestCheckTransportsCleansAndOrders(t *testing.T) {
 
 func TestCheckTransportsRefuses(t *testing.T) {
 	for name, ts := range map[string][]ChannelTransport{
-		"twice":        {{"vyandex", testVolga}, {"vyandex", testVolga}},
-		"board hash":   {{"boards", "https://boards.yandex.ru/whiteboard/?hash=1"}},
-		"direct":       {{"direct", "1.2.3.4:5"}},
-		"max":          {{"oneme", "token"}},
-		"volga link":   {{"vyandex", "https://disk.yandex.ru/i/abc"}},
-		"mailru link":  {{"mailru", "https://cloud.mail.ru/home/doc.docx"}},
-		"mailru other": {{"mailru", "https://evil.example/public/a/b"}},
-		"board host":   {{"boards", "https://evil.example/whiteboard/?hash=820d6571111dffeb9e85de65ccfc880a"}},
-		"yandex other": {{"yandex", "https://evil.example/edit/d/AbCdEfGhIjKlMnOpQrStUv"}},
-		"rooms":        {{"cupsonline", "not base64!"}},
-		"no rooms":     {{"cupsonline", ""}},
-		"newline":      {{"mailru", testMailru + "\nkey=0"}},
+		"twice":        {{Type: "vyandex", URL: testVolga}, {Type: "vyandex", URL: testVolga}},
+		"board hash":   {{Type: "boards", URL: "https://boards.yandex.ru/whiteboard/?hash=1"}},
+		"direct":       {{Type: "direct", URL: "1.2.3.4:5"}},
+		"max":          {{Type: "oneme", URL: "token"}},
+		"volga link":   {{Type: "vyandex", URL: "https://disk.yandex.ru/i/abc"}},
+		"mailru link":  {{Type: "mailru", URL: "https://cloud.mail.ru/home/doc.docx"}},
+		"mailru other": {{Type: "mailru", URL: "https://evil.example/public/a/b"}},
+		"board host":   {{Type: "boards", URL: "https://evil.example/whiteboard/?hash=820d6571111dffeb9e85de65ccfc880a"}},
+		"yandex other": {{Type: "yandex", URL: "https://evil.example/edit/d/AbCdEfGhIjKlMnOpQrStUv"}},
+		"rooms":        {{Type: "cupsonline", URL: "not base64!"}},
+		"no rooms":     {{Type: "cupsonline", URL: ""}},
+		"newline":      {{Type: "mailru", URL: testMailru + "\nkey=0"}},
 	} {
 		if _, err := CheckTransports(ts); err == nil {
 			t.Errorf("%s: accepted %+v", name, ts)
@@ -62,9 +62,9 @@ func TestSessionContextPicksTheTopDocument(t *testing.T) {
 		ts   []ChannelTransport
 		want string
 	}{
-		{[]ChannelTransport{{"vyandex", testVolga}, {"mailru", testMailru}}, testVolga},
-		{[]ChannelTransport{{"cupsonline", testRooms}, {"mailru", testMailru}}, testMailru},
-		{[]ChannelTransport{{"cupsonline", testRooms}}, "http://#"},
+		{[]ChannelTransport{{Type: "vyandex", URL: testVolga}, {Type: "mailru", URL: testMailru}}, testVolga},
+		{[]ChannelTransport{{Type: "cupsonline", URL: testRooms}, {Type: "mailru", URL: testMailru}}, testMailru},
+		{[]ChannelTransport{{Type: "cupsonline", URL: testRooms}}, "http://#"},
 		{nil, "http://#"},
 	} {
 		if got := SessionContext(c.ts); got != c.want {
@@ -75,7 +75,7 @@ func TestSessionContextPicksTheTopDocument(t *testing.T) {
 
 func TestShareLinkCarriesTheChosenTransports(t *testing.T) {
 	key := strings.Repeat("ab", 32)
-	link, err := ShareLink("Нода", key, "203.0.113.5", 8445, []ChannelTransport{{"cupsonline", testRooms}, {"mailru", testMailru}})
+	link, err := ShareLink("Нода", key, "203.0.113.5", 8445, []ChannelTransport{{Type: "cupsonline", URL: testRooms}, {Type: "mailru", URL: testMailru}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestShareLinkCarriesTheChosenTransports(t *testing.T) {
 }
 
 func TestChannelConfigLines(t *testing.T) {
-	ch := Channel{ID: "of-abc", Transports: []ChannelTransport{{"mailru", testMailru}, {"vyandex", testVolga}}, AutoUpdate: true}
+	ch := Channel{ID: "of-abc", Transports: []ChannelTransport{{Type: "mailru", URL: testMailru}, {Type: "vyandex", URL: testVolga}}, AutoUpdate: true}
 	cfg, err := ch.config()
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestChannelConfigLines(t *testing.T) {
 	if cfg, _ = ch.config(); cfg != "channel=of-abc\nport=20001\nautoupdate=no\n" {
 		t.Fatalf("direct only config:\n%s", cfg)
 	}
-	ch.Transports = []ChannelTransport{{"mailru", testMailru + "\nkey=" + strings.Repeat("0", 64)}}
+	ch.Transports = []ChannelTransport{{Type: "mailru", URL: testMailru + "\nkey=" + strings.Repeat("0", 64)}}
 	if _, err := ch.config(); err == nil {
 		t.Fatal("a line break in a link must not reach the script")
 	}
@@ -158,17 +158,17 @@ func TestCheckTransportsYandexDocsAndBoards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []ChannelTransport{{"vyandex", testVolga}, {"yandex", testVolga}, {"mailru", testMailru}, {"boards", board}, {"cupsonline", testRooms}}
+	want := []ChannelTransport{{Type: "vyandex", URL: testVolga}, {Type: "yandex", URL: testVolga}, {Type: "mailru", URL: testMailru}, {Type: "boards", URL: board}, {Type: "cupsonline", URL: testRooms}}
 	for i := range want {
 		if i >= len(got) || got[i] != want[i] {
 			t.Fatalf("got %+v, want %+v", got, want)
 		}
 	}
-	if _, err := CheckTransports([]ChannelTransport{{"yandex", "https://disk.yandex.ru/i/AbCdEf123"}}); err != nil {
+	if _, err := CheckTransports([]ChannelTransport{{Type: "yandex", URL: "https://disk.yandex.ru/i/AbCdEf123"}}); err != nil {
 		t.Fatalf("public disk link: %v", err)
 	}
 	// A channel of a board alone derives its context from the board.
-	if c := SessionContext([]ChannelTransport{{"boards", board}}); c != board {
+	if c := SessionContext([]ChannelTransport{{Type: "boards", URL: board}}); c != board {
 		t.Fatalf("board context %q", c)
 	}
 }
@@ -178,7 +178,7 @@ func TestCheckTransportsYandexDocsAndBoards(t *testing.T) {
 func TestShareLinkContextKeepsTheChannelContext(t *testing.T) {
 	key := strings.Repeat("cd", 32)
 	board := "https://boards.yandex.ru/whiteboard/?hash=0123456789abcdef0123456789abcdef"
-	ts := []ChannelTransport{{"boards", board}, {"cupsonline", testRooms}}
+	ts := []ChannelTransport{{Type: "boards", URL: board}, {Type: "cupsonline", URL: testRooms}}
 	link, err := ShareLinkContext("Нода", key, "203.0.113.5", 8445, ts, testMailru)
 	if err != nil {
 		t.Fatal(err)
@@ -209,14 +209,14 @@ func TestSetTransportsChecksBeforeTheServer(t *testing.T) {
 	if err := c.SetTransports("of-abc123", nil, "", ""); err == nil || !strings.Contains(err.Error(), "хотя бы один документ") {
 		t.Fatalf("no documents: %v", err)
 	}
-	if err := c.SetTransports("of-abc123", []ChannelTransport{{"mailru", "https://example.com/x"}}, "", ""); err == nil || !strings.Contains(err.Error(), "Mail.ru") {
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{Type: "mailru", URL: "https://example.com/x"}}, "", ""); err == nil || !strings.Contains(err.Error(), "Mail.ru") {
 		t.Fatalf("bad link: %v", err)
 	}
-	if err := c.SetTransports("of-abc123", []ChannelTransport{{"direct", "x"}}, "", ""); err == nil {
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{Type: "direct", URL: "x"}}, "", ""); err == nil {
 		t.Fatal("direct is always there and cannot be chosen")
 	}
 	// Valid documents reach the script, which this connection has not fetched.
-	if err := c.SetTransports("of-abc123", []ChannelTransport{{"mailru", testMailru}}, "", ""); err == nil || !strings.Contains(err.Error(), "скрипт установки не загружен") {
+	if err := c.SetTransports("of-abc123", []ChannelTransport{{Type: "mailru", URL: testMailru}}, "", ""); err == nil || !strings.Contains(err.Error(), "скрипт установки не загружен") {
 		t.Fatalf("valid documents: %v", err)
 	}
 }
