@@ -191,7 +191,11 @@ func TestStripedRoomsAddUp(t *testing.T) {
 		newFakeCups(t)
 		cfg := fastConfig()
 		cfg.NumRooms = rooms
-		cfg.SendInterval = 4 * time.Millisecond // 8 KB / 4 ms = 2 MB/s a room
+		// 8 KB / 8 ms = 1 MB/s a room: each room's own clock is the limit,
+		// not the CPU (three rooms at 12 KB / 4 ms is ~9 MB/s of cursor JSON
+		// in one process, which a CI runner can't carry).
+		cfg.MaxMessageData = 8192
+		cfg.SendInterval = 8 * time.Millisecond
 		exit, client := startStripedPair(t, cfg)
 		const n = 250 // ~3.7 MB
 		var got atomic.Int64
