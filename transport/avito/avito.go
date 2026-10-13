@@ -335,7 +335,7 @@ func (w *avitoWS) connectAndServe() error {
 	c := &avitoConn{done: make(chan struct{}), ack: make(chan map[string]interface{}, 1)}
 	readDone := make(chan error, 1)
 	go func() {
-		readDone <- w.readLoop(c)
+		readDone <- w.readLoop(conn, c)
 	}()
 
 	sendDone := make(chan error, 1)
@@ -343,9 +343,10 @@ func (w *avitoWS) connectAndServe() error {
 		sendDone <- w.sendLoop(c)
 	}()
 
-	sendEnded := false
+	readEnded, sendEnded := false, false
 	select {
 	case err = <-readDone:
+		readEnded = true
 	case err = <-sendDone:
 		sendEnded = true
 	case <-w.ctx.Done():
@@ -356,6 +357,12 @@ func (w *avitoWS) connectAndServe() error {
 	conn.Close()
 	if !sendEnded {
 		<-sendDone
+	}
+	// The reader too: the deferred w.conn = nil must not land under it, and
+	// it must never go on to read the next socket. conn.Close above makes
+	// its ReadMessage fail at once.
+	if !readEnded {
+		<-readDone
 	}
 	return err
 }
@@ -368,11 +375,12 @@ type avitoConn struct {
 }
 
 // readLoop is the sole reader on the WebSocket. It routes ack replies to
-// the sendLoop's ackCh and delivers peer ops to onData.
-func (w *avitoWS) readLoop(c *avitoConn) error {
+// the sendLoop's ackCh and delivers peer ops to onData. It reads its own
+// socket, not w.conn, which the next connection replaces (or nils).
+func (w *avitoWS) readLoop(conn *websocket.Conn, c *avitoConn) error {
 	for {
-		w.conn.SetReadDeadline(time.Now().Add(w.config.WSReadTimeout))
-		_, raw, err := w.conn.ReadMessage()
+		conn.SetReadDeadline(time.Now().Add(w.config.WSReadTimeout))
+		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err
 		}
