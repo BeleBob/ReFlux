@@ -69,7 +69,13 @@ func expectInOrder(t *testing.T, p *peer, n int, within time.Duration) {
 // It gives up when the receiving side has.
 func sendWindowed(t *testing.T, from *peer, n int, received *atomic.Int64, rxDone <-chan struct{}) {
 	t.Helper()
-	const window = 192 << 10
+	window := int64(192 << 10)
+	if raceEnabled {
+		// A runner under -race moves far less than 192 KB in CoDel's 150 ms
+		// target, so the stripe's queue would drop frames the in-order
+		// tests count on.
+		window = 64 << 10
+	}
 	var sent int64
 	for i := 0; i < n; i++ {
 		f := seqFrame(i)
@@ -114,6 +120,9 @@ func TestStripedFramesArriveInOrderBothWays(t *testing.T) {
 }
 
 func expectInOrderCounting(t *testing.T, p *peer, n int, within time.Duration, got *atomic.Int64) {
+	if raceEnabled {
+		within *= 4 // a runner under -race is 5-10x slower
+	}
 	deadline := time.After(within)
 	for i := 0; i < n; i++ {
 		select {
@@ -187,11 +196,18 @@ func TestStripedStreamSurvivesLostMessages(t *testing.T) {
 // The point of the stripe: every room has its own send clock, so three rooms
 // carry about three times what one does.
 func TestStripedRoomsAddUp(t *testing.T) {
+	if raceEnabled {
+		t.Skip("a throughput measurement: meaningless under the race detector")
+	}
 	rate := func(rooms int) float64 {
 		newFakeCups(t)
 		cfg := fastConfig()
 		cfg.NumRooms = rooms
-		cfg.SendInterval = 4 * time.Millisecond // 8 KB / 4 ms = 2 MB/s a room
+		// 8 KB / 8 ms = 1 MB/s a room: each room's own clock is the limit,
+		// not the CPU (three rooms at 12 KB / 4 ms is ~9 MB/s of cursor JSON
+		// in one process, which a CI runner can't carry).
+		cfg.MaxMessageData = 8192
+		cfg.SendInterval = 8 * time.Millisecond
 		exit, client := startStripedPair(t, cfg)
 		const n = 250 // ~3.7 MB
 		var got atomic.Int64

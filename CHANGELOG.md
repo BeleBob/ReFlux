@@ -5,6 +5,13 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+
+- Merged p1neappleXpress 0.7.2 (section below): an Avito socket that dropped no
+  longer crashes the process; a cups.online or Avito exit on the phone starts
+  without a room list; steadier throughput tests. The «official» node script is
+  pinned at 630a0e5 (node-v1.4.1, the 0.7.2 exit core).
+
 ### Added
 
 - **The node wizard installs every transport**: Telemost (a conference link),
@@ -238,6 +245,18 @@ this fork.
   script following p1neappleXpress/OpenFlux (`provision.PinnedFor`).
 
 ## [0.7.1] - 2026-10-13 (p1neappleXpress/OpenFlux)
+## [0.7.2] - 2026-10-13 (p1neappleXpress/OpenFlux)
+
+### Fixed
+
+- **A cups.online or Avito exit node could not be started on the phone**: the app asked for a document link
+  ("Ссылка на документ не указана"), but an exit of these two given no room list is the one that creates its
+  rooms. It starts now, and the link it shares carries the rooms it created (for Avito the list was left out).
+- **An Avito socket that dropped could crash the whole process** (the exit node, or the app): its reader went on
+  using the connection after it had been cleared, or read the next connection next to that one's own reader.
+  Each reader now keeps to its own socket and is waited for.
+
+## [0.7.1] - 2026-10-13
 
 0.7.0 was cut from a branch that did not carry 0.6.0 and 0.6.1, so it lost the Mail.ru chat-channel fix
 (Mail.ru answered "access deny" 4004 again) and the node's `.flux` auto-updater. 0.7.1 is 0.6.1 plus
