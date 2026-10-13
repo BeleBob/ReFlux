@@ -5,6 +5,17 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-13
+
+### Fixed
+
+- **A cups.online or Avito exit node could not be started on the phone**: the app asked for a document link
+  ("Ссылка на документ не указана"), but an exit of these two given no room list is the one that creates its
+  rooms. It starts now, and the link it shares carries the rooms it created (for Avito the list was left out).
+- **An Avito socket that dropped could crash the whole process** (the exit node, or the app): its reader went on
+  using the connection after it had been cleared, or read the next connection next to that one's own reader.
+  Each reader now keeps to its own socket and is waited for.
+
 ## [0.7.1] - 2026-10-13
 
 0.7.0 was cut from a branch that did not carry 0.6.0 and 0.6.1, so it lost the Mail.ru chat-channel fix
