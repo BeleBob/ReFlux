@@ -5,6 +5,8 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.9.0] / node-v1.4.2 - 2026-10-13 (meepo161/OpenFlux)
+
 ### Changed
 
 - Merged p1neappleXpress 0.6.0 and 0.6.1 (sections below): the Mail.ru carrier
