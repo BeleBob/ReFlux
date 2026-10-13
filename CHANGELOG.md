@@ -5,6 +5,35 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-13
+
+0.7.0 was cut from a branch that did not carry 0.6.0 and 0.6.1, so it lost the Mail.ru chat-channel fix
+(Mail.ru answered "access deny" 4004 again) and the node's `.flux` auto-updater. 0.7.1 is 0.6.1 plus
+everything in 0.7.0, plus the fixes below.
+
+### Added
+
+- **avito (code.avito.ru) carrier**, and `avito` in share links.
+- **cups.online and avito run as stripes.** Each cups room (each avito room pair) is one lane of a reliable
+  striped link (sequence numbers, reorder, retransmission), so a message the server loses no longer breaks
+  the tunnel's byte stream, and speed adds up across rooms. A fresh exit prints a new room list format
+  (`{"v":2,...}`); an old bare list keeps the old wire, so running nodes and older apps keep working, but
+  an older app cannot use a new list. `CUPS_STRIPE=0` / `AVITO_STRIPE=0` make an exit print the old list.
+  `CUPS_ROOMS` sets how many rooms a fresh cups exit creates (default 4).
+
+### Fixed
+
+- **cups.online crawled at 25-90 KB/s.** The transport fired a message every 12 ms with no feedback; the
+  server relays a room only at ~130-200 KB/s and silently drops the rest from the relay (the send is still
+  acknowledged), so about 70% of what was sent never arrived and the retransmissions stalled the tunnel.
+  A lane now keeps at most 3 messages unanswered and sends the next one when the server answers, so it
+  follows each room's real rate; messages carry 12 KB instead of 8 KB. Through the tunnel, 4 rooms: 20 MB
+  at 424 KB/s (was 90 KB/s), retransmissions 2% instead of more than the data itself. `CUPS_WINDOW`
+  tunes the window (0 turns it off).
+- **avito sent one packet per round trip** (the chunk size never applied); an operation now carries up to
+  256 KB of framed packets, and its send/read loops stop with their socket instead of outliving a reconnect.
+- **A striped cups lane corrupted frames**: it kept slices of a receive buffer the socket reused.
+
 ## [0.6.1] - 2026-10-13
 
 ### Fixed
