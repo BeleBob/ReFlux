@@ -37,7 +37,13 @@ type Session struct {
 	keepaliveInterval time.Duration
 	linkTimeout       time.Duration
 	peerKeepalive     bool
-	noPong            bool
+	// keepaliveProbes counts the pings a client sent to learn whether its
+	// exit answers them (peerKeepalive), see keepaliveLoop.
+	keepaliveProbes int
+	// keepaliveProbeDelay is how long after its handshake a client sends
+	// the first of them: the exit is ready once our echo reaches it.
+	keepaliveProbeDelay time.Duration
+	noPong              bool
 
 	// Idle pacing (see pacingLocked): after idleAfter without IPv4 either
 	// way, carriers are pinged every keepaliveIdle and count as lost after
@@ -238,8 +244,9 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 		restartMin:       time.Second,
 		restartMax:       30 * time.Second,
 
-		keepaliveInterval: 10 * time.Second,
-		linkTimeout:       30 * time.Second,
+		keepaliveInterval:   10 * time.Second,
+		linkTimeout:         30 * time.Second,
+		keepaliveProbeDelay: 2 * time.Second,
 
 		idleAfter:       time.Minute,
 		keepaliveIdle:   25 * time.Second,
@@ -681,6 +688,10 @@ func (s *Session) helloLoop() {
 	}
 }
 
+// keepaliveProbeMax is how many keepalive ticks a client pings every carrier
+// to learn whether its exit answers pings (keepaliveLoop).
+const keepaliveProbeMax = 3
+
 func (s *Session) keepaliveLoop() {
 	defer s.wg.Done()
 	tick := time.NewTicker(s.keepaliveInterval)
@@ -696,6 +707,18 @@ func (s *Session) keepaliveLoop() {
 		if !s.exit && s.ready && s.peerKeepalive && s.peerSilentLocked() {
 			s.resetLocked()
 			utils.Infof("[SESSION] exit silent on every carrier for %v: handshaking again", timeout)
+		}
+		// A client learns that its exit answers pings from the first
+		// pong, and only then takes the exit's silence for a restart.
+		// Pings go only to quiet carriers, so under steady traffic none
+		// went out: a client in use never learned it, and when its exit
+		// restarted it kept sending into the old session for good. Until
+		// it knows, it pings every carrier on the first ticks whatever
+		// the traffic; an exit that never answers costs keepaliveProbeMax
+		// pings.
+		if !s.exit && s.ready && !s.peerKeepalive && s.keepaliveProbes < keepaliveProbeMax {
+			s.keepaliveProbes++
+			ping = 0
 		}
 		s.mu.Unlock()
 		s.pingQuiet(ping)
@@ -778,6 +801,7 @@ func (s *Session) resetLocked() {
 	s.remote = PeerParameters{}
 	s.sequence, s.highest, s.window = 0, 0, replayWindow{}
 	s.peerKeepalive = false
+	s.keepaliveProbes = 0
 	s.candidate = nil
 	if _, err := rand.Read(s.local[:]); err != nil {
 		utils.Debugf("[SESSION] new challenge: %v", err)
@@ -1483,6 +1507,23 @@ func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 			utils.Debugf("[SESSION] hello reply via %q: %v", name, err)
 		}
 	}
+	if echo && !wasReady && !s.exit {
+		// Learn soon whether the exit answers pings (keepaliveLoop): a node
+		// restarted in the first seconds strands a client that does not
+		// know.
+		time.AfterFunc(s.keepaliveProbeDelay, s.probeKeepalive)
+	}
+}
+
+// probeKeepalive pings every carrier while a client does not know whether
+// its exit answers pings.
+func (s *Session) probeKeepalive() {
+	s.mu.Lock()
+	probe := !s.stopped && s.ready && !s.peerKeepalive
+	s.mu.Unlock()
+	if probe {
+		s.pingQuiet(0)
+	}
 }
 
 func (s *Session) offerReplacementLocked(link *transportLink, sender [32]byte, params PeerParameters, env *control.Envelope) {
@@ -1501,6 +1542,7 @@ func (s *Session) offerReplacementLocked(link *transportLink, sender [32]byte, p
 		}
 		s.sequence, s.highest, s.window = 0, 0, replayWindow{}
 		s.peerKeepalive = false
+		s.keepaliveProbes = 0
 		s.candidate = nil
 		for _, l := range s.links {
 			l.lastHeard = time.Time{}
