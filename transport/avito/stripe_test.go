@@ -169,6 +169,9 @@ func TestStripedStreamSurvivesDroppedSocket(t *testing.T) {
 // One op at a time per room, each taking opDelay: three pairs carry about
 // three times what one does.
 func TestStripedPairsAddUp(t *testing.T) {
+	if raceEnabled {
+		t.Skip("a throughput measurement: meaningless under the race detector")
+	}
 	rate := func(pairs int) float64 {
 		newFakeAvito(t, 40*time.Millisecond)
 		cfg := fastConfig()
@@ -195,8 +198,9 @@ func TestStripedPairsAddUp(t *testing.T) {
 				}
 			}
 		}()
-		// Under what one pair moves in CoDel's 150 ms target.
-		sendWindowed(t, client, n, 192<<10, &got, done)
+		// Under what one pair moves in CoDel's 150 ms target, per pair: a
+		// window shared by all pairs caps three at what it lets through.
+		sendWindowed(t, client, n, pairs*192<<10, &got, done)
 		<-done
 		r := float64(got.Load()) / time.Since(start).Seconds()
 		t.Logf("%d pair(s): %.2f MB/s", pairs, r/1e6)

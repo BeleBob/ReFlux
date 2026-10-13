@@ -102,7 +102,11 @@ func TestStripedFramesArriveInOrderBothWays(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				expectInOrderCounting(t, dir.to, n, 20*time.Second, &got)
+				within := 20 * time.Second
+				if raceEnabled {
+					within = time.Minute // the CI runner under -race: ~15 s a direction on one core
+				}
+				expectInOrderCounting(t, dir.to, n, within, &got)
 			}()
 			sendWindowed(t, dir.from, n, &got, done)
 			<-done
@@ -187,6 +191,9 @@ func TestStripedStreamSurvivesLostMessages(t *testing.T) {
 // The point of the stripe: every room has its own send clock, so three rooms
 // carry about three times what one does.
 func TestStripedRoomsAddUp(t *testing.T) {
+	if raceEnabled {
+		t.Skip("a throughput measurement: meaningless under the race detector")
+	}
 	rate := func(rooms int) float64 {
 		newFakeCups(t)
 		cfg := fastConfig()
