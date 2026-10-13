@@ -44,18 +44,33 @@ func (b *bot) docsTick(now time.Time) {
 			b.s.saveDocsState(st)
 		}
 	}
+	back, _, rerr := b.s.recheckDue(now)
+	if rerr != nil {
+		log.Printf("bot: dead documents: %v", rerr)
+	}
 	unlock()
-	if len(changes) == 0 {
+	type note struct {
+		id   string
+		args []any
+	}
+	var notes []note
+	for _, ch := range changes {
+		id, args := docChangeMessage(ch)
+		notes = append(notes, note{id, args})
+	}
+	if back > 0 {
+		notes = append(notes, note{"docs.revived", []any{back, int(docQuarantine.Hours())}})
+	}
+	if len(notes) == 0 {
 		return
 	}
 	b.mu.Lock()
 	var news []string
 	var evs []event
-	for _, ch := range changes {
-		id, args := docChangeMessage(ch)
-		evs = append(evs, event{At: now, Level: "warn", RU: tr(langRU, id, args...), EN: tr(langEN, id, args...)})
+	for _, n := range notes {
+		evs = append(evs, event{At: now, Level: "warn", RU: tr(langRU, n.id, n.args...), EN: tr(langEN, n.id, n.args...)})
 		if !b.mute["nodes"] {
-			news = append(news, tr(b.lang, id, args...))
+			news = append(news, tr(b.lang, n.id, n.args...))
 		}
 	}
 	if err := b.s.logEvents(evs); err != nil {

@@ -290,3 +290,46 @@ func TestEnsureBackups(t *testing.T) {
 		t.Errorf("a second backup %+v", changes)
 	}
 }
+
+// Dead documents are checked again by themselves every 12 hours, so a
+// wrong verdict does not keep a document out of the pool for good; before
+// that they are left alone.
+func TestDeadDocumentsAreRecheckedEvery12Hours(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	writeFile(t, s.poolPath(), "mailru "+docB+"\n")
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	fakeEgressCheck(t, docB)
+	now := time.Now()
+	s.checkDocs(now)
+	s.checkDocs(now)
+	if st, _ := s.loadDocsState(); st.Docs[docB] == nil || st.Docs[docB].State != stateDead {
+		t.Fatalf("not dead: %+v", st.Docs[docB])
+	}
+
+	calls := fakeEgressCheck(t) // it opens again
+	if back, still, err := s.recheckDue(now.Add(deadRecheckEvery - time.Minute)); err != nil || back != 0 || still != 0 || len(*calls) != 0 {
+		t.Fatalf("checked again too early: back %d still %d err %v calls %d", back, still, err, len(*calls))
+	}
+	if back, still, err := s.recheckDue(now.Add(deadRecheckEvery)); err != nil || back != 1 || still != 0 {
+		t.Fatalf("after 12 h: back %d still %d err %v", back, still, err)
+	}
+	if st, _ := s.loadDocsState(); st.Docs[docB] == nil || st.Docs[docB].State != stateQuarantine {
+		t.Fatalf("after the recheck %+v", st.Docs[docB])
+	}
+
+	// One that is still dead waits another 12 hours.
+	fakeEgressCheck(t, docB)
+	later := now.Add(3 * deadRecheckEvery)
+	st, _ := s.loadDocsState()
+	st.markDead(Doc{Transport: "mailru", URL: docB}, "", "API returned status 404", now)
+	s.saveDocsState(st)
+	if back, still, err := s.recheckDue(later); err != nil || back != 0 || still != 1 {
+		t.Fatalf("still dead: back %d still %d err %v", back, still, err)
+	}
+	calls = fakeEgressCheck(t, docB)
+	if _, _, err := s.recheckDue(later.Add(deadRecheckEvery - time.Minute)); err != nil || len(*calls) != 0 {
+		t.Fatalf("checked again before its next 12 h: %v, %d calls", err, len(*calls))
+	}
+}

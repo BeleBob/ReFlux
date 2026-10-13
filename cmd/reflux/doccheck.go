@@ -16,12 +16,16 @@ import (
 // the pool's free ones (reflux-egress check-docs). A document that fails
 // docDeadAfter checks in a row goes to the dead list (docstate.go); its
 // client gets a free pool document in its place, the node restarts, and
-// the client bot sends the new link. A dead document comes back only when
-// the owner has it checked again and it passes, after a quarantine.
+// the client bot sends the new link. Only an answer that the document or
+// its owner's account is gone or blocked counts (mailru.CheckDocument): a
+// timeout or a refusal without a reason says nothing about the document.
+// A dead document is checked again every deadRecheckEvery and whenever the
+// owner asks; one that opens comes back after a quarantine.
 
 const (
-	docCheckEvery = 15 * time.Minute
-	docDeadAfter  = 2
+	docCheckEvery    = 15 * time.Minute
+	docDeadAfter     = 2
+	deadRecheckEvery = 12 * time.Hour
 )
 
 // runDockerIn runs the docker CLI with stdin; tests replace it.
@@ -269,6 +273,25 @@ func (s Store) recheckDead(urls []string, now time.Time) (back, still int, err e
 		return 0, still, err
 	}
 	return len(revived), still, s.quarantine(revived, "", now)
+}
+
+// recheckDue checks again the dead documents last checked deadRecheckEvery
+// ago or earlier (recheckDead). The caller holds the store lock.
+func (s Store) recheckDue(now time.Time) (back, still int, err error) {
+	st, err := s.loadDocsState()
+	if err != nil {
+		return 0, 0, err
+	}
+	var due []string
+	for _, d := range st.deadDocs() {
+		if now.Sub(d.Checked) >= deadRecheckEvery {
+			due = append(due, d.URL)
+		}
+	}
+	if len(due) == 0 {
+		return 0, 0, nil
+	}
+	return s.recheckDead(due, now)
 }
 
 func contains(list []string, s string) bool {
