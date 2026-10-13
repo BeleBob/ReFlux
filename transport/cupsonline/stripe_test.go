@@ -74,7 +74,7 @@ func sendWindowed(t *testing.T, from *peer, n int, received *atomic.Int64, rxDon
 		// A runner under -race moves far less than 192 KB in CoDel's 150 ms
 		// target, so the stripe's queue would drop frames the in-order
 		// tests count on.
-		window = 16 << 10
+		window = 64 << 10
 	}
 	var sent int64
 	for i := 0; i < n; i++ {
@@ -108,11 +108,7 @@ func TestStripedFramesArriveInOrderBothWays(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				within := 20 * time.Second
-				if raceEnabled {
-					within = time.Minute // the CI runner under -race: ~15 s a direction on one core
-				}
-				expectInOrderCounting(t, dir.to, n, within, &got)
+				expectInOrderCounting(t, dir.to, n, 20*time.Second, &got)
 			}()
 			sendWindowed(t, dir.from, n, &got, done)
 			<-done
@@ -124,6 +120,9 @@ func TestStripedFramesArriveInOrderBothWays(t *testing.T) {
 }
 
 func expectInOrderCounting(t *testing.T, p *peer, n int, within time.Duration, got *atomic.Int64) {
+	if raceEnabled {
+		within *= 4 // a runner under -race is 5-10x slower
+	}
 	deadline := time.After(within)
 	for i := 0; i < n; i++ {
 		select {
