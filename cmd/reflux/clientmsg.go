@@ -74,8 +74,10 @@ func (cb *clientBot) sosReport(l lang, u *telegram.User, c Client, text string) 
 	p := accessPhrase(c, now)
 	t.WriteString("\n\n" + tr(l, "ui.client.access", tr(l, p.ID, p.Args...)))
 	t.WriteString("\n" + tr(l, "ui.sos.node", stateText(l, v)))
-	if c.session() && v.status != nil && v.status.doc >= 0 {
-		t.WriteString("\n" + tr(l, "ui.sos.doc", v.status.doc+1, len(c.Docs())))
+	if v.status != nil && v.status.online && len(c.Docs()) > 1 {
+		if cold, ok := coldDocs(v.status.docs); ok {
+			t.WriteString("\n" + tr(l, "ui.sos.doc", len(c.Docs())-len(cold), len(c.Docs())))
+		}
 	}
 	if st, err := readEgressStatus(); err == nil {
 		world, russia := "✅", "✅"

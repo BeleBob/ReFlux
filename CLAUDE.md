@@ -100,8 +100,11 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   node is a **Session exit** (`[Transport]` sections, priorities 100, 90, …;
   Session apps only) and the link carries every document. The context stays
   the client's first document (`context` once the main one is removed). Free
-  documents come from `docs-pool.txt`; the doctor warns when a client is on a
-  backup (IPC status `Active`).
+  documents come from `docs-pool.txt`; `docstatus.go` lines the node's IPC
+  `links` (per-carrier state, traffic, flows) up with the documents for `reflux
+  docs`, the bot and the panel, and the doctor warns when an online client is
+  not heard over some of them. The core places each new flow on the least
+  loaded carrier of equal priority (`transport/flowplace.go`).
   Dead documents (`doccheck.go`, `docstate.go`, bot `botpool.go`): every
   `docCheckEvery` the bot has the egress check clients' and free pool
   documents (`reflux-egress check-docs`, links on stdin, mail.ru only via

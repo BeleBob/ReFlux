@@ -376,35 +376,39 @@ func noDocument(st ipc.StatusPayload, up time.Duration) bool {
 	return st.Carriers > 0 && len(st.Attached) == 0 && up >= noDocAfter
 }
 
-// docSeen remembers which document each Session client was last seen on:
-// while the client is away (a phone asleep), the check keeps saying it,
-// so an alert is not resolved and raised again with every nap.
+// docSeen remembers which documents each client with several was last
+// seen not reaching it: while the client is away (a phone asleep), the
+// check keeps saying it, so an alert is not resolved and raised again with
+// every nap.
 var docSeen = struct {
 	sync.Mutex
-	m map[string]int
-}{m: map[string]int{}}
+	m map[string][]int
+}{m: map[string][]int{}}
 
-// docInUse checks which document a Session client's traffic goes over: a
-// backup means the main document does not reach the client. Silent: the
-// client moves to a backup and back on a short drop of the main document,
+// docInUse checks that an online client with several documents is heard
+// over each: the node shares its flows among the ones that reach it, and a
+// document that does not is dead or missing from an older link in the
+// app. Silent: a document drops out and comes back on a short failure,
 // several times a day, and a dead one has news of its own (docsTick).
 func (d *doctor) docInUse(c Client, st ipc.StatusPayload) {
-	if !c.session() {
+	if len(c.Docs()) < 2 {
 		return
 	}
 	docSeen.Lock()
 	defer docSeen.Unlock()
-	i, known := docSeen.m[c.Name]
-	if at := c.docIndex(st.Active); st.Connected && at >= 0 {
-		i, known = at, true
-		docSeen.m[c.Name] = at
+	cold, known := docSeen.m[c.Name]
+	if st.Connected {
+		if now, ok := coldDocs(docStatuses(c, st)); ok {
+			cold, known = now, true
+			docSeen.m[c.Name] = now
+		}
 	}
 	switch {
 	case !known:
-	case i > 0:
-		d.silent(levelWarn, "docs:"+c.Name, "node.onbackup", c.Name, i+1, c.Name)
+	case len(cold) > 0:
+		d.silent(levelWarn, "docs:"+c.Name, "node.cold", c.Name, docNumbers(cold), c.Name)
 	default:
-		d.silent(levelOK, "docs:"+c.Name, "node.onmain", c.Name, len(c.Docs()))
+		d.silent(levelOK, "docs:"+c.Name, "node.docsok", c.Name, len(c.Docs()))
 	}
 }
 

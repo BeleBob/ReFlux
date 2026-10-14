@@ -11,8 +11,9 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
 )
 
-// The bot's documents screen: a client's documents, which one carries the
-// traffic, adding one from the pool or by link, removing one (docs.go).
+// The bot's documents screen: a client's documents, how each one is doing
+// (docstatus.go), adding one from the pool or by link, removing one
+// (docs.go).
 
 func (b *bot) docsScreen(name string) screen {
 	c, err := b.s.Get(name)
@@ -20,22 +21,27 @@ func (b *bot) docsScreen(name string) screen {
 		return b.failed(err, b.btn("b.clients", "cls"))
 	}
 	v := b.clientViews([]Client{c})[0]
-	active := -1
-	if v.status != nil && v.status.online {
-		active = v.status.doc
+	var live []docStatus
+	if v.status != nil {
+		live = v.status.docs
 	}
 	docs := c.Docs()
 	var t strings.Builder
 	t.WriteString(b.tr("ui.docs.title", html.EscapeString(c.Name)) + "\n\n")
 	for i, d := range docs {
-		role := b.tr("ui.docs.backup")
-		if i == 0 {
-			role = b.tr("ui.docs.main")
+		fmt.Fprintf(&t, "%d. %s", i+1, html.EscapeString(d.Transport))
+		if i < len(live) {
+			if id := live[i].state(v.status.online); id != "" {
+				fmt.Fprintf(&t, " · %s %s", docMarks[id].emoji, b.tr(id))
+			}
+			if live[i].down+live[i].up > 0 {
+				fmt.Fprintf(&t, " · ↓%s ↑%s", humanBytes(live[i].down), humanBytes(live[i].up))
+			}
 		}
-		if i == active {
-			role += " · " + b.tr("ui.docs.traffic")
-		}
-		fmt.Fprintf(&t, "%d. %s · %s\n<code>%s</code>\n", i+1, html.EscapeString(d.Transport), role, html.EscapeString(d.URL))
+		fmt.Fprintf(&t, "\n<code>%s</code>\n", html.EscapeString(d.URL))
+	}
+	if v.status != nil {
+		t.WriteString("\n" + b.tr("ui.docs.since", durationIn(b.lang, v.status.up)) + "\n")
 	}
 	if c.session() {
 		t.WriteString("\n" + b.tr("ui.docs.session", len(docs)) + "\n")

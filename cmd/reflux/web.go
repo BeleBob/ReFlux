@@ -290,7 +290,11 @@ func (w *webServer) render(rw http.ResponseWriter, status int, name string, data
 type docRow struct {
 	Doc
 	I, N, Priority int // I counts from 0, N from 1
-	Main, Traffic  bool
+	// State is how the node says the document is doing (a message id,
+	// docstatus.go), Pill its class; Down and Up its traffic since the
+	// node started.
+	State, Pill string
+	Down, Up    uint64
 }
 
 // clientRow is a client on the home page.
@@ -383,8 +387,10 @@ type clientData struct {
 	Link, Key, URL string
 	QR             template.URL // a data: URL of our own PNG
 	// Docs are the channel's documents, Session whether there are several,
-	// FreeDocs the pool's free ones (docs.go).
+	// FreeDocs the pool's free ones (docs.go); DocsNote says since when
+	// their traffic counts.
 	Docs     []docRow
+	DocsNote string
 	Session  bool
 	FreeDocs int
 	Context  string
@@ -425,12 +431,19 @@ func (w *webServer) clientData(name string) (clientData, error) {
 		d.Node = tr(l, "ui.node.up", durationIn(l, v.status.up))
 	}
 	d.Session, d.FreeDocs, d.Context = c.session(), w.s.freeCount(), c.context()
-	doc := -1
-	if v.status != nil && v.status.online {
-		doc = v.status.doc
+	var live []docStatus
+	if v.status != nil {
+		live = v.status.docs
+		d.DocsNote = tr(l, "ui.docs.since", durationIn(l, v.status.up))
 	}
 	for i, x := range c.Docs() {
-		d.Docs = append(d.Docs, docRow{I: i, N: i + 1, Doc: x, Priority: docPriority(i), Main: i == 0, Traffic: i == doc})
+		row := docRow{I: i, N: i + 1, Doc: x, Priority: docPriority(i)}
+		if i < len(live) {
+			row.State = live[i].state(v.status.online)
+			row.Pill = docMarks[row.State].pill
+			row.Down, row.Up = live[i].down, live[i].up
+		}
+		d.Docs = append(d.Docs, row)
 	}
 	d.CanAdd = len(d.Docs) < maxDocs
 	return d, nil
