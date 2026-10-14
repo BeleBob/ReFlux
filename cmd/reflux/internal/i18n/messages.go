@@ -488,7 +488,7 @@ var Messages = map[string][2]string{
 	"b.docs.remove.confirm": {"🗑 Remove document %d", "🗑 Убрать документ %d"},
 	"ui.docs.title":         {"📄 <b>%s</b>: documents", "📄 <b>%s</b>: документы"},
 	"ui.docs.main":          {"main", "основной"},
-	"ui.docs.backup":        {"backup", "резерв"},
+	"ui.docs.backup":        {"extra", "дополнительный"},
 	"ui.docs.traffic":       {"traffic goes here", "трафик идёт здесь"},
 	"ui.docs.classic":       {"One document: a classic exit, any app connects. A backup document keeps the channel up when this one fails.", "Один документ: обычная нода, подключается любое приложение. Резервный документ сохранит канал, если этот откажет."},
 	"ui.docs.session":       {"%d documents: a Session exit. The app connects in Session mode with the new link (📱 Show QR); traffic goes over the first document that works, then the next.", "Документов: %d — нода в режиме Session. Приложение подключается в режиме Session по новой ссылке (📱 Показать QR); трафик идёт через первый работающий документ, при отказе — через следующий."},
@@ -672,10 +672,10 @@ var Messages = map[string][2]string{
 	"docs.dead.nofree":   {"📄 The only document of <b>%s</b> no longer opens (%s), and there is no free one to give: %s", "📄 Единственный документ клиента <b>%s</b> больше не открывается (%s), а свободных на замену нет: %s"},
 	"docs.dead.failed":   {"📄 A document of <b>%s</b> no longer opens (%s), but replacing it failed: %s", "📄 Документ клиента <b>%s</b> больше не открывается (%s), но заменить его не вышло: %s"},
 	"docs.dead.pool":     {"📄 A free %s document of the pool no longer opens (%s): moved to the dead list", "📄 Свободный документ пула (%s) больше не открывается (%s): перенесён в список мёртвых"},
-	"docs.backup.added":  {"📄 <b>%s</b> got a backup document from the pool: when one document dies the channel goes on over the other, and the app learns the replacement over it. The client bot sends the new link once (the node is now a Session exit).", "📄 Клиенту <b>%s</b> добавлен запасной документ из пула: если один документ умрёт, связь пойдёт через другой, и замену приложение получит через него. Новую ссылку один раз отправит бот для клиентов (нода теперь в режиме Session)."},
+	"docs.backup.added":  {"📄 <b>%s</b> got one more document from the pool: the traffic is shared among the documents, and when one dies the channel goes on over the others, which also bring the app its replacement. The client bot sends the new link once (the node is a Session exit).", "📄 Клиенту <b>%s</b> добавлен ещё один документ из пула: трафик делится между документами, а если один умрёт, связь пойдёт через остальные, и замену приложение получит через них. Новую ссылку один раз отправит бот для клиентов (нода в режиме Session)."},
 	"docs.revived":       {"📄 Dead documents that open again: %d (checked every 12 h); back in the pool after %d h of quarantine", "📄 Снова открываются мёртвые документы: %d (проверка раз в 12 ч), вернутся в пул через %d ч карантина"},
-	"docs.backup.failed": {"📄 Could not give <b>%s</b> a backup document: %s", "📄 Не удалось добавить клиенту <b>%s</b> запасной документ: %s"},
-	"cb.doc.backup":      {"🛡 <b>%s</b>: new link with a backup document. Import it once; later changes reach the app by themselves.", "🛡 <b>%s</b>: новая ссылка с запасным документом. Импортируйте её один раз, дальше приложение обновится само."},
+	"docs.backup.failed": {"📄 Could not give <b>%s</b> one more document: %s", "📄 Не удалось добавить клиенту <b>%s</b> ещё один документ: %s"},
+	"cb.doc.backup":      {"🛡 <b>%s</b>: new link with one more document, faster and more reliable. Import it once; later changes reach the app by themselves.", "🛡 <b>%s</b>: новая ссылка с ещё одним документом — быстрее и надёжнее. Импортируйте её один раз, дальше приложение обновится само."},
 	"cb.doc.replaced":    {"🔄 <b>%s</b>: new link, the old one no longer works. Import it into the app.", "🔄 <b>%s</b>: новая ссылка, старая больше не работает. Импортируйте её в приложение."},
 
 	// bot: server screen

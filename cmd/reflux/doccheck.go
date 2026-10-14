@@ -194,22 +194,30 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 	return changes, changed, err
 }
 
-// ensureBackups gives every active client with a single document a free
-// pool document as its backup. A client then keeps its channel when one
-// document dies, and the replacement reaches the app over the other (the
-// node's ConfigOffer). A document that failed a check is not handed out
-// until it passes.
+// ensureBackups gives every active client with fewer than docsWanted
+// documents a free pool document, one per check. With a second one a
+// client keeps its channel when a document dies, and the replacement
+// reaches the app over the other (the node's ConfigOffer); a third shares
+// the traffic further, while the pool can spare it. A document that failed
+// a check is not handed out until it passes.
 func (s Store) ensureBackups(st docsState, now time.Time) ([]docChange, error) {
 	clients, err := s.List()
 	if err != nil {
 		return nil, err
 	}
+	suspect := func(url string) bool { return st.Suspect[url] > 0 }
 	var out []docChange
 	for _, c := range clients {
-		if !c.Active(now) || len(c.Docs()) >= 2 {
+		n := len(c.Docs())
+		if !c.Active(now) || n >= docsWanted {
 			continue
 		}
-		d, err := s.freeDocExcept(c, func(url string) bool { return st.Suspect[url] > 0 })
+		if n >= 2 {
+			if free, err := s.freeDocs(suspect); err != nil || free <= poolReserve {
+				continue
+			}
+		}
+		d, err := s.freeDocExcept(c, suspect)
 		if err != nil {
 			continue // nothing to give now; the next check tries again
 		}

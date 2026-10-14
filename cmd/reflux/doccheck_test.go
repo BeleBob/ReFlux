@@ -210,7 +210,7 @@ func TestBotPoolScreen(t *testing.T) {
 	for _, m := range f.to(101) {
 		toClient = append(toClient, m.Text)
 	}
-	if all := strings.Join(toClient, "\n"); !strings.Contains(all, "с запасным документом") || !strings.Contains(all, "старая больше не работает") || f.photoCount() < 2 {
+	if all := strings.Join(toClient, "\n"); !strings.Contains(all, "с ещё одним документом") || !strings.Contains(all, "старая больше не работает") || f.photoCount() < 2 {
 		t.Errorf("client not given the new links: %q", toClient)
 	}
 	sc := owner.poolScreen()
@@ -288,6 +288,35 @@ func TestEnsureBackups(t *testing.T) {
 	}
 	if changes, _ := s.ensureBackups(st, time.Now()); len(changes) != 0 {
 		t.Errorf("a second backup %+v", changes)
+	}
+}
+
+// A third document comes for speed, one per check, and only while the
+// pool keeps poolReserve free documents for dead ones' replacements and
+// new clients; nobody gets a fourth.
+func TestEnsureBackupsAddsAThirdDocumentFromASparePool(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	pool := []string{docB, docC, "https://cloud.mail.ru/public/DDDD/dddd"}
+	writeFile(t, s.poolPath(), "mailru "+strings.Join(pool, "\nmailru ")+"\n")
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.loadDocsState()
+	docs := func() int { c, _ := s.Get("phone"); return len(c.Docs()) }
+
+	if changes, err := s.ensureBackups(st, time.Now()); err != nil || len(changes) != 1 || docs() != 2 {
+		t.Fatalf("second document: %+v %v, %d documents", changes, err, docs())
+	}
+	// Two free documents left: the reserve, not a third document.
+	if changes, _ := s.ensureBackups(st, time.Now()); len(changes) != 0 || docs() != 2 {
+		t.Fatalf("a third document out of the reserve: %+v", changes)
+	}
+	writeFile(t, s.poolPath(), "mailru "+strings.Join(append(pool, "https://cloud.mail.ru/public/EEEE/eeee"), "\nmailru ")+"\n")
+	if changes, _ := s.ensureBackups(st, time.Now()); len(changes) != 1 || docs() != 3 {
+		t.Fatalf("third document from a spare pool: %+v, %d documents", changes, docs())
+	}
+	if changes, _ := s.ensureBackups(st, time.Now()); len(changes) != 0 || docs() != 3 {
+		t.Fatalf("a fourth document: %+v", changes)
 	}
 }
 

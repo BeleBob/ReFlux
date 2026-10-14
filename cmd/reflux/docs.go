@@ -17,9 +17,9 @@ import (
 
 // Several documents per client. The client's own document stays the main
 // one; backups are further documents the node runs at the same time. With
-// backups the node is a Session exit: every document is a carrier, traffic
-// goes over the highest-priority one that reaches the client and fails
-// over to the next. A Session exit serves Session apps only (a classic
+// backups the node is a Session exit: every document is a carrier, and the
+// client's flows are shared among the ones that reach it (docPriority); one
+// that dies drops out. A Session exit serves Session apps only (a classic
 // exit serves both, see nodeConf), so the client imports the new link.
 //
 // The encryption context is the client's first document for good: when
@@ -72,10 +72,21 @@ func carrierNames(docs []Doc) []string {
 	return out
 }
 
-// docPriority is the i-th document's priority: the main one 100, each
-// backup 10 less. Distinct priorities make a failover order; equal ones
-// would share flows, which measured slower on mail.ru.
-func docPriority(i int) int { return 100 - 10*i }
+// docPriority is a document's priority: the same for all, so the node and
+// the app share the client's flows among the documents that reach the peer
+// and a dead one simply drops out. Since 2026-10-14 mail.ru lets a
+// connection carry only about 9 KB/s; with distinct priorities (100, 90,
+// ...) everything went over the main document and the others idled.
+func docPriority(int) int { return 100 }
+
+// docsWanted is how many documents the document check gives an active
+// client: the second keeps the channel when one dies, the third is for
+// speed and comes only while the pool keeps poolReserve free documents
+// for dead ones' replacements and new clients.
+const (
+	docsWanted  = 3
+	poolReserve = 2
+)
 
 // docIndex is the position of the carrier named active among c's
 // documents, -1 for none.
@@ -281,6 +292,27 @@ func (s Store) poolStatus() ([]poolDoc, error) {
 // type first (the pool's Yandex documents may hit SmartCaptcha).
 func (s Store) freeDoc(c Client) (Doc, error) { return s.freeDocExcept(c, nil) }
 
+// usable says whether d may be handed out: free, of a known transport, a
+// valid link and not one skip names.
+func (d poolDoc) usable(skip func(url string) bool) bool {
+	return d.free() && transports[d.Transport] && validURL(d.URL) == nil && (skip == nil || !skip(d.URL))
+}
+
+// freeDocs counts the pool documents freeDocExcept may hand out.
+func (s Store) freeDocs(skip func(url string) bool) (int, error) {
+	docs, err := s.poolStatus()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, d := range docs {
+		if d.usable(skip) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // freeDocExcept is freeDoc passing over the documents skip names.
 func (s Store) freeDocExcept(c Client, skip func(url string) bool) (Doc, error) {
 	docs, err := s.poolStatus()
@@ -290,7 +322,7 @@ func (s Store) freeDocExcept(c Client, skip func(url string) bool) (Doc, error) 
 	var other *Doc
 	for i := range docs {
 		d := docs[i]
-		if !d.free() || !transports[d.Transport] || validURL(d.URL) != nil || (skip != nil && skip(d.URL)) {
+		if !d.usable(skip) {
 			continue
 		}
 		if d.Transport == c.Transport {
