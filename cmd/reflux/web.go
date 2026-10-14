@@ -115,6 +115,7 @@ func (w *webServer) routes() http.Handler {
 	mux.HandleFunc("GET /requests", w.page(w.requests))
 	mux.HandleFunc("POST /requests/{id}/{action}", w.action(w.requestAction))
 	mux.HandleFunc("POST /invites/{code}", w.action(w.inviteAction))
+	mux.HandleFunc("POST /clientbot/{what}", w.action(w.clientBotAction))
 	mux.HandleFunc("GET /doctor", w.page(w.doctor))
 	mux.HandleFunc("GET /gateway", w.page(w.gateway))
 	mux.HandleFunc("POST /gateway/{what}", w.action(w.gatewayAction))

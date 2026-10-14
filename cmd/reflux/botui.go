@@ -288,6 +288,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.toggleMute(arg), ""
 	case "lim":
 		return b.setLimit(arg), ""
+	case "cbhide":
+		return b.toggleClientBot(), ""
 	case "gw":
 		return b.gatewayScreen(), ""
 	case "srv":
@@ -564,8 +566,9 @@ func (b *bot) settingsScreen() screen {
 	t.WriteString("\n" + b.tr("ui.limits", temp, lim.CPUWarn) + "\n")
 	kb = append(kb,
 		[]telegram.Button{b.btn("b.temp.down", "lim:t-"), b.btn("b.temp.up", "lim:t+")},
-		[]telegram.Button{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")},
-		[]telegram.Button{b.btn("b.home", "home")})
+		[]telegram.Button{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")})
+	kb = b.clientBotLines(&t, kb)
+	kb = append(kb, []telegram.Button{b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
 

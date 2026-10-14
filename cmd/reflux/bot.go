@@ -29,7 +29,8 @@ const botUsage = `usage:
   reflux bot install   run the bot as a systemd user service (again after an update)
   reflux bot test      send a test message
   reflux bot run       run in the foreground (what the service does)
-  reflux bot client    link a second bot where people ask for access (off: unlink)`
+  reflux bot client    link a second bot where people ask for access (off: unlink;
+                       hide: answer only clients, their requests and invites; show: everyone)`
 
 // botConfig is telegram.json in the data directory (0600): the token is a
 // secret, and chat is the only chat the bot talks to.
