@@ -105,8 +105,8 @@ func TestSessionNodeConfAndLink(t *testing.T) {
 	want := "[Interface]\nRole = exit\nMode = l4\nURL = " + testURL + "\n" +
 		"EncryptionKeyFile = /config/key\nCookieStore = /state/cookies.json\nIPCSocket = /state/ipc.sock\nConfigOfferFile = /config/offer\n\n" +
 		"[Transport \"mailru\"]\nType = mailru\nPriority = 100\nURL = " + testURL + "\n\n" +
-		"[Transport \"mailru-2\"]\nType = mailru\nPriority = 90\nURL = " + docB + "\n\n" +
-		"[Transport \"yandex\"]\nType = yandex\nPriority = 80\nURL = " + docY + "\n"
+		"[Transport \"mailru-2\"]\nType = mailru\nPriority = 100\nURL = " + docB + "\n\n" +
+		"[Transport \"yandex\"]\nType = yandex\nPriority = 100\nURL = " + docY + "\n"
 	if conf := nodeConf(c); !strings.HasSuffix(conf, want) {
 		t.Errorf("Session node.conf:\n%s\nwant the end:\n%s", conf, want)
 	}
@@ -128,8 +128,8 @@ func TestSessionNodeConfAndLink(t *testing.T) {
 	}
 	for i, want := range []share.Transport{
 		{Type: "mailru", URL: testURL, Priority: 100},
-		{Type: "mailru", Name: "mailru-2", URL: docB, Priority: 90},
-		{Type: "yandex", URL: docY, Priority: 80},
+		{Type: "mailru", Name: "mailru-2", URL: docB, Priority: 100},
+		{Type: "yandex", URL: docY, Priority: 100},
 	} {
 		if got.Transports[i] != want {
 			t.Errorf("transport %d = %+v, want %+v", i, got.Transports[i], want)
@@ -232,7 +232,7 @@ func TestDocsCommand(t *testing.T) {
 		t.Errorf("node.conf:\n%s", conf)
 	}
 	out.Reset()
-	if err := run([]string{"show", "phone"}, nil, &out); err != nil || !strings.Contains(out.String(), "Session (several documents") || !strings.Contains(out.String(), "mailru-2        mailru, priority 90: "+docB) {
+	if err := run([]string{"show", "phone"}, nil, &out); err != nil || !strings.Contains(out.String(), "Session (several documents") || !strings.Contains(out.String(), "mailru-2        mailru, priority 100: "+docB) {
 		t.Errorf("show:\n%s", out.String())
 	}
 	if err := run([]string{"docs", "phone", "remove", "x"}, nil, io.Discard); err == nil {
@@ -333,7 +333,7 @@ func TestBotDocuments(t *testing.T) {
 		t.Errorf("documents screen:\n%s", got)
 	}
 	b.handle(press(3, 42, "dp:phone", time.Now()))
-	if got := f.lastEditText(); !strings.Contains(got, "Документ 2 добавлен") || !strings.Contains(got, "2. mailru · резерв") || !strings.Contains(got, "Документов: 2 — нода в режиме Session") {
+	if got := f.lastEditText(); !strings.Contains(got, "Документ 2 добавлен") || !strings.Contains(got, "2. mailru · дополнительный") || !strings.Contains(got, "Документов: 2 — нода в режиме Session") {
 		t.Errorf("after the pool:\n%s", got)
 	}
 	// By link: the bot waits for it.
@@ -381,13 +381,13 @@ func TestWebDocuments(t *testing.T) {
 		t.Errorf("the same document twice: %d", rec.Code)
 	}
 	body = wt.do("GET", "/c/phone", nil).Body.String()
-	for _, want := range []string{docB, docC, "резерв · 90", "Документов: 3 — нода в режиме Session", `name="i" value="2"`} {
+	for _, want := range []string{docB, docC, "дополнительный · 100", "Документов: 3 — нода в режиме Session", `name="i" value="2"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("client page lacks %q", want)
 		}
 	}
 	show := wt.do("POST", "/c/phone/show", url.Values{}).Body.String()
-	if !strings.Contains(show, "<dd>Session</dd>") || !strings.Contains(show, "2. mailru · 90") {
+	if !strings.Contains(show, "<dd>Session</dd>") || !strings.Contains(show, "2. mailru · 100") {
 		t.Errorf("show page:\n%s", show)
 	}
 	if rec := wt.do("POST", "/c/phone/docrm", url.Values{"i": {"0"}}); rec.Code != http.StatusSeeOther {
