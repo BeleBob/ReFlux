@@ -62,6 +62,8 @@ type Session struct {
 
 	links map[string]*transportLink
 	order []string
+	// placement spreads flows over carriers of equal priority (flowplace.go).
+	placement flowPlacement
 
 	dataCallback    func([]byte)
 	controlCallback ControlHandler
@@ -1202,10 +1204,7 @@ func (s *Session) Send(p []byte) error {
 	}
 	raw = append(raw, p...)
 
-	top := topLinks(links)
-	key := extractFlowKeyBytes(p)
-	idx := int(flowHashBytes(key) % uint64(len(top)))
-	chosen := top[idx]
+	chosen := s.placement.pick(topLinks(links), p, time.Now())
 
 	n := s.cntDataSent.Add(1)
 	if n == 1 || n%100 == 0 {
