@@ -227,6 +227,14 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 			link.classicCodec.LimitFrame(budget)
 		}
 	}
+	// One that limits how often it sends (Mail.ru since 2026-10-14) gets
+	// batches that wait for it, so it sends fewer and fuller frames.
+	if p := pacerOf(raw); p != nil {
+		link.batched.Pace(p)
+		if link.classicCodec != nil {
+			link.classicCodec.Pace(p)
+		}
+	}
 	return link, nil
 }
 
