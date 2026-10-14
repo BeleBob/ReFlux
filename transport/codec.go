@@ -66,6 +66,8 @@ type CodecTransport struct {
 	maxBatchCount int
 	// frameLimit caps a batch below the carrier's frame limit (LimitFrame).
 	frameLimit atomic.Int64
+	// pacing waits for a carrier that limits its rate (Pace).
+	pacing pacing
 
 	running   atomic.Bool
 	lifecycle sync.Mutex
@@ -96,6 +98,9 @@ func NewCodecTransport(inner Transport, preferred string, initiator bool) *Codec
 	// Straight over a carrier that refuses big frames (keyless classic
 	// mode); under a Session, newLink sets the limit.
 	c.LimitFrame(batchBudget(inner))
+	if p := pacerOf(inner); p != nil {
+		c.Pace(p)
+	}
 	utils.Debugf("[CODEC] created: preferred=%s initiator=%v (both framings accepted on receive)",
 		codecName(c.preferred), initiator)
 	return c
@@ -152,11 +157,16 @@ func (c *CodecTransport) Send(data []byte) error {
 	if len(data) > 65535 {
 		return fmt.Errorf("packet too large for a frame: %d bytes", len(data))
 	}
+	if !c.pacing.admit(data) {
+		utils.Debugf("[CODEC] Send: paced queue full, dropped %d bytes", len(data))
+		return fmt.Errorf("codec queue full")
+	}
 	p := append([]byte(nil), data...)
 	select {
 	case c.queue <- p:
 		return nil
 	default:
+		c.pacing.done(p)
 		utils.Debugf("[CODEC] Send: QUEUE FULL, dropped %d bytes", len(p))
 		return fmt.Errorf("codec queue full")
 	}
@@ -287,7 +297,11 @@ func (c *CodecTransport) flushLoop() {
 			case first = <-c.queue:
 			}
 		}
+		if !c.pacing.wait(c.stopCh) {
+			return
+		}
 		if !c.sendBatch() {
+			c.pacing.done(first)
 			c.write(compress(first))
 			continue
 		}
@@ -296,6 +310,7 @@ func (c *CodecTransport) flushLoop() {
 		if stopped {
 			return
 		}
+		c.pacing.done(batch...)
 		carry = next
 		c.write(encodeBatch(batch))
 	}
@@ -304,6 +319,10 @@ func (c *CodecTransport) flushLoop() {
 // LimitFrame keeps every batch at most n bytes (0: no limit), for a carrier
 // that refuses bigger frames (FrameLimiter).
 func (c *CodecTransport) LimitFrame(n int) { c.frameLimit.Store(int64(n)) }
+
+// Pace makes frames wait for a carrier that limits how often it sends
+// (Pacer) and keeps the queue above it short. Call it before Start.
+func (c *CodecTransport) Pace(p Pacer) { c.pacing.pace(p) }
 
 func (c *CodecTransport) write(frame []byte) {
 	if err := c.Transport.Send(frame); err != nil {

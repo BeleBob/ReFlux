@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -39,8 +40,86 @@ var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 // mailruMaxFrame is the largest frame a cursor message carries: since
 // 2026-10-12 the document server answers a cursor of about 3 KB and more
 // with "access deny" (3060 bytes passed, 3072 did not), so batches stay at
-// 3000 (transport.FrameLimiter).
-const mailruMaxFrame = 3000
+// 3060 (transport.FrameLimiter). Two 1400-byte packets, the app's default
+// MTU, fit in one with their Session envelopes; at 3000 only one did, and
+// with the message allowance below every frame counts.
+const mailruMaxFrame = 3060
+
+// The document server allows a connection about five messages a second
+// beyond a burst of about fifty and drops it with "access deny" past that
+// (since 2026-10-14: 20 a second were denied after 70 messages, 8 after
+// 133, 6 after 293; 5 a second were not in two minutes). It counts
+// messages, not bytes, and each connection on its own. A connection keeps
+// under it with room to spare; variables for tests.
+var (
+	sendRate  = 4.0
+	sendBurst = 32.0
+)
+
+// budget is a connection's allowance of messages (sendRate, sendBurst): a
+// token bucket that starts full, as the server's does for a new
+// connection. Without a rate it allows everything.
+type budget struct {
+	rate, burst float64
+	mu          sync.Mutex
+	tokens      float64
+	last        time.Time
+}
+
+func (b *budget) refillLocked(now time.Time) {
+	if b.last.IsZero() {
+		b.tokens = b.burst
+	} else {
+		b.tokens = min(b.burst, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+	}
+	b.last = now
+}
+
+// take spends a message. A control message may overdraw the allowance; data
+// then waits for longer.
+func (b *budget) take() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(time.Now())
+	b.tokens--
+}
+
+// untilToken is how long until a message may go out (0: now).
+func (b *budget) untilToken() time.Duration {
+	if b.rate <= 0 {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(time.Now())
+	if b.tokens >= 1 {
+		return 0
+	}
+	return time.Duration((1 - b.tokens) / b.rate * float64(time.Second))
+}
+
+// socketIOEvent starts every message the allowance counts: Socket.IO
+// events, not Engine.IO pings and pongs.
+var socketIOEvent = []byte("42")
+
+// The document server also takes at most 1 MiB of cursors from a
+// connection, whatever the rate, and then drops it with "access deny"
+// (since 2026-10-14: after 257 cursors of 4085 characters at 2, 3 or 4 a
+// second, after 523 of 2005). A new connection starts afresh. So a
+// connection that has sent rotateAfter opens its successor, which takes
+// over once the server has let it in; the old one then leaves. Variables
+// for tests.
+var (
+	rotateAfter int64 = 640 << 10
+	// rotateRetry is how long a connection waits to try again after its
+	// successor failed to come up.
+	rotateRetry = 5 * time.Second
+	// retireAfter is how long a replaced connection stays: what it has
+	// written is the server's already.
+	retireAfter = time.Second
+	// successorTimeout is how long a successor may wait to be let in.
+	successorTimeout = 20 * time.Second
+)
 
 // keepAliveCursor is the keep-alive a quiet connection writes: a cursor as
 // the editor sends it (its real length and payload), since the server now
@@ -97,6 +176,16 @@ type DocSession struct {
 	UserID     string
 	writeMu    sync.Mutex
 	lastWrite  atomic.Int64 // unix nanoseconds of the last successful write
+	// budget is what the server still lets this connection send.
+	budget budget
+	// sent counts the bytes of the Socket.IO events written (rotateAfter).
+	sent atomic.Int64
+	// rotating is set once this connection has started opening its
+	// successor; retired once the successor took over.
+	rotating, retired atomic.Bool
+	// successor is set on a connection opened to replace another, until
+	// the server lets it in and it takes over (takeOver).
+	successor atomic.Pointer[DocSession]
 	// silence is how long the server may say nothing before the
 	// connection counts as dead (engineIOSilence).
 	silence time.Duration
@@ -111,6 +200,10 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	err := s.Conn.WriteMessage(messageType, data)
 	if err == nil {
 		s.lastWrite.Store(time.Now().UnixNano())
+		if bytes.HasPrefix(data, socketIOEvent) {
+			s.budget.take()
+			s.sent.Add(int64(len(data)))
+		}
 	}
 	return err
 }
@@ -219,6 +312,15 @@ type MailruDocsTransport struct {
 	userCounter atomic.Int32
 	baseUserID  string
 
+	// queued counts the frames Send took that are not written yet.
+	queued atomic.Int64
+	// next is a successor not let in yet (rotate), for Stop.
+	next atomic.Pointer[DocSession]
+
+	// limits are the package's variables when the transport was made, so
+	// a test may change them without racing a transport still running.
+	limits limits
+
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
@@ -236,6 +338,7 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 	t := &MailruDocsTransport{
 		BaseTransport: transport.NewBaseTransport(config),
 		weblink:       normalizeWeblink(weblink),
+		limits:        currentLimits(),
 	}
 	t.baseUserID = randUserID()
 	jar, _ := cookiejar.New(nil)
@@ -286,6 +389,10 @@ func (t *MailruDocsTransport) Stop() error {
 	if session != nil && session.Conn != nil {
 		session.leave()
 	}
+	if next := t.next.Load(); next != nil && next.successor.Swap(nil) != nil {
+		next.retired.Store(true)
+		next.leave()
+	}
 	return err
 }
 
@@ -318,6 +425,7 @@ func (t *MailruDocsTransport) Send(data []byte) error {
 
 	select {
 	case session.WriteQueue <- data:
+		t.queued.Add(1)
 		t.RecordSend(len(data))
 		return nil
 	default:
@@ -325,7 +433,61 @@ func (t *MailruDocsTransport) Send(data []byte) error {
 	}
 }
 
-func (t *MailruDocsTransport) connectToDoc(attempt int) {
+func (t *MailruDocsTransport) connectToDoc(attempt int) { t.connect(attempt, nil) }
+
+// rotate opens old's successor (rotateAfter).
+func (t *MailruDocsTransport) rotate(old *DocSession) {
+	utils.Debugf("[M-DOCS] %d bytes sent on this connection: opening the next one", old.sent.Load())
+	t.connect(0, old)
+}
+
+// rotationFailed lets old try again after rotateRetry.
+func (t *MailruDocsTransport) rotationFailed(old *DocSession, err error) {
+	utils.Debugf("[M-DOCS] the next connection did not come up: %v", err)
+	time.AfterFunc(t.limits.rotateRetry, func() { old.rotating.Store(false) })
+}
+
+// takeOver makes next, which the server has just let in, the connection
+// in use in place of old, which leaves. Nothing changes if old is no
+// longer in use (it dropped and a reconnect replaced it): next leaves.
+func (t *MailruDocsTransport) takeOver(old, next *DocSession) {
+	t.next.CompareAndSwap(next, nil)
+	t.Mu.Lock()
+	current := t.session == old && t.IsRunning()
+	if current {
+		t.session = next
+		t.SetConnected(true)
+	}
+	t.Mu.Unlock()
+	if !current {
+		next.retired.Store(true)
+		next.leave()
+		return
+	}
+	utils.Debugf("[M-DOCS] moved to the next connection after %d bytes", old.sent.Load())
+	old.retired.Store(true)
+	time.AfterFunc(t.limits.retireAfter, old.leave)
+}
+
+// limits are what the server allows a connection and how the transport
+// keeps to it (sendRate, rotateAfter and the rest).
+type limits struct {
+	rate, burst                                float64
+	rotateAfter                                int64
+	rotateRetry, retireAfter, successorTimeout time.Duration
+}
+
+func currentLimits() limits {
+	return limits{
+		rate: sendRate, burst: sendBurst,
+		rotateAfter: rotateAfter,
+		rotateRetry: rotateRetry, retireAfter: retireAfter, successorTimeout: successorTimeout,
+	}
+}
+
+// connect opens a connection to the document: the first one or one after
+// a drop (replace nil), or replace's successor.
+func (t *MailruDocsTransport) connect(attempt int, replace *DocSession) {
 	if !t.IsRunning() {
 		return
 	}
@@ -343,7 +505,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		t.Mu.Unlock()
 
 		var userID string
-		if existingSession != nil {
+		if existingSession != nil && replace == nil {
 			userID = existingSession.UserID
 		} else {
 			suffix := fmt.Sprintf("%03d", t.userCounter.Add(1)%1000)
@@ -353,6 +515,10 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		info, err := t.fetchDocInfo(t.weblink)
 		if err != nil {
 			utils.Debugf("[M-DOCS] fetchDocInfo failed: %v", err)
+			if replace != nil {
+				t.rotationFailed(replace, err)
+				return
+			}
 			if utils.Throttled("m-docs.fetch", time.Minute) {
 				utils.Infof("[M-DOCS] cannot open the document: %v; retrying", err)
 			}
@@ -389,6 +555,10 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 				status = resp.StatusCode
 			}
 			utils.Debugf("[M-DOCS] WebSocket dial failed (http %d): %v", status, err)
+			if replace != nil {
+				t.rotationFailed(replace, err)
+				return
+			}
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -404,19 +574,39 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			Conn:       conn,
 			WriteQueue: writeQueue,
 			UserID:     userID,
+			budget:     budget{rate: t.limits.rate, burst: t.limits.burst},
 		}
 
 		if err := waitMailruSocketIO(session, info.Token); err != nil {
 			utils.Debugf("[M-DOCS] Socket.IO handshake failed: %v", err)
 			_ = conn.Close()
+			if replace != nil {
+				t.rotationFailed(replace, err)
+				return
+			}
 			t.scheduleReconnect(attempt)
 			return
 		}
 
-		t.Mu.Lock()
-		t.session = session
-		t.SetConnected(true)
-		t.Mu.Unlock()
+		if replace != nil {
+			// It takes over once the server lets it in (handleMessage); one
+			// that is not let in gives up.
+			session.successor.Store(replace)
+			t.next.Store(session)
+			time.AfterFunc(t.limits.successorTimeout, func() {
+				if old := session.successor.Swap(nil); old != nil {
+					t.next.CompareAndSwap(session, nil)
+					session.retired.Store(true)
+					session.leave()
+					t.rotationFailed(old, errors.New("not let into the document"))
+				}
+			})
+		} else {
+			t.Mu.Lock()
+			t.session = session
+			t.SetConnected(true)
+			t.Mu.Unlock()
+		}
 
 		if existingSession == nil {
 			utils.SafeGo("mailru.writer", t.writerLoop)
@@ -469,6 +659,15 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			}
 			_, message, err := conn.ReadMessage()
 			if err != nil {
+				if session.retired.Load() {
+					return // replaced, and closed on purpose
+				}
+				if old := session.successor.Swap(nil); old != nil {
+					t.next.CompareAndSwap(session, nil)
+					_ = conn.Close()
+					t.rotationFailed(old, err)
+					return
+				}
 				utils.Debugf("[M-DOCS] Read error: %v", err)
 				if utils.Throttled("m-docs.drop", time.Minute) {
 					utils.Infof("[M-DOCS] connection to the document dropped: %v; reconnecting", err)
@@ -521,6 +720,10 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
+		if d := session.budget.untilToken(); d > 0 {
+			time.Sleep(d)
+			continue
+		}
 
 		payload := base64.StdEncoding.EncodeToString(pending)
 		// The prefix is the packet's real length: since 2026-10-12 the
@@ -533,12 +736,45 @@ func (t *MailruDocsTransport) writerLoop() {
 			continue
 		}
 		pending = nil
+		t.queued.Add(-1)
+		if session.sent.Load() >= t.limits.rotateAfter && session.rotating.CompareAndSwap(false, true) {
+			t.rotate(session)
+		}
 	}
 }
 
 // MaxFrame is transport.FrameLimiter: the batches above stay under the
 // cursor size the document server accepts.
 func (t *MailruDocsTransport) MaxFrame() int { return mailruMaxFrame }
+
+// WaitSend is transport.Pacer: it returns once the connection is up, has
+// no frame waiting and may send a message now, so the batch the caller
+// closes next goes out at once and holds everything queued meanwhile.
+func (t *MailruDocsTransport) WaitSend(stop <-chan struct{}) bool {
+	for {
+		wait := 20 * time.Millisecond
+		t.Mu.RLock()
+		session := t.session
+		t.Mu.RUnlock()
+		if session != nil && t.IsConnected() && t.queued.Load() == 0 {
+			if wait = session.budget.untilToken(); wait <= 0 {
+				return true
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-stop:
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+// QueueBytes is transport.Pacer: two seconds of full frames, one of them
+// for a flow. Measured over a live document, one second held a download
+// to 6 KB/s and three made new connections wait longer; two gave 9 KB/s.
+func (t *MailruDocsTransport) QueueBytes() int { return int(2 * t.limits.rate * mailruMaxFrame) }
 
 // keepAliveLoop writes a keep-alive only into a quiet connection: any
 // write (tunnel data, a Session ping, a Socket.IO pong) does its job. Each
@@ -633,6 +869,9 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 	if strings.Contains(text, `"type":"auth"`) && strings.Contains(text, `"result":1`) {
 		utils.Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
+		if old := session.successor.Swap(nil); old != nil {
+			t.takeOver(old, session)
+		}
 		return
 	}
 

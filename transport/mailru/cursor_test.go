@@ -88,7 +88,7 @@ func TestHandleMessageSkipsKeepAliveCursors(t *testing.T) {
 // keeps its batches under MaxFrame.
 func TestMaxFrameIsUnderTheServerLimit(t *testing.T) {
 	var fl transport.FrameLimiter = NewMailruDocsTransport("Vuri/test", transport.DefaultConfig())
-	if n := fl.MaxFrame(); n <= 0 || n > 3000 {
-		t.Fatalf("MaxFrame = %d, want 1..3000", n)
+	if n := fl.MaxFrame(); n <= 0 || n > 3060 {
+		t.Fatalf("MaxFrame = %d, want 1..3060", n)
 	}
 }

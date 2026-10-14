@@ -40,6 +40,8 @@ type BatchedTransport struct {
 	maxBatchCount int
 	// frameLimit caps a batch below the carrier's frame limit (LimitFrame).
 	frameLimit atomic.Int64
+	// pacing waits for a carrier that limits its rate (Pace).
+	pacing pacing
 
 	running    atomic.Bool
 	lifecycle  sync.Mutex
@@ -77,6 +79,10 @@ func NewBatchedTransport(inner Transport) *BatchedTransport {
 // LimitFrame keeps every batch at most n bytes (0: no limit), for a carrier
 // that refuses bigger frames (FrameLimiter).
 func (b *BatchedTransport) LimitFrame(n int) { b.frameLimit.Store(int64(n)) }
+
+// Pace makes batches wait for a carrier that limits how often it sends
+// (Pacer) and keeps the queue above it short. Call it before Start.
+func (b *BatchedTransport) Pace(p Pacer) { b.pacing.pace(p) }
 
 func (b *BatchedTransport) Start() error {
 	utils.Debugf("[BATCH] Start() called")
@@ -133,6 +139,10 @@ func (b *BatchedTransport) Send(data []byte) error {
 		utils.Debugf("[BATCH] Send: packet too large %d", len(data))
 		return fmt.Errorf("packet too large for batch record: %d bytes", len(data))
 	}
+	if !b.pacing.admit(data) {
+		utils.Debugf("[BATCH] Send: paced queue full, dropped %d bytes", len(data))
+		return fmt.Errorf("batch queue full")
+	}
 	p := make([]byte, len(data))
 	copy(p, data)
 	select {
@@ -141,6 +151,7 @@ func (b *BatchedTransport) Send(data []byte) error {
 			len(p), len(b.queue), cap(b.queue))
 		return nil
 	default:
+		b.pacing.done(p)
 		utils.Debugf("[BATCH] Send: QUEUE FULL, dropped %d bytes", len(p))
 		return fmt.Errorf("batch queue full")
 	}
@@ -212,6 +223,12 @@ func (b *BatchedTransport) flushLoop() {
 			}
 		}
 
+		// A paced carrier first: what queues while it cannot send joins
+		// this batch.
+		if !b.pacing.wait(b.stopCh) {
+			utils.Debugf("[BATCH] flushLoop: stop while paced, exiting")
+			return
+		}
 		// Everything already queued (burst coalescing), then a brief linger
 		// for stragglers: negligible next to the channel RTT, but it fills
 		// batches during steady bulk transfer.
@@ -221,6 +238,7 @@ func (b *BatchedTransport) flushLoop() {
 			utils.Debugf("[BATCH] flushLoop: stop during linger, exiting")
 			return
 		}
+		b.pacing.done(batch...)
 		carry = next
 		utils.Debugf("[BATCH] flushLoop: collected %d packets, %d bytes", len(batch), size)
 
