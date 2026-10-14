@@ -271,6 +271,15 @@ func (m *Manager) Receive(cb func([]byte)) {
 	m.session.Receive(cb)
 }
 
+// PeerParameters is transport.PeerParameterProvider: the tunnel sizes its
+// stack by the packet limit negotiated with the peer, and the L3 exit
+// answers packets past it. Behind a Manager neither saw it, so the stack
+// kept a 1500-byte MTU whatever was negotiated and the Session refused its
+// bigger packets: with --max-packet-size=1400 no TCP connection came up.
+func (m *Manager) PeerParameters() (transport.PeerParameters, bool) {
+	return m.session.PeerParameters()
+}
+
 // SendControl sends a control packet through the Session.
 func (m *Manager) SendControl(sub control.Subtype, payload []byte) error {
 	return m.session.SendControl(sub, payload)

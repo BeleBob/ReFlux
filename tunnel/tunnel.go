@@ -141,9 +141,9 @@ func NewTCPTunnelMode(trans transport.Transport, isExitNode bool, mode ExitMode)
 
 	tunnelEP := NewTunnelLinkEndpoint()
 	if n, ok := trans.(transport.PeerParameterProvider); ok {
-		if p, ready := n.PeerParameters(); ready {
-			tunnelEP.SetMTU(uint32(min(1500, p.MaxPacketSize)))
-		}
+		// Asked on every use rather than once here: an exit's stack
+		// exists before any peer, and its peers may differ.
+		tunnelEP.limits = n
 	}
 	// "->" points towards the internet and "<-" back towards the device on
 	// both sides, as in the L3 and utun logs, so one flow reads the same in
