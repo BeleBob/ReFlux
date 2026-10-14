@@ -9,6 +9,8 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 type TunnelLinkEndpoint struct {
@@ -18,6 +20,9 @@ type TunnelLinkEndpoint struct {
 	packetIn         atomic.Uint64
 	packetOut        atomic.Uint64
 	mtu              atomic.Uint32
+	// limits, when set and mtu is not, sizes the MTU by the packet limit
+	// negotiated with the current peer.
+	limits transport.PeerParameterProvider
 }
 
 func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
@@ -57,6 +62,11 @@ func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcp
 func (e *TunnelLinkEndpoint) MTU() uint32 {
 	if m := e.mtu.Load(); m != 0 {
 		return m
+	}
+	if e.limits != nil {
+		if p, ready := e.limits.PeerParameters(); ready && p.MaxPacketSize >= 1280 && p.MaxPacketSize < 1500 {
+			return uint32(p.MaxPacketSize)
+		}
 	}
 	return 1500
 }

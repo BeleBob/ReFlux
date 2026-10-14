@@ -260,3 +260,17 @@ func TestManagerDispatchControlForwardsUnknownSubtypes(t *testing.T) {
 		t.Fatal("callback not invoked")
 	}
 }
+
+// The tunnel and the L3 exit size packets by the limit negotiated with the
+// peer; behind a Manager they never saw it.
+func TestManagerReportsTheNegotiatedLimit(t *testing.T) {
+	p := startPair(t, pairOpts{types: []int{0}})
+	p.roundTrip(t, 3*time.Second, "up")
+	for _, m := range []*Manager{p.client, p.exit} {
+		var n transport.PeerParameterProvider = m
+		params, ready := n.PeerParameters()
+		if !ready || params.MaxPacketSize != 1500 {
+			t.Fatalf("PeerParameters = %+v, ready %v; want the negotiated 1500, ready", params, ready)
+		}
+	}
+}
