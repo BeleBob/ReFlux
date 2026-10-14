@@ -39,8 +39,63 @@ var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
 // mailruMaxFrame is the largest frame a cursor message carries: since
 // 2026-10-12 the document server answers a cursor of about 3 KB and more
 // with "access deny" (3060 bytes passed, 3072 did not), so batches stay at
-// 3000 (transport.FrameLimiter).
-const mailruMaxFrame = 3000
+// 3060 (transport.FrameLimiter). Two 1400-byte packets, the app's default
+// MTU, fit in one with their Session envelopes; at 3000 only one did, and
+// with the message allowance below every frame counts.
+const mailruMaxFrame = 3060
+
+// The document server allows a connection about five messages a second
+// beyond a burst of about fifty and drops it with "access deny" past that
+// (since 2026-10-14: 20 a second were denied after 70 messages, 8 after
+// 133, 6 after 293; 5 a second were not in two minutes). It counts
+// messages, not bytes, and each connection on its own. A connection keeps
+// under it with room to spare; variables for tests.
+var (
+	sendRate  = 4.0
+	sendBurst = 32.0
+)
+
+// budget is a connection's allowance of messages (sendRate, sendBurst): a
+// token bucket that starts full, as the server's does for a new
+// connection.
+type budget struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+}
+
+func (b *budget) refillLocked(now time.Time) {
+	if b.last.IsZero() {
+		b.tokens = sendBurst
+	} else {
+		b.tokens = min(sendBurst, b.tokens+now.Sub(b.last).Seconds()*sendRate)
+	}
+	b.last = now
+}
+
+// take spends a message. A control message may overdraw the allowance; data
+// then waits for longer.
+func (b *budget) take() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(time.Now())
+	b.tokens--
+}
+
+// untilToken is how long until a message may go out (0: now).
+func (b *budget) untilToken() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.refillLocked(time.Now())
+	if b.tokens >= 1 {
+		return 0
+	}
+	return time.Duration((1 - b.tokens) / sendRate * float64(time.Second))
+}
+
+// socketIOEvent starts every message the allowance counts: Socket.IO
+// events, not Engine.IO pings and pongs.
+var socketIOEvent = []byte("42")
 
 // keepAliveCursor is the keep-alive a quiet connection writes: a cursor as
 // the editor sends it (its real length and payload), since the server now
@@ -97,6 +152,8 @@ type DocSession struct {
 	UserID     string
 	writeMu    sync.Mutex
 	lastWrite  atomic.Int64 // unix nanoseconds of the last successful write
+	// budget is what the server still lets this connection send.
+	budget budget
 	// silence is how long the server may say nothing before the
 	// connection counts as dead (engineIOSilence).
 	silence time.Duration
@@ -111,6 +168,9 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	err := s.Conn.WriteMessage(messageType, data)
 	if err == nil {
 		s.lastWrite.Store(time.Now().UnixNano())
+		if bytes.HasPrefix(data, socketIOEvent) {
+			s.budget.take()
+		}
 	}
 	return err
 }
@@ -219,6 +279,9 @@ type MailruDocsTransport struct {
 	userCounter atomic.Int32
 	baseUserID  string
 
+	// queued counts the frames Send took that are not written yet.
+	queued atomic.Int64
+
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
 
@@ -318,6 +381,7 @@ func (t *MailruDocsTransport) Send(data []byte) error {
 
 	select {
 	case session.WriteQueue <- data:
+		t.queued.Add(1)
 		t.RecordSend(len(data))
 		return nil
 	default:
@@ -521,6 +585,10 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
+		if d := session.budget.untilToken(); d > 0 {
+			time.Sleep(d)
+			continue
+		}
 
 		payload := base64.StdEncoding.EncodeToString(pending)
 		// The prefix is the packet's real length: since 2026-10-12 the
@@ -533,12 +601,40 @@ func (t *MailruDocsTransport) writerLoop() {
 			continue
 		}
 		pending = nil
+		t.queued.Add(-1)
 	}
 }
 
 // MaxFrame is transport.FrameLimiter: the batches above stay under the
 // cursor size the document server accepts.
 func (t *MailruDocsTransport) MaxFrame() int { return mailruMaxFrame }
+
+// WaitSend is transport.Pacer: it returns once the connection is up, has
+// no frame waiting and may send a message now, so the batch the caller
+// closes next goes out at once and holds everything queued meanwhile.
+func (t *MailruDocsTransport) WaitSend(stop <-chan struct{}) bool {
+	for {
+		wait := 20 * time.Millisecond
+		t.Mu.RLock()
+		session := t.session
+		t.Mu.RUnlock()
+		if session != nil && t.IsConnected() && t.queued.Load() == 0 {
+			if wait = session.budget.untilToken(); wait <= 0 {
+				return true
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-stop:
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+// QueueBytes is transport.Pacer: about a second of full frames.
+func (t *MailruDocsTransport) QueueBytes() int { return int(sendRate * mailruMaxFrame) }
 
 // keepAliveLoop writes a keep-alive only into a quiet connection: any
 // write (tunnel data, a Session ping, a Socket.IO pong) does its job. Each
