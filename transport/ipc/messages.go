@@ -84,6 +84,8 @@ type StatusPayload struct {
 	// node with carriers and none attached cannot be reached. Sessions only.
 	Carriers int      `json:"carriers,omitempty"`
 	Attached []string `json:"attached,omitempty"`
+	// Links tells how each carrier is doing (links.go). Sessions only.
+	Links []LinkStatus `json:"links,omitempty"`
 }
 
 type CommandPayload struct {

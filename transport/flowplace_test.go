@@ -202,3 +202,37 @@ func TestSessionSpreadsFlowsOverEqualCarriers(t *testing.T) {
 		}
 	}
 }
+
+// The status tells, per carrier, whether it reaches the peer and what it
+// carried: the host shows a client's documents by it.
+func TestSessionLinkStatuses(t *testing.T) {
+	client, exit, cw, ew := linkedSessionsWith(t, func(int) int { return 100 }, "mailru", "mailru-2")
+	var got atomic.Int32
+	exit.Receive(func([]byte) { got.Add(1) })
+	startPair(t, client, exit)
+	eventually(t, "both carriers heard", func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return len(client.liveLinksLocked()) == 2
+	})
+	ports := collidingPorts(2, 2)
+	for _, port := range ports {
+		if err := client.Send(flowPacket(port)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventually(t, "both packets delivered", func() bool { return got.Load() == 2 })
+	blackhole(cw["mailru-2"], ew["mailru-2"])
+	client.MarkStalled("mailru-2")
+
+	st := client.LinkStatuses()
+	if len(st) != 2 || st[0].Name != "mailru" || st[1].Name != "mailru-2" {
+		t.Fatalf("statuses %+v, want mailru then mailru-2", st)
+	}
+	if !st[0].Attached || !st[0].Live || st[0].HeardMs == 0 || st[0].Flows != 1 {
+		t.Fatalf("mailru: %+v, want attached, live, heard, one flow", st[0])
+	}
+	if !st[1].Attached || st[1].Live || st[1].Flows != 1 {
+		t.Fatalf("mailru-2: %+v, want attached, not live, one flow", st[1])
+	}
+}
