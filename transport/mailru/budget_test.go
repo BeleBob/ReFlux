@@ -130,9 +130,8 @@ func TestConnectionKeepsWithinTheServerAllowance(t *testing.T) {
 // WaitSend lets a batch close only when the connection may send it at
 // once: not while the allowance is spent, nor while a frame still waits.
 func TestWaitSendWaitsForTheAllowance(t *testing.T) {
-	withAllowance(t, 20, 2)
 	tr := NewMailruDocsTransport("Vuri/test", transport.DefaultConfig())
-	s := &DocSession{}
+	s := &DocSession{budget: budget{rate: 20, burst: 2}}
 	tr.session = s
 	tr.SetConnected(true)
 
