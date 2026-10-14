@@ -88,17 +88,6 @@ const (
 	poolReserve = 2
 )
 
-// docIndex is the position of the carrier named active among c's
-// documents, -1 for none.
-func (c Client) docIndex(active string) int {
-	for i, n := range carrierNames(c.Docs()) {
-		if n == active {
-			return i
-		}
-	}
-	return -1
-}
-
 // docUsers maps every document URL to the client using it, and to clients
 // revoked less than docQuarantine ago: an old app may still reach for its
 // document for a while, so it is not handed to anyone else that soon.
@@ -420,7 +409,7 @@ func cmdDocs(s Store, args []string, stdout io.Writer) error {
 		if c, err = s.AddDoc(c.Name, d); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "%s: document %d added (%s, backup).\n", c.Name, len(c.Docs()), d.Transport)
+		fmt.Fprintf(stdout, "%s: document %d added (%s).\n", c.Name, len(c.Docs()), d.Transport)
 	case pos[1] == "remove" && len(pos) == 3:
 		n, err := strconv.Atoi(pos[2])
 		if err != nil {
@@ -445,26 +434,34 @@ func cmdDocs(s Store, args []string, stdout io.Writer) error {
 	return nil
 }
 
-// printDocs shows a client's documents and which one carries the traffic.
+// printDocs shows a client's documents and, from its node, how each one is
+// doing: whether it reaches the client, its traffic since the node started
+// and the flows it carries now (docstatus.go).
 func printDocs(s Store, c Client, stdout io.Writer) error {
 	mode := "classic exit (classic and Session apps)"
 	if c.session() {
 		mode = "Session exit (Session apps only)"
 	}
-	active := -1
-	if st, ok := nodeStatuses(s, activeClients([]Client{c}, time.Now()))[c.Name]; ok {
-		active = c.docIndex(st.Active)
+	var live []docStatus
+	online := false
+	st, ok := nodeStatuses(s, activeClients([]Client{c}, time.Now()))[c.Name]
+	if ok {
+		live, online = docStatuses(c, st), st.Connected
 	}
 	fmt.Fprintf(stdout, "%s: %d document(s), %s\n", c.Name, len(c.Docs()), mode)
 	for i, d := range c.Docs() {
-		role, mark := "backup", ""
-		if i == 0 {
-			role = "main"
+		line := fmt.Sprintf("  %d  %-7s", i+1, d.Transport)
+		if i < len(live) {
+			if id := live[i].state(online); id != "" {
+				line += fmt.Sprintf(" %-25s ↓%-8s ↑%-8s %d flow(s)", tr(langEN, id),
+					humanBytes(live[i].down), humanBytes(live[i].up), live[i].flows)
+			}
 		}
-		if i == active {
-			mark = "  <- traffic"
-		}
-		fmt.Fprintf(stdout, "  %d  %-7s %-6s %s%s\n", i+1, d.Transport, role, d.URL, mark)
+		fmt.Fprintf(stdout, "%s\n     %s\n", strings.TrimRight(line, " "), d.URL)
+	}
+	if ok {
+		fmt.Fprintf(stdout, "Traffic since the node started, %s ago; the client's flows are shared among the documents that reach it.\n",
+			durationIn(langEN, time.Duration(st.UptimeMs)*time.Millisecond))
 	}
 	return nil
 }

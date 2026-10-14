@@ -373,7 +373,7 @@ type statusView struct {
 	online    bool
 	up        time.Duration
 	down, upB uint64
-	doc       int // the document the traffic goes over, -1 unknown (docs.go)
+	docs      []docStatus // the client's documents, in order (docstatus.go)
 }
 
 func (b *bot) clientViews(clients []Client) []clientView { return viewClients(b.s, clients) }
@@ -390,7 +390,7 @@ func viewClients(s Store, clients []Client) []clientView {
 		v := clientView{c: c, active: c.Active(now), running: states["reflux-node-"+c.Name] != "", seen: seen[c.Name]}
 		if st, ok := live[c.Name]; ok {
 			v.status = &statusView{online: st.Connected, up: time.Duration(st.UptimeMs) * time.Millisecond,
-				down: st.BytesOut, upB: st.BytesIn, doc: c.docIndex(st.Active)}
+				down: st.BytesOut, upB: st.BytesIn, docs: docStatuses(c, st)}
 		}
 		out = append(out, v)
 	}
@@ -512,8 +512,8 @@ func (b *bot) clientScreen(name string) screen {
 		t.WriteString(b.tr("ui.client.node", b.tr("ui.node.up", durationIn(b.lang, v.status.up))) + "\n")
 		t.WriteString(b.tr("ui.client.client", v.onlineText(b.lang)) + "\n")
 		t.WriteString(b.tr("ui.client.traffic", humanBytes(v.status.down), humanBytes(v.status.upB)) + "\n")
-		if v.status.online && v.status.doc > 0 {
-			t.WriteString(b.tr("ui.client.onbackup", v.status.doc+1) + "\n")
+		if cold, ok := coldDocs(v.status.docs); v.status.online && ok && len(cold) > 0 {
+			t.WriteString(b.tr("ui.client.cold", docNumbers(cold)) + "\n")
 		}
 	}
 	if today, month, ok := b.s.trafficNow(c.Name, now); ok {
