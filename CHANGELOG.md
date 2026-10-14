@@ -5,6 +5,16 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-14
+
+### Changed
+
+- **Mail.ru is much faster.** The Mail.ru docs server cuts an anonymous editor after about a dozen
+  chat messages no matter how big they are, so the tunnel now coalesces far more into each message
+  before that cut — end-to-end throughput rises from tens of KB/s to roughly 800 KB/s per burst.
+  Only the Mail.ru carrier changes its default batch size; every other transport is byte-for-byte
+  unchanged, and `OPENFLUX_BATCH_BYTES` still overrides it.
+
 ## [0.7.2] - 2026-10-13
 
 ### Fixed
