@@ -56,6 +56,9 @@ var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avi
 // (and "is_exit") for direct, "path"/"pubkey"/"name" plus whatever the script
 // itself asked for for script. An empty type is yandex.
 func New(typ, url string, params map[string]interface{}, o Options) (transport.Transport, error) {
+	if urls := groupURLs(url, params); urls != nil {
+		return newGroup(typ, urls, params, o)
+	}
 	base := o.Base
 	if o.LowMemory {
 		base.MaxQueueSize = 512

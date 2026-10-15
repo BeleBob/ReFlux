@@ -82,6 +82,14 @@ func NewBatchedTransport(inner Transport, batchBytesHint ...int) *BatchedTranspo
 	return b
 }
 
+// SetLinger sets how long a partial batch waits for more frames (ms), unless
+// OPENFLUX_BATCH_LINGER_MS overrides it; call before Start.
+func (b *BatchedTransport) SetLinger(ms int) {
+	if os.Getenv("OPENFLUX_BATCH_LINGER_MS") == "" && ms > 0 {
+		b.lingerMs = ms
+	}
+}
+
 func (b *BatchedTransport) Start() error {
 	utils.Debugf("[BATCH] Start() called")
 	b.lifecycle.Lock()

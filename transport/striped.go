@@ -74,6 +74,7 @@ type StripedTransport struct {
 
 	stopOnce sync.Once
 	done     chan struct{}
+	ackEvery time.Duration // 0: ackInterval
 }
 
 const maxStripeLanes = 64
@@ -204,6 +205,19 @@ type StripeOptions struct {
 	// NoDups turns off the spare-room copies of overdue pieces: a lane that
 	// does not lose packets only wastes its turn on them.
 	NoDups bool
+	// InitRTO, MinRTO, MaxRTO bound the retransmission timeout for a carrier
+	// whose lanes answer in seconds (a throttled chat): the defaults (500 ms
+	// until measured, at most 2 s) resend every piece before its ack can
+	// arrive, which never lets a round trip be measured and floods the lane.
+	// 0: the default.
+	InitRTO, MinRTO, MaxRTO time.Duration
+	// HoleDeadline is how long the receiver waits on a missing piece before
+	// skipping it (0: the default, STRIPE_HOLE_MS).
+	HoleDeadline time.Duration
+	// AckInterval is how often the receiver acks while data flows (0: the
+	// default, STRIPE_ACK_MS). A carrier limited by messages per second wants
+	// few, big ones: every ack is a message.
+	AckInterval time.Duration
 }
 
 // SetOptions applies o; call it before Start.
@@ -211,6 +225,16 @@ func (s *StripedTransport) SetOptions(o StripeOptions) {
 	s.snd.mu.Lock()
 	defer s.snd.mu.Unlock()
 	s.snd.pieceBytes, s.snd.noDups = o.PieceBytes, o.NoDups
+	s.snd.rtoInit, s.snd.rtoMin, s.snd.rtoMax = o.InitRTO, o.MinRTO, o.MaxRTO
+	if o.AckInterval > 0 && os.Getenv("STRIPE_ACK_MS") == "" {
+		s.ackEvery = o.AckInterval
+	}
+	if o.HoleDeadline > 0 {
+		s.snd.giveUp = o.HoleDeadline + 3*time.Second
+		s.ro.mu.Lock()
+		s.ro.hole = o.HoleDeadline
+		s.ro.mu.Unlock()
+	}
 	for i := range s.snd.lane {
 		s.snd.lane[i].deadAfter = o.DeadAfter
 	}
@@ -516,7 +540,7 @@ func (s *StripedTransport) onLane(lane int, b []byte) {
 // ackLoop sends the receiver's state to the sender: every ackInterval while
 // new pieces arrive, and at least every 4 intervals while a hole is open.
 func (s *StripedTransport) ackLoop() {
-	t := time.NewTicker(ackInterval)
+	t := time.NewTicker(s.ackPeriod())
 	defer t.Stop()
 	var lastGen uint64
 	var lastAt time.Time
@@ -526,7 +550,7 @@ func (s *StripedTransport) ackLoop() {
 			return
 		case now := <-t.C:
 			gen, holes, ok := s.ro.ackState()
-			if !ok || (gen == lastGen && (!holes || now.Sub(lastAt) < 4*ackInterval)) {
+			if !ok || (gen == lastGen && (!holes || now.Sub(lastAt) < 4*s.ackPeriod())) {
 				continue
 			}
 			lastGen, lastAt = gen, now
@@ -540,7 +564,7 @@ func (s *StripedTransport) ackLoop() {
 // lossLoop catches what no ack reveals - the tail of a burst - by the
 // retransmission timeout, and keeps the lanes' figures.
 func (s *StripedTransport) lossLoop() {
-	t := time.NewTicker(ackInterval)
+	t := time.NewTicker(s.ackPeriod())
 	defer t.Stop()
 	for {
 		select {
@@ -831,6 +855,9 @@ type sender struct {
 	// Per-stripe overrides of the Telemost-tuned defaults; see StripeOptions.
 	pieceBytes int
 	noDups     bool
+
+	rtoInit, rtoMin, rtoMax time.Duration // 0: the defaults
+	giveUp                  time.Duration // 0: giveUpAfter
 }
 
 // piece is the most one piece carries on this stripe.
@@ -1241,15 +1268,25 @@ func (q *sender) rttSample(d time.Duration) {
 // rto is the link's retransmission timeout: a piece neither acked nor shown
 // lost by its lane after this long is sent again.
 func (q *sender) rto() time.Duration {
+	lo, hi := 50*time.Millisecond, 2*time.Second
+	if q.rtoMin > 0 {
+		lo = q.rtoMin
+	}
+	if q.rtoMax > 0 {
+		hi = q.rtoMax
+	}
 	if q.srtt == 0 {
+		if q.rtoInit > 0 {
+			return q.rtoInit
+		}
 		return 500 * time.Millisecond
 	}
 	r := q.srtt + 4*q.rttvar + 2*ackInterval
-	if r < 50*time.Millisecond {
-		r = 50 * time.Millisecond
+	if r < lo {
+		r = lo
 	}
-	if r > 2*time.Second {
-		r = 2 * time.Second
+	if r > hi {
+		r = hi
 	}
 	return r
 }
@@ -1271,7 +1308,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 		if !e.ok || e.seq != x {
 			continue
 		}
-		if now.Sub(e.born) > giveUpAfter {
+		if now.Sub(e.born) > max(q.giveUp, giveUpAfter*btoi(q.giveUp == 0)) {
 			// Nobody has acked it for this long: the receiver skipped the
 			// hole long ago, or is gone. Resending it forever would only
 			// keep the lanes busy and the ring full.
@@ -1400,6 +1437,7 @@ type reorderBuffer struct {
 	gen     uint64 // bumped by every new piece
 	ring    []reorderSlot
 	count   int
+	hole    time.Duration // 0: holeDeadline
 	out     chan reorderOut
 	gapNext bool
 
@@ -1546,7 +1584,7 @@ func (r *reorderBuffer) run(done chan struct{}) {
 		for r.count > 0 {
 			low := r.lowestLocked(r.next + reorderWindow)
 			waited := time.Since(r.ring[low%reorderWindow].at)
-			if waited <= holeDeadline {
+			if waited <= max(r.hole, holeDeadline*btoi(r.hole == 0)) {
 				break
 			}
 			utils.Infof("[STRIPE] gave up on %d piece(s) from seq %d after %s", low-r.next, r.next, waited.Round(time.Millisecond))
@@ -1604,4 +1642,18 @@ func (r *reorderBuffer) snapshot() (delivered, skipped, late uint64, buffered in
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.delivered, r.skipped, r.late, r.count, r.gaps
+}
+
+func btoi(b bool) time.Duration {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func (s *StripedTransport) ackPeriod() time.Duration {
+	if s.ackEvery > 0 {
+		return s.ackEvery
+	}
+	return ackInterval
 }

@@ -269,6 +269,7 @@ func main() {
 	role := flag.String("role", roleClient, "client | exit | bench-send | bench-sink")
 	inbound := flag.String("inbound", "", "tun | socks5 (client only; default: tun on macOS, socks5 elsewhere)")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme, cupsonline, mailru, telemost)")
+	lanesFlag := flag.Int("lanes", 0, "Exit with no --url: run N carriers of this transport as lanes of one stripe, each creating its own rooms (cupsonline, avito); with --url, a comma-separated list of links is striped the same way")
 	mode := flag.String("mode", "", "Exit-node mode: l3 (default; Linux as root, or Windows as Administrator with WinDivert) or l4 (works everywhere)")
 
 	codec := flag.String("codec", codecBatched, "batched (default, zstd+coalescing) or legacy (per-packet LZ4)")
@@ -601,6 +602,12 @@ DEPRECATED (removed in v2)
 			if spec.Type == "cupsonline" {
 				spec.Params = map[string]interface{}{"exit": isExit}
 			}
+			if n := confInt(t.Values["Lanes"], 0); n >= 2 {
+				if spec.Params == nil {
+					spec.Params = map[string]interface{}{}
+				}
+				spec.Params["lanes"] = n
+			}
 			confTransports = append(confTransports, spec)
 		}
 	}
@@ -884,6 +891,12 @@ DEPRECATED (removed in v2)
 		if *transportType == "cupsonline" {
 			specs[0].Params = map[string]interface{}{"exit": isExit}
 		}
+		if *lanesFlag >= 2 {
+			if specs[0].Params == nil {
+				specs[0].Params = map[string]interface{}{}
+			}
+			specs[0].Params["lanes"] = *lanesFlag
+		}
 	}
 
 	// Telemost's media runs over WebRTC's own UDP sockets, which neither the
@@ -1063,7 +1076,7 @@ DEPRECATED (removed in v2)
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}
 		inner, err := registry.New(*transportType, globalDocUrl,
-			map[string]interface{}{"token": maxToken, "uid": maxUid, "exit": isExit},
+			classicParams(maxToken, maxUid, isExit, *lanesFlag),
 			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile, AvitoCookies: avitoCookiesStr})
 		if err != nil {
 			log.Fatalf("%s: %v", *transportType, err)
@@ -1462,4 +1475,13 @@ func hasTelemost(specs []transportSpec) bool {
 		}
 	}
 	return false
+}
+
+// classicParams are the registry params of the single-transport path.
+func classicParams(token string, uid string, isExit bool, lanes int) map[string]interface{} {
+	p := map[string]interface{}{"token": token, "uid": uid, "exit": isExit}
+	if lanes >= 2 {
+		p["lanes"] = lanes
+	}
+	return p
 }

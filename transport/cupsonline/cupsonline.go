@@ -1914,3 +1914,14 @@ func (t *CupsonlineTransport) ApplyCookies(values map[string]string) error {
 	}
 	return nil
 }
+
+// SetNumRooms sets how many rooms (avito: room pairs) an exit with no --url
+// creates, before Start. A group of carriers gives each lane one.
+func (t *CupsonlineTransport) SetNumRooms(n int) {
+	if n > 0 {
+		t.config.NumRooms = n
+	}
+}
+
+// StripeOptions are the settings for a stripe over this carrier's rooms.
+func StripeOptions() transport.StripeOptions { return stripeOptions }
