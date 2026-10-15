@@ -1071,7 +1071,7 @@ DEPRECATED (removed in v2)
 		// Session needs one), or a bench role.
 		// The types the classic path serves; the registry builds them.
 		switch *transportType {
-		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "avito", "mailru", "telemost":
+		case "boards", "vyandex", "yandex", "oneme", "cupsonline", "avito", "mailru", "telemost", "mixed":
 		default:
 			log.Fatalf("Unknown transport type: %s", *transportType)
 		}

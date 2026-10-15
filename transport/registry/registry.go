@@ -56,6 +56,9 @@ var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avi
 // (and "is_exit") for direct, "path"/"pubkey"/"name" plus whatever the script
 // itself asked for for script. An empty type is yandex.
 func New(typ, url string, params map[string]interface{}, o Options) (transport.Transport, error) {
+	if links := typedLinks(url); links != nil {
+		return newMixed(links, params, o)
+	}
 	if urls := groupURLs(url, params); urls != nil {
 		return newGroup(typ, urls, params, o)
 	}
@@ -102,6 +105,9 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 		return newScript(url, params, o)
 	case "direct":
 		return newDirect(params, o)
+	case "mixed":
+		// A mixed group is recognised by its url ("type:link ..."), above.
+		return nil, errors.New("mixed: в url нужны ссылки вида тип:ссылка (cupsonline:... avito:... mailru:...)")
 	}
 	return nil, fmt.Errorf("unknown transport type %q", typ) // the apps never offer an unknown one
 }

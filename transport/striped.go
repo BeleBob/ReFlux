@@ -72,9 +72,10 @@ type StripedTransport struct {
 	pumps  []chan struct{} // wake-ups of the lanes that cannot pull
 	wakers []LaneWaker     // pulling lanes that sleep while there is nothing
 
-	stopOnce sync.Once
-	done     chan struct{}
-	ackEvery time.Duration // 0: ackInterval
+	stopOnce  sync.Once
+	done      chan struct{}
+	ackEvery  time.Duration // 0: ackInterval
+	batchHint int           // see PreferredBatchBytes
 }
 
 const maxStripeLanes = 64
@@ -218,6 +219,10 @@ type StripeOptions struct {
 	// default, STRIPE_ACK_MS). A carrier limited by messages per second wants
 	// few, big ones: every ack is a message.
 	AckInterval time.Duration
+	// LaneWindow gives each lane a delay-based window of pieces in flight, for
+	// lanes that lose nothing but queue (rooms, documents, chats); needed to
+	// stripe lanes of very different speed. STRIPE_LANEWIN=0/1 overrides.
+	LaneWindow bool
 }
 
 // SetOptions applies o; call it before Start.
@@ -226,6 +231,16 @@ func (s *StripedTransport) SetOptions(o StripeOptions) {
 	defer s.snd.mu.Unlock()
 	s.snd.pieceBytes, s.snd.noDups = o.PieceBytes, o.NoDups
 	s.snd.rtoInit, s.snd.rtoMin, s.snd.rtoMax = o.InitRTO, o.MinRTO, o.MaxRTO
+	on := o.LaneWindow
+	switch os.Getenv("STRIPE_LANEWIN") {
+	case "0":
+		on = false
+	case "1":
+		on = true
+	}
+	for i := range s.snd.lane {
+		s.snd.lane[i].winOn = on
+	}
 	if o.AckInterval > 0 && os.Getenv("STRIPE_ACK_MS") == "" {
 		s.ackEvery = o.AckInterval
 	}
@@ -672,7 +687,11 @@ func (s *StripedTransport) statsLoop() {
 			if ss.laneDead[i] {
 				dead = " DEAD"
 			}
-			per = append(per, fmt.Sprintf("%d:%s s%d/r%d loss%.0f%% pace%.0f%s", i, id, s.laneSent[i].Load(), s.laneRecv[i].Load(), ss.laneLoss[i]*100, ss.laneRate[i], dead))
+			win := ""
+			if ss.laneWin[i] > 0 {
+				win = fmt.Sprintf(" win%.0f/fl%d/rtt%dms", ss.laneWin[i], ss.laneFlight[i], ss.laneRTT[i].Milliseconds())
+			}
+			per = append(per, fmt.Sprintf("%d:%s s%d/r%d loss%.0f%% pace%.0f%s%s", i, id, s.laneSent[i].Load(), s.laneRecv[i].Load(), ss.laneLoss[i]*100, ss.laneRate[i], win, dead))
 		}
 		utils.Packetf("[STRIPE] per-lane %s | arrival gaps 1:%d 2-3:%d 4-7:%d 8-15:%d 16-31:%d 32-63:%d 64-127:%d 128+:%d",
 			strings.Join(per, " "), gaps[0], gaps[1], gaps[2], gaps[3], gaps[4], gaps[5], gaps[6], gaps[7])
@@ -932,6 +951,12 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
 	ls := &q.lane[i]
 	if allowed := ls.allow(now); max-len(out) > allowed {
 		max = len(out) + allowed
+	}
+	if ls.winOn {
+		inflight := int(q.laneTx[i] - q.laneAck[i])
+		if room := ls.winRoom(inflight); max-len(out) > room {
+			max = len(out) + room
+		}
 	}
 	dead := ls.dead(now) && q.othersAlive(i, now)
 	if dead {
@@ -1220,6 +1245,9 @@ func (q *sender) onAck(b []byte, now time.Time) bool {
 		if e.tries == 1 && original && (sample == 0 || d < sample) {
 			sample = d
 		}
+		if e.tries == 1 && original {
+			q.lane[e.lane].winSample(d, now)
+		}
 	}
 	for ; seqBefore(q.low, cum); q.low++ {
 		acked(q.low)
@@ -1410,6 +1438,9 @@ type senderStats struct {
 	queueDelay, srtt, rto                             time.Duration
 	laneLoss, laneRate                                [maxStripeLanes]float64
 	laneDead                                          [maxStripeLanes]bool
+	laneWin                                           [maxStripeLanes]float64
+	laneFlight                                        [maxStripeLanes]int
+	laneRTT                                           [maxStripeLanes]time.Duration
 }
 
 func (q *sender) snapshot() senderStats {
@@ -1419,6 +1450,7 @@ func (q *sender) snapshot() senderStats {
 		inflight: int(q.seq + 1 - q.low), queueBytes: q.queueBytes, srtt: q.srtt, rto: q.rto()}
 	for i := range q.lane {
 		st.laneLoss[i], st.laneRate[i], st.laneDead[i] = q.lane[i].loss, q.lane[i].rate, q.lane[i].dead(time.Now())
+		st.laneWin[i], st.laneFlight[i], st.laneRTT[i] = q.lane[i].win, int(q.laneTx[i]-q.laneAck[i]), q.lane[i].lrtt
 	}
 	if len(q.queue) > 0 {
 		st.queueDelay = time.Since(q.queue[0].at)
@@ -1657,3 +1689,12 @@ func (s *StripedTransport) ackPeriod() time.Duration {
 	}
 	return ackInterval
 }
+
+// SetBatchHint sets the coalescing batch size the Session above this stripe
+// should use (see BatchSizeHinter): lanes that take big messages (a Mail.ru
+// chat message holds 500 KB) want big batches, and a stripe of them must pass
+// that on, or its pieces stay small and the lane windows carry little.
+func (s *StripedTransport) SetBatchHint(n int) { s.batchHint = n }
+
+// PreferredBatchBytes implements BatchSizeHinter (0: no preference).
+func (s *StripedTransport) PreferredBatchBytes() int { return s.batchHint }

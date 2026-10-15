@@ -42,6 +42,7 @@ var groupStripe = transport.StripeOptions{
 	MaxRTO:       15 * time.Second,
 	HoleDeadline: 20 * time.Second,
 	AckInterval:  100 * time.Millisecond,
+	LaneWindow:   true,
 }
 
 // groupLingerMs is how long a lane's batcher waits to fill a message.
@@ -159,6 +160,7 @@ func newGroup(typ string, urls []string, params map[string]interface{}, o Option
 	}
 	laneRooms := max(intParam(params, "lane_rooms"), 1)
 	lanes := make([]transport.Transport, 0, len(urls))
+	hint := 0
 	var rooms []roomed
 	for _, u := range urls {
 		l, err := New(typ, u, laneParams(params), o)
@@ -175,6 +177,7 @@ func newGroup(typ string, urls []string, params map[string]interface{}, o Option
 		// not bytes (Mail.ru) must get them packed into big ones, as the
 		// Session does above a single carrier. Cups and Avito pack their own.
 		if h, ok := l.(transport.BatchSizeHinter); ok {
+			hint = max(hint, h.PreferredBatchBytes())
 			b := transport.NewBatchedTransport(l, h.PreferredBatchBytes())
 			b.SetLinger(groupLingerMs)
 			l = b
@@ -183,6 +186,7 @@ func newGroup(typ string, urls []string, params map[string]interface{}, o Option
 	}
 	st := transport.NewStripedTransport(lanes)
 	st.SetOptions(groupOptions(typ))
+	st.SetBatchHint(hint)
 	if len(rooms) != len(lanes) {
 		return st, nil // no rooms to hand out (Mail.ru, Yandex, ...)
 	}

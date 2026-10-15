@@ -59,3 +59,33 @@ func TestGroupRoomListWaitsForAllLanes(t *testing.T) {
 		t.Fatal("a Mail.ru group has no rooms to hand out")
 	}
 }
+
+func TestTypedLinks(t *testing.T) {
+	got := typedLinks("cupsonline:eyJ2 avito:abc,mailru:https://cloud.mail.ru/public/a/b")
+	want := []typedLink{{"cupsonline", "eyJ2"}, {"avito", "abc"}, {"mailru", "https://cloud.mail.ru/public/a/b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("typedLinks = %v, want %v", got, want)
+	}
+	if got := typedLinks("cupsonline: avito:"); len(got) != 2 || got[0].link != "" {
+		t.Fatalf("empty links are lanes that create rooms: %v", got)
+	}
+	for _, bad := range []string{"https://a/b,https://c/d", "mailru:x", "cupsonline:a foo:b", "u1,u2"} {
+		if got := typedLinks(bad); got != nil {
+			t.Errorf("typedLinks(%q) = %v, want nil", bad, got)
+		}
+	}
+}
+
+func TestMixedRoomListWaitsForRoomCarriers(t *testing.T) {
+	g, err := New("cupsonline", "cupsonline: avito:", nil, Options{IsExit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl, ok := g.(interface{ RoomList() string })
+	if !ok {
+		t.Fatal("a mixed group of room carriers should hand out a room list")
+	}
+	if rl.RoomList() != "" {
+		t.Fatalf("list before Start = %q, want empty", rl.RoomList())
+	}
+}

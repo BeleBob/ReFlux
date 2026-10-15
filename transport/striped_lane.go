@@ -53,6 +53,76 @@ type laneState struct {
 	rampUntil time.Time
 
 	deadAfter time.Duration // 0: deadAfterDefault
+
+	// The delay-based window (StripeOptions.LaneWindow), for lanes that lose
+	// nothing but queue: how many pieces may be sent and not yet acked, grown
+	// while the lane's round trip stays near its best and cut once the
+	// carrier's queue shows up in it. A slow lane then holds few pieces and a
+	// fast one many, so lanes of very different speed add up.
+	winOn     bool
+	win       float64
+	slowStart bool
+	baseRTT   time.Duration
+	baseAt    time.Time
+	lrtt      time.Duration
+	cutAt     time.Time
+}
+
+const (
+	laneWinMin  = 8
+	laneWinMax  = 4096
+	laneWinInit = 16
+)
+
+// winRoom is how many more pieces the lane may take now, given how many it
+// has in flight; a large number when the window is off.
+func (l *laneState) winRoom(inflight int) int {
+	if !l.winOn {
+		return math.MaxInt32
+	}
+	if l.win == 0 {
+		l.win, l.slowStart = laneWinInit, true
+	}
+	if r := int(l.win) - inflight; r > 0 {
+		return r
+	}
+	return 0
+}
+
+// winSample feeds the window one round trip of the lane (a piece sent once
+// and acked).
+func (l *laneState) winSample(d time.Duration, now time.Time) {
+	if !l.winOn {
+		return
+	}
+	if l.win == 0 {
+		l.win, l.slowStart = laneWinInit, true
+	}
+	if l.baseRTT == 0 || d < l.baseRTT || now.Sub(l.baseAt) > 20*time.Second {
+		l.baseRTT, l.baseAt = d, now
+	}
+	if l.lrtt == 0 {
+		l.lrtt = d
+	} else {
+		l.lrtt = (7*l.lrtt + d) / 8
+	}
+	grow := l.baseRTT + l.baseRTT/2 + 60*time.Millisecond
+	switch {
+	case l.lrtt <= grow && l.slowStart:
+		l.win++ // doubles per round trip
+	case l.lrtt <= l.baseRTT+l.baseRTT/4+40*time.Millisecond:
+		l.slowStart = false
+		l.win += 1 / l.win // one piece per round trip
+	case l.lrtt > l.baseRTT*2+100*time.Millisecond:
+		l.slowStart = false
+		if now.Sub(l.cutAt) > l.baseRTT {
+			l.cutAt = now
+			l.win *= 0.85
+		}
+	default:
+		l.slowStart = false
+	}
+	l.win = math.Min(math.Max(l.win, laneWinMin), laneWinMax)
 }
 
 // pacingOn: STRIPE_PACE=0 lets every lane send all its clock allows.
