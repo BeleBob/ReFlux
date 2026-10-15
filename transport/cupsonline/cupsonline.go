@@ -1773,6 +1773,8 @@ func (t *CupsonlineTransport) statsLoop() {
 	defer tick.Stop()
 
 	lastSent := make([]uint64, len(t.wss))
+
+	lastMsgs := make([]uint64, len(t.wss))
 	lastRecv := make([]uint64, len(t.wss))
 	lastBytesSent := make([]uint64, len(t.wss))
 	lastBytesRecv := make([]uint64, len(t.wss))
@@ -1805,8 +1807,16 @@ func (t *CupsonlineTransport) statsLoop() {
 				totalBytesSent += bs
 				totalBytesRecv += br
 
-				utils.Debugf("[CH-%02d %s] tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
+				msgs := ws.stats.batchesSent.Load()
+				dM := msgs - lastMsgs[i]
+				lastMsgs[i] = msgs
+				avgMsg := 0.0
+				if dM > 0 {
+					avgMsg = float64(dBS) / float64(dM)
+				}
+				utils.Debugf("[CH-%02d %s] msgs=%.1f/s avg=%.0fB inflight=%d  tx=%d pkt/s (%.1f KB/s)  rx=%d pkt/s (%.1f KB/s)  drop=%d  reconn=%d  conn=%v",
 					i, shortRoom(ws.roomUUID),
+					float64(dM)/t.config.StatsInterval.Seconds(), avgMsg, ws.inflight.Load(),
 					dS/uint64(t.config.StatsInterval.Seconds()),
 					float64(dBS)/t.config.StatsInterval.Seconds()/1024,
 					dR/uint64(t.config.StatsInterval.Seconds()),

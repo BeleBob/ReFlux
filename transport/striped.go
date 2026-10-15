@@ -223,6 +223,16 @@ type StripeOptions struct {
 	// lanes that lose nothing but queue (rooms, documents, chats); needed to
 	// stripe lanes of very different speed. STRIPE_LANEWIN=0/1 overrides.
 	LaneWindow bool
+	// NoPacing turns off the lanes' loss-driven rate pacing: it is made for an
+	// SFU that drops what a lane sends too fast. A lane that loses nothing
+	// (room, document, chat) and only answers late looks "lossy" to it
+	// whenever a timeout fires, and gets throttled for nothing.
+	NoPacing bool
+	// CodelTarget and CodelInterval set the sender queue's CoDel (0: the
+	// defaults, 150 ms / 600 ms, for round trips of tens of ms). A carrier
+	// that takes a second to answer keeps a queue of about a round trip and
+	// must not have it dropped as "standing".
+	CodelTarget, CodelInterval time.Duration
 }
 
 // SetOptions applies o; call it before Start.
@@ -231,6 +241,10 @@ func (s *StripedTransport) SetOptions(o StripeOptions) {
 	defer s.snd.mu.Unlock()
 	s.snd.pieceBytes, s.snd.noDups = o.PieceBytes, o.NoDups
 	s.snd.rtoInit, s.snd.rtoMin, s.snd.rtoMax = o.InitRTO, o.MinRTO, o.MaxRTO
+	s.snd.codelTarget, s.snd.codelInterval = o.CodelTarget, o.CodelInterval
+	for i := range s.snd.lane {
+		s.snd.lane[i].noPace = o.NoPacing
+	}
 	on := o.LaneWindow
 	switch os.Getenv("STRIPE_LANEWIN") {
 	case "0":
@@ -876,6 +890,8 @@ type sender struct {
 	noDups     bool
 
 	rtoInit, rtoMin, rtoMax time.Duration // 0: the defaults
+	codelTarget             time.Duration // 0: codelTarget
+	codelInterval           time.Duration // 0: codelInterval
 	giveUp                  time.Duration // 0: giveUpAfter
 }
 
@@ -1164,10 +1180,10 @@ func (q *sender) dequeue(now time.Time) ([]byte, bool) {
 
 func (q *sender) codelShouldDrop(sojourn time.Duration, now time.Time) bool {
 	okToDrop := false
-	if sojourn < codelTarget || q.queueBytes < 2*q.piece() {
+	if sojourn < q.cTarget() || q.queueBytes < 2*q.piece() {
 		q.codelFirstAbove = time.Time{}
 	} else if q.codelFirstAbove.IsZero() {
-		q.codelFirstAbove = now.Add(codelInterval)
+		q.codelFirstAbove = now.Add(q.cInterval())
 	} else if !now.Before(q.codelFirstAbove) {
 		okToDrop = true
 	}
@@ -1185,7 +1201,7 @@ func (q *sender) codelShouldDrop(sojourn time.Duration, now time.Time) bool {
 	}
 	if okToDrop {
 		q.codelDropping = true
-		if q.codelCount > 2 && now.Sub(q.codelDropNext) < 16*codelInterval {
+		if q.codelCount > 2 && now.Sub(q.codelDropNext) < 16*q.cInterval() {
 			q.codelCount -= 2
 		} else {
 			q.codelCount = 1
@@ -1197,7 +1213,7 @@ func (q *sender) codelShouldDrop(sojourn time.Duration, now time.Time) bool {
 }
 
 func (q *sender) codelControl(t time.Time) time.Time {
-	return t.Add(time.Duration(float64(codelInterval) / math.Sqrt(float64(q.codelCount))))
+	return t.Add(time.Duration(float64(q.cInterval()) / math.Sqrt(float64(q.codelCount))))
 }
 
 // onAck applies an ack; true if it queued retransmissions.
@@ -1698,3 +1714,17 @@ func (s *StripedTransport) SetBatchHint(n int) { s.batchHint = n }
 
 // PreferredBatchBytes implements BatchSizeHinter (0: no preference).
 func (s *StripedTransport) PreferredBatchBytes() int { return s.batchHint }
+
+func (q *sender) cTarget() time.Duration {
+	if q.codelTarget > 0 {
+		return q.codelTarget
+	}
+	return codelTarget
+}
+
+func (q *sender) cInterval() time.Duration {
+	if q.codelInterval > 0 {
+		return q.codelInterval
+	}
+	return codelInterval
+}

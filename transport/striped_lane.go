@@ -53,6 +53,7 @@ type laneState struct {
 	rampUntil time.Time
 
 	deadAfter time.Duration // 0: deadAfterDefault
+	noPace    bool          // StripeOptions.NoPacing
 
 	// The delay-based window (StripeOptions.LaneWindow), for lanes that lose
 	// nothing but queue: how many pieces may be sent and not yet acked, grown
@@ -164,7 +165,7 @@ func (l *laneState) allow(now time.Time) int {
 	if !l.started {
 		l.start(now)
 	}
-	if !pacingOn {
+	if !pacingOn || l.noPace {
 		return math.MaxInt32
 	}
 	l.tokens += l.rate * now.Sub(l.tokenAt).Seconds()
