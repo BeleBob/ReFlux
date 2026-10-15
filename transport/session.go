@@ -191,12 +191,16 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 	classic, codec := s.classic, s.classicCodec
 	s.mu.Unlock()
 	enc.SetAlternateContexts(alternates)
+	batchHint := 0
+	if h, ok := raw.(BatchSizeHinter); ok {
+		batchHint = h.PreferredBatchBytes()
+	}
 	link := &transportLink{
 		name:      name,
 		raw:       raw,
 		demux:     d,
 		encrypted: enc,
-		batched:   NewBatchedTransport(enc),
+		batched:   NewBatchedTransport(enc, batchHint),
 		priority:  priority,
 	}
 	if classic != ClassicOff {

@@ -246,6 +246,19 @@ func (t *MailruDocsTransport) Start() error {
 	return nil
 }
 
+// mailruPreferredBatchBytes is the default coalescing batch size for the chat
+// carrier. The R7 server cuts an anonymous editor connection with 4004 after
+// ~12 chat messages regardless of their size, so a large batch fits far more
+// tunnel data into that fixed message budget before the reconnect. Measured
+// end-to-end (d14 exit <-> 212 client, cachefly 10 MB via socks5h): the 8 KB
+// default gave the old tens-of-KB/s; ~500 KB reaches ~860 KB/s per burst, while
+// 1 MB is slower and far more variable (a bigger loss unit per 4004 cut).
+// OPENFLUX_BATCH_BYTES overrides this (see transport.BatchSizeHinter).
+const mailruPreferredBatchBytes = 500_000
+
+// PreferredBatchBytes implements transport.BatchSizeHinter.
+func (t *MailruDocsTransport) PreferredBatchBytes() int { return mailruPreferredBatchBytes }
+
 func (t *MailruDocsTransport) Send(data []byte) error {
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")

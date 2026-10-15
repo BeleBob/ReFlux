@@ -5,6 +5,17 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.12.0] / node-v1.5.1 - 2026-10-15 (meepo161/OpenFlux)
+
+node-install.sh installs **node-v1.5.1**: node-v1.5.0 with the 0.7.3 Mail.ru batch.
+
+### Changed
+
+- Merged p1neappleXpress 0.7.3 (section below): the Mail.ru carrier packs up to
+  500 KB into each chat message, because the server cuts a connection after about
+  a dozen messages whatever their size. Only the sender changes, so old clients
+  and nodes keep working with new ones.
+
 ## [0.11.0] / node-v1.5.0 - 2026-10-14 (meepo161/OpenFlux)
 
 node-install.sh installs **node-v1.5.0**: the node core with Avito, the 0.7.2
@@ -248,6 +259,16 @@ this fork.
 - The node wizard (`--node-wizard` `connect`, `mobile.NodeConnect`) takes a
   `source`: `fork` (default) installs this fork's core, `official` the same
   script following p1neappleXpress/OpenFlux (`provision.PinnedFor`).
+
+## [0.7.3] - 2026-10-14 (p1neappleXpress/OpenFlux)
+
+### Changed
+
+- **Mail.ru is much faster.** The Mail.ru docs server cuts an anonymous editor after about a dozen
+  chat messages no matter how big they are, so the tunnel now coalesces far more into each message
+  before that cut — end-to-end throughput rises from tens of KB/s to roughly 800 KB/s per burst.
+  Only the Mail.ru carrier changes its default batch size; every other transport is byte-for-byte
+  unchanged, and `OPENFLUX_BATCH_BYTES` still overrides it.
 
 ## [0.7.1] - 2026-10-13 (p1neappleXpress/OpenFlux)
 ## [0.7.2] - 2026-10-13 (p1neappleXpress/OpenFlux)
