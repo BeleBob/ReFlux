@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/avito"
@@ -154,7 +155,9 @@ func newTelemost(url string, params map[string]interface{}, o Options) transport
 		maxLanes = n
 	}
 	g := yandex.NewTelemostGroup(str("cookies"), url, n, o.IsExit, o.Base)
-	return transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
+	stripe := transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
+	stripe.SetHealthDeadline(60 * time.Second)
+	return stripe
 }
 
 // A Telemost carrier starts with telemostLanes lanes and adds one whenever

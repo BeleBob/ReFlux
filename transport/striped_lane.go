@@ -72,7 +72,7 @@ type laneState struct {
 const (
 	laneWinMin  = 8
 	laneWinMax  = 4096
-	laneWinInit = 16
+	laneWinInit = 24
 )
 
 // winRoom is how many more pieces the lane may take now, given how many it
@@ -107,18 +107,18 @@ func (l *laneState) winSample(d time.Duration, now time.Time) {
 	} else {
 		l.lrtt = (7*l.lrtt + d) / 8
 	}
-	grow := l.baseRTT + l.baseRTT/2 + 60*time.Millisecond
+	grow := l.baseRTT*2 + 80*time.Millisecond
 	switch {
 	case l.lrtt <= grow && l.slowStart:
 		l.win++ // doubles per round trip
-	case l.lrtt <= l.baseRTT+l.baseRTT/4+40*time.Millisecond:
+	case l.lrtt <= l.baseRTT+l.baseRTT/2+60*time.Millisecond:
 		l.slowStart = false
 		l.win += 1 / l.win // one piece per round trip
-	case l.lrtt > l.baseRTT*2+100*time.Millisecond:
+	case l.lrtt > l.baseRTT*3+150*time.Millisecond:
 		l.slowStart = false
 		if now.Sub(l.cutAt) > l.baseRTT {
 			l.cutAt = now
-			l.win *= 0.85
+			l.win *= 0.90
 		}
 	default:
 		l.slowStart = false

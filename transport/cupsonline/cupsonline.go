@@ -144,9 +144,6 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// takes well over 2000 in one message, so this headroom is safe.
 		MaxCursors:   1100,
 		BatchTimeout: 2 * time.Millisecond,
-		// A small floor only; SendWindow is the throttle now. (The old 12 ms
-		// fixed cadence ignored how fast the room actually relayed and lost
-		// ~71% of what it sent — see SendWindow.)
 		SendInterval: 12 * time.Millisecond,
 		SendWindow:   3,
 		// The old (unstriped) wire: a batch arrives as a burst of messages
@@ -166,7 +163,7 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// помещается и режется на сообщения при отправке.
 		MaxPayloadBytes: 65535,
 
-		NumRooms:        4,
+		NumRooms:        8,
 		RoomCreatePause: 500 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,
@@ -842,6 +839,10 @@ func (w *cupsWS) connectAndServe() error {
 	}
 	w.connected.Store(true)
 	w.markAlive()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
 	utils.Debugf("[CUPS] WS ready: %s", a.roomUUID)
 
 	kaStop := make(chan struct{})
@@ -1452,7 +1453,7 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	t.config.Network = cfg.Network
 	t.baseURL = baseRoomURL
 	// Measuring knobs: CUPS_SEND_MS (SendInterval), CUPS_MSG_BYTES
-	// (MaxMessageData, at most 8192: the stripe's pieces are cut for it).
+	// (MaxMessageData, at most 12288: the stripe's pieces are cut for it).
 	if ms := envInt("CUPS_SEND_MS"); ms > 0 {
 		t.config.SendInterval = time.Duration(ms) * time.Millisecond
 	}

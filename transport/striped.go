@@ -76,9 +76,16 @@ type StripedTransport struct {
 	done      chan struct{}
 	ackEvery  time.Duration // 0: ackInterval
 	batchHint int           // see PreferredBatchBytes
+
+	healthDeadline time.Duration
+	allDeadSince   time.Time
 }
 
 const maxStripeLanes = 64
+
+// ErrAllLanesDead is returned by Close when every lane has been dead longer
+// than HealthDeadline.  The caller should restart the process.
+var ErrAllLanesDead = fmt.Errorf("stripe: all lanes dead")
 
 // MaxLanes is the most lanes a stripe runs, so a carrier can cap how many
 // rooms/channels it opens.
@@ -228,6 +235,9 @@ type StripeOptions struct {
 	// (room, document, chat) and only answers late looks "lossy" to it
 	// whenever a timeout fires, and gets throttled for nothing.
 	NoPacing bool
+	// HealthDeadline: if every lane is dead for this long, Close the stripe
+	// with ErrAllLanesDead so the caller (run.sh) can restart. 0 = no check.
+	HealthDeadline time.Duration
 	// CodelTarget and CodelInterval set the sender queue's CoDel (0: the
 	// defaults, 150 ms / 600 ms, for round trips of tens of ms). A carrier
 	// that takes a second to answer keeps a queue of about a round trip and
@@ -267,6 +277,13 @@ func (s *StripedTransport) SetOptions(o StripeOptions) {
 	for i := range s.snd.lane {
 		s.snd.lane[i].deadAfter = o.DeadAfter
 	}
+	s.healthDeadline = o.HealthDeadline
+}
+
+// SetHealthDeadline sets the deadline after which the stripe closes itself if
+// all lanes stay dead. Zero disables the check.
+func (s *StripedTransport) SetHealthDeadline(d time.Duration) {
+	s.healthDeadline = d
 }
 
 // NewStripedTransport joins lanes into one transport. Both ends must stripe.
@@ -677,6 +694,19 @@ func (s *StripedTransport) statsLoop() {
 		for _, l := range lanes {
 			if l.IsConnected() {
 				up++
+			}
+		}
+		if s.healthDeadline > 0 && len(lanes) > 0 {
+			if up == 0 {
+				if s.allDeadSince.IsZero() {
+					s.allDeadSince = time.Now()
+				} else if time.Since(s.allDeadSince) > s.healthDeadline {
+					utils.Debugf("[STRIPE] all %d lanes dead for %s, exiting", len(lanes), time.Since(s.allDeadSince).Round(time.Second))
+					s.Stop()
+					return
+				}
+			} else {
+				s.allDeadSince = time.Time{}
 			}
 		}
 		d, sk, late, buffered, gaps := s.ro.snapshot()

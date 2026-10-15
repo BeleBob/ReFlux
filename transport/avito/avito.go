@@ -85,7 +85,7 @@ func DefaultAvitoConfig() AvitoConfig {
 		WriteBufferSize: 256 << 10,
 		MaxMessageBytes: 8 << 20,
 
-		NumRooms:        envKB("AVITO_ROOMS", 4), // room PAIRS = stripe lanes
+		NumRooms:        envKB("AVITO_ROOMS", 8), // room PAIRS = stripe lanes
 		RoomCreatePause: 300 * time.Millisecond,
 
 		StatsInterval: 5 * time.Second,

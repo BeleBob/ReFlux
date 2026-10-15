@@ -29,18 +29,17 @@ var stripeOptions = transport.StripeOptions{
 	PieceBytes: stripePieceBytes,
 	DeadAfter:  3 * time.Second,
 	NoDups:     true,
-	// A room answers an RPC in 0.4-1 s (more on a slow shard) and the stripe's
-	// own ack comes back on another room: with the default 0.5-2 s timeout 41%
-	// of the pieces were sent twice, CoDel (150 ms) dropped the queue the
-	// round trip itself builds, and the lanes' loss-driven pacing throttled
-	// rooms that lose nothing. Measured on a phone: raw rooms 470 KB/s, the
-	// tunnel 53.
-	InitRTO:       2 * time.Second,
-	MinRTO:        1500 * time.Millisecond,
-	MaxRTO:        8 * time.Second,
-	NoPacing:      true,
+	InitRTO:    2 * time.Second,
+	MinRTO:     1500 * time.Millisecond,
+	MaxRTO:     8 * time.Second,
+	NoPacing:   true,
+	// CoDel must sit above the room relay RTT (0.4-1 s) or it drops
+	// pieces the relay is still delivering.
 	CodelTarget:   1500 * time.Millisecond,
 	CodelInterval: 6 * time.Second,
+	AckInterval:   100 * time.Millisecond,
+	HoleDeadline:  10 * time.Second,
+	LaneWindow:    true,
 }
 
 // startStripe makes every room a lane and starts the stripe. The rooms' own
