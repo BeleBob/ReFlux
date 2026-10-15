@@ -14,8 +14,8 @@ import "fmt"
 // p1neappleXpress/OpenFlux releases.
 const (
 	PinnedRepo   = "meepo161/OpenFlux"
-	PinnedCommit = "bbf60137a147aae3f776dcb6633cacf18066d499"
-	PinnedSHA256 = "57bd1acb505b01f2977d19d15bb48ebd813a980e528fbfed001886ca78eb7920"
+	PinnedCommit = "b16f887da78618aa0e5d0b717e78d7ed8ceae3ad"
+	PinnedSHA256 = "63ec8d1d22c2d9ea69b4eb7702b5d83b1781a017740ed9ed527afce11a2087be"
 
 	OfficialRepo   = "p1neappleXpress/OpenFlux"
 	OfficialCommit = "630a0e552e49d6ff7fa193ae9d2e997c67917448"
