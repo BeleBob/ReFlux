@@ -216,7 +216,7 @@ func (s *StripedTransport) SetOptions(o StripeOptions) {
 	}
 }
 
-// NewStripedTransport bonds lanes into one transport. Both ends must stripe.
+// NewStripedTransport joins lanes into one transport. Both ends must stripe.
 func NewStripedTransport(lanes []Transport) *StripedTransport {
 	return NewStripedTransportAuto(lanes, nil, len(lanes), false)
 }

@@ -133,10 +133,6 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 	config := transport.DefaultConfig()
 	keys := make(map[string]string)
 	types := make(map[string]string)
-	if !exit && wantsBonding(specsJSON) {
-		sess.SetBonding(true)
-		appendLog("[ANDROID] Session: бондинг запрошен, транспорты разделят трафик, когда нода согласится")
-	}
 	for _, spec := range specs {
 		types[spec.Name] = spec.Type
 		config := config
@@ -197,13 +193,4 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 	setClientSession(m, types)
 	appendLog("[ANDROID] Session: шифрование AES-256-GCM, согласование с нодой")
 	return demux, sess, nil
-}
-
-// wantsBonding reads {"bonding": true} next to the transports: the client
-// then splits the Session over all its carriers (see Session.SetBonding).
-func wantsBonding(specsJSON string) bool {
-	var o struct {
-		Bonding bool `json:"bonding"`
-	}
-	return json.Unmarshal([]byte(specsJSON), &o) == nil && o.Bonding
 }

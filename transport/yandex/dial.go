@@ -39,7 +39,7 @@ func dialIPv4First(ctx context.Context, network, address string) (net.Conn, erro
 }
 
 // dialIPv4FirstOn is dialIPv4First for a carrier bound to a network: the same
-// order, through netbind.DialerFor(bind), so a bonded carrier keeps its own
+// order, through netbind.DialerFor(bind), so a carrier bound to a network keeps its own
 // interface ("" is the default route).
 func dialIPv4FirstOn(bind string) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {

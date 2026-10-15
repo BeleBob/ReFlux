@@ -5,6 +5,13 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+### Removed
+
+- **Session bonding** (`--bonding`, `Bonding = yes`, control subtypes 0x30/0x31). Several
+  carriers will be joined by StripedTransport groups instead. A `.conf` that still says
+  `Bonding = yes` logs that it is ignored; the carriers fail over by priority. Choosing the
+  network a carrier leaves through (`Network =`) stays.
+
 ## [0.12.0] / node-v1.5.1 - 2026-10-15 (meepo161/OpenFlux)
 
 node-install.sh installs **node-v1.5.1**: node-v1.5.0 with the 0.7.3 Mail.ru batch.

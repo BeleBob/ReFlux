@@ -34,7 +34,7 @@ func SetNetworkBinder(f NetworkBinder) {
 }
 
 // WrapFor makes d follow the binding and then bind to network, so a
-// bonded Session's carriers each leave through their own network (mobile
+// Session's carriers can each leave through their own network (mobile
 // data and Wi-Fi at once).
 func WrapFor(network string, d *net.Dialer) *net.Dialer {
 	d = Wrap(d)

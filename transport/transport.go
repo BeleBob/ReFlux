@@ -14,7 +14,7 @@ type TransportConfig struct {
 	KeepAliveInterval    time.Duration
 	// Network the carrier dials through (netbind): "" is the default
 	// route, or netbind.NetworkCellular, NetworkWiFi, NetworkEthernet, so
-	// a bonded Session's carriers leave through different networks.
+	// a Session's carriers may leave through different networks.
 	Network string
 }
 

@@ -4,7 +4,7 @@ import "github.com/p1neappleXpress/OpenFlux/netbind"
 
 // NetworkBinder is the app's way to put a socket on one network: Android
 // binds it with Network.bindSocket to the mobile data or Wi-Fi network it
-// keeps up, so a bonded Session's carriers leave through both at once.
+// keeps up, so a profile's carriers can each leave through their own.
 type NetworkBinder interface {
 	// BindSocket binds socket fd to network ("cellular", "wifi"), or
 	// fails when that network is not up.

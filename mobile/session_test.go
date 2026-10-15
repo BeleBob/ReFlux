@@ -135,7 +135,7 @@ func TestClassicShareContext(t *testing.T) {
 	}
 }
 
-func TestSessionSpecsNetworkAndBonding(t *testing.T) {
+func TestSessionSpecsNetwork(t *testing.T) {
 	js := `{"bonding":true,"transports":[{"type":"mailru","url":"https://cloud.mail.ru/public/a/b","network":"cellular"},{"type":"direct","params":{"dial":"1.2.3.4:5"},"network":"wifi"}]}`
 	specs, _, _, err := parseSessionSpecs(js)
 	if err != nil {
@@ -143,8 +143,5 @@ func TestSessionSpecsNetworkAndBonding(t *testing.T) {
 	}
 	if specs[0].Network != "cellular" || specs[1].Network != "wifi" {
 		t.Fatalf("networks %q %q", specs[0].Network, specs[1].Network)
-	}
-	if !wantsBonding(js) || wantsBonding(`[{"type":"mailru"}]`) {
-		t.Fatal("bonding option read wrong")
 	}
 }
