@@ -27,13 +27,14 @@ import (
 )
 
 const (
-	msgPrefix  = "OFX1:"
-	userAgent  = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
-	recvQueue  = 256
-	pollMin    = 150 * time.Millisecond
-	pollMax    = 2 * time.Second
-	pollGrowth = 1.5
-	batchSize  = 10
+	msgPrefix    = "OFX1:"
+	userAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
+	recvQueue    = 256
+	pollMin      = 150 * time.Millisecond
+	pollMax      = 2 * time.Second
+	pollGrowth   = 1.5
+	batchSize    = 5
+	numWriters   = 3
 )
 
 type Bitrix24Transport struct {
@@ -82,7 +83,7 @@ func (t *Bitrix24Transport) Start() error {
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			DialContext:         netbind.DialerFor(t.BaseTransport.GetConfig().Network, 30*time.Second).DialContext,
-			MaxIdleConnsPerHost: 4,
+			MaxIdleConnsPerHost: numWriters + 2,
 			IdleConnTimeout:    90 * time.Second,
 		},
 	}
@@ -108,7 +109,9 @@ func (t *Bitrix24Transport) Start() error {
 		utils.Debugf("[B24] created chat %s", t.chatID)
 	}
 
-	utils.SafeGo("bitrix24.writer", t.writerLoop)
+	for i := 0; i < numWriters; i++ {
+		utils.SafeGo(fmt.Sprintf("bitrix24.writer.%d", i), t.writerLoop)
+	}
 	utils.SafeGo("bitrix24.poller", t.pollLoop)
 
 	t.SetConnected(true)
@@ -150,7 +153,7 @@ func (t *Bitrix24Transport) PreferredBatchBytes() int {
 			return n
 		}
 	}
-	return 80_000
+	return 100_000
 }
 
 func (t *Bitrix24Transport) ChatID() string { return t.chatID }
