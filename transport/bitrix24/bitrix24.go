@@ -260,47 +260,109 @@ func (t *Bitrix24Transport) readMessages(lastID int64) ([]b24Message, error) {
 
 func (t *Bitrix24Transport) writerLoop() {
 	for {
+		var batch [][]byte
 		select {
 		case <-t.Done():
 			return
 		case data := <-t.writeQueue:
-			t.sendFrame(data)
+			batch = append(batch, data)
+		}
+		// Drain non-blocking up to batchSize.
+		for len(batch) < batchSize {
+			select {
+			case data := <-t.writeQueue:
+				batch = append(batch, data)
+			default:
+				goto send
+			}
+		}
+	send:
+		if len(batch) == 1 {
+			t.sendFrame(batch[0])
+		} else {
+			t.sendBatch(batch)
 		}
 	}
 }
 
 func (t *Bitrix24Transport) sendFrame(data []byte) {
 	encoded := msgPrefix + base64.StdEncoding.EncodeToString(data)
+	if err := t.sendWithRetry(func() error {
+		_, err := t.sendMessage(encoded)
+		return err
+	}); err != nil {
+		utils.Debugf("[B24] send error: %v", err)
+		return
+	}
+	t.bytesSent.Add(uint64(len(data)))
+	t.pktsSent.Add(1)
+}
 
-	for attempt := 0; attempt < 5; attempt++ {
-		msgID, err := t.sendMessage(encoded)
-		if err != nil {
-			if strings.Contains(err.Error(), "QUERY_LIMIT_EXCEEDED") ||
-				strings.Contains(err.Error(), "OPERATION_TIME_LIMIT") {
-				utils.Debugf("[B24] rate limited, waiting 2s (attempt %d)", attempt)
-				select {
-				case <-time.After(2 * time.Second):
-				case <-t.Done():
-					return
-				}
-				continue
-			}
-			utils.Debugf("[B24] send error: %v", err)
-			return
+func (t *Bitrix24Transport) sendBatch(frames [][]byte) {
+	params := url.Values{}
+	for i, data := range frames {
+		encoded := msgPrefix + base64.StdEncoding.EncodeToString(data)
+		cmd := fmt.Sprintf("im.message.add?DIALOG_ID=%s&MESSAGE=%s",
+			url.QueryEscape(t.chatID), url.QueryEscape(encoded))
+		params.Set(fmt.Sprintf("cmd[msg_%d]", i), cmd)
+	}
+	var raw json.RawMessage
+	err := t.sendWithRetry(func() error {
+		var e error
+		raw, e = t.restCall("batch", params)
+		return e
+	})
+	if err != nil {
+		utils.Debugf("[B24] batch send error: %v", err)
+		return
+	}
+	var batchRes struct {
+		Result      map[string]json.RawMessage `json:"result"`
+		ResultError map[string]json.RawMessage `json:"result_error"`
+	}
+	if err := json.Unmarshal(raw, &batchRes); err != nil {
+		utils.Debugf("[B24] batch parse error: %v", err)
+		return
+	}
+	ok := 0
+	for i, data := range frames {
+		key := fmt.Sprintf("msg_%d", i)
+		if _, has := batchRes.ResultError[key]; has {
+			continue
 		}
 		t.bytesSent.Add(uint64(len(data)))
 		t.pktsSent.Add(1)
-		_ = msgID
-		return
+		ok++
 	}
-	utils.Debugf("[B24] send failed after 5 retries")
+	utils.Debugf("[B24] batch sent %d/%d", ok, len(frames))
+}
+
+func (t *Bitrix24Transport) sendWithRetry(fn func() error) error {
+	for attempt := 0; attempt < 5; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "QUERY_LIMIT_EXCEEDED") ||
+			strings.Contains(errStr, "OPERATION_TIME_LIMIT") {
+			utils.Debugf("[B24] rate limited, waiting 2s (attempt %d)", attempt)
+			select {
+			case <-time.After(2 * time.Second):
+			case <-t.Done():
+				return err
+			}
+			continue
+		}
+		return err
+	}
+	return fmt.Errorf("failed after 5 retries")
 }
 
 // --- Poller ---
 
 func (t *Bitrix24Transport) pollLoop() {
 	interval := pollMin
-	consecutiveEmpty := 0
 
 	for {
 		select {
@@ -313,7 +375,6 @@ func (t *Bitrix24Transport) pollLoop() {
 		if err != nil {
 			utils.Debugf("[B24] poll error: %v", err)
 			interval = pollMax
-			consecutiveEmpty = 0
 			continue
 		}
 
@@ -324,12 +385,10 @@ func (t *Bitrix24Transport) pollLoop() {
 			}
 			t.lastMsgID.Store(int64(msg.ID))
 
-			text := msg.Text
-			if !strings.HasPrefix(text, msgPrefix) {
+			if !strings.HasPrefix(msg.Text, msgPrefix) {
 				continue
 			}
-			payload := strings.TrimPrefix(text, msgPrefix)
-			data, err := base64.StdEncoding.DecodeString(payload)
+			data, err := base64.StdEncoding.DecodeString(msg.Text[len(msgPrefix):])
 			if err != nil {
 				utils.Debugf("[B24] decode error on msg %d: %v", msg.ID, err)
 				continue
@@ -348,9 +407,7 @@ func (t *Bitrix24Transport) pollLoop() {
 
 		if delivered > 0 {
 			interval = pollMin
-			consecutiveEmpty = 0
 		} else {
-			consecutiveEmpty++
 			interval = time.Duration(float64(interval) * pollGrowth)
 			if interval > pollMax {
 				interval = pollMax
