@@ -5,6 +5,34 @@ All notable changes to the OpenFlux core. Format loosely follows
 
 ## [Unreleased]
 
+## [0.13.0] / node-v1.6.0 - 2026-10-16
+
+node-install.sh installs **node-v1.6.0** from **p1neappleXpress/OpenFlux**.
+
+### Added
+
+- **Bitrix24 transport** (`--transport=bitrix24`): chat-message carrier for
+  \*.bitrix24.ru portals with parallel batch writers and 100 KB preferred batch.
+- **Same-type carrier groups** (`registry/group.go`): several links of the same
+  transport type separated by `,` `|` or whitespace form one StripedTransport
+  automatically; per-stripe RTO / ack-interval / linger options; delay-based
+  per-lane window for heterogeneous lanes.
+- **Mixed-type stripe groups** (`registry/mixed.go`, `--transport=mixed`):
+  combine different carrier types into one outer stripe; batch hint propagation
+  through `StripedTransport.SetBatchHint`.
+- **Mail.ru seamless rotation**: make-before-break carrier reconnect by
+  message-count (60) + age (25 s) + send pacing (200 ms) + single-deliverer;
+  zero client/exit drops under heavy load.
+
+### Changed
+
+- **Optimal production defaults**: cups.online 8 rooms (was 4), Avito 8 room
+  pairs (was 4), fitted RTO / CoDel / pacing per transport; stripe health
+  deadline for Telemost auto-restart.
+- Cups stripe: RTO, CoDel and pacing fitted to a room's round trip; per-room
+  message stats.
+- RELEASE_REPO and node pins point at **p1neappleXpress/OpenFlux** (upstream).
+
 ### Removed
 
 - **Session bonding** (`--bonding`, `Bonding = yes`, control subtypes 0x30/0x31). Several
