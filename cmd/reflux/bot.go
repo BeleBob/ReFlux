@@ -540,6 +540,11 @@ func (m *monitor) update(fs []finding, l lang) []alert {
 			news = append(news, alert{key: k, f: c})
 		case was && r.Level != levelOK:
 			news = append(news, alert{key: k, f: c}) // resolved
+		case was && strings.HasPrefix(k, "node:"):
+			// A node paused, started or expired: the owner's own doing,
+			// or the client's access running out, which has news of its
+			// own (expiry warnings, the client bot). A node that came back
+			// from trouble is news above.
 		case was:
 			news = append(news, alert{key: k, f: c, info: true}) // a failover, an update
 		}
