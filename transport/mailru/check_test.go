@@ -60,6 +60,8 @@ func TestCheckDocument(t *testing.T) {
 		{"service trouble", answer(http.StatusBadGateway, true), false, true},
 		{"gateway timeout", refuse(http.StatusGatewayTimeout, ""), false, true},
 		{"rate limited", answer(http.StatusTooManyRequests, true), false, true},
+		// Since 2026-10-15 for every document opened without an account.
+		{"needs a login", refuse(http.StatusUnauthorized, "FORBIDDEN/ANONYMOUSE/ACCESS"), false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(c.h)

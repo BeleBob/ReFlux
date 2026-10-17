@@ -36,6 +36,9 @@ type Options struct {
 	// YandexCookiesFile is the CLI's --yandex-cookies-file: a cookies.txt every
 	// vyandex transport starts with.
 	YandexCookiesFile string
+	// MailruCookiesFile is the CLI's --mailru-cookies-file: the cookies of a
+	// signed-in mail.ru account every mailru transport starts with.
+	MailruCookiesFile string
 	// StrictDirect makes a direct transport without an address an error (the
 	// apps tell the user); without it the CLI's behavior stays: the transport
 	// fails when it starts.
@@ -80,7 +83,13 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 	case "boards":
 		return yandex.NewBoardsTransport(url, base), nil
 	case "mailru":
-		return mailru.NewMailruDocsTransport(url, base), nil
+		t := mailru.NewMailruDocsTransport(url, base)
+		if o.MailruCookiesFile != "" {
+			if err := t.LoadCookieFile(o.MailruCookiesFile); err != nil {
+				return nil, err
+			}
+		}
+		return t, nil
 	case "cupsonline":
 		return cupsonline.NewCupsonlineTransport(url, base, !o.IsExit), nil
 	case "oneme":
