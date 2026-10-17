@@ -60,6 +60,8 @@ func TestCheckDocument(t *testing.T) {
 		{"service trouble", answer(http.StatusBadGateway, true), false, true},
 		{"gateway timeout", refuse(http.StatusGatewayTimeout, ""), false, true},
 		{"rate limited", answer(http.StatusTooManyRequests, true), false, true},
+		// Since 2026-10-15 for every document opened without an account.
+		{"needs a login", refuse(http.StatusUnauthorized, "FORBIDDEN/ANONYMOUSE/ACCESS"), false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := httptest.NewServer(c.h)
@@ -67,7 +69,7 @@ func TestCheckDocument(t *testing.T) {
 			defer func(u string) { editAPIURL = u }(editAPIURL)
 			editAPIURL = srv.URL
 
-			dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2")
+			dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2", nil)
 			if dead != c.dead || (err != nil) != c.hasErr {
 				t.Fatalf("dead=%v err=%v, want dead=%v error=%v", dead, err, c.dead, c.hasErr)
 			}
@@ -84,7 +86,32 @@ func TestCheckDocument(t *testing.T) {
 	// Unreachable: not dead either.
 	defer func(u string) { editAPIURL = u }(editAPIURL)
 	editAPIURL = "http://127.0.0.1:1/edit"
-	if dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2"); dead || err == nil {
+	if dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2", nil); dead || err == nil {
 		t.Errorf("unreachable API: dead=%v err=%v", dead, err)
+	}
+}
+
+// CheckLogin tells a login Mail.ru takes from one it refuses, and a
+// signed-in document check opens the document as the account.
+func TestCheckLogin(t *testing.T) {
+	newCloudServer(t)
+	good := map[string]string{"Mpop": testMpop, "sdcs": "S1"}
+	if account, err := CheckLogin(good); err != nil || account != "someone@mail.ru" {
+		t.Fatalf("good login: account=%q err=%v", account, err)
+	}
+	for _, bad := range []map[string]string{
+		{"Mpop": testMpop, "sdcs": "EXPIRED"},
+		{"Mpop": testMpop},
+		nil,
+	} {
+		if _, err := CheckLogin(bad); !errors.Is(err, ErrLoginRequired) {
+			t.Errorf("%v: err = %v, want ErrLoginRequired", bad, err)
+		}
+	}
+	if dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2", good); dead || err != nil {
+		t.Errorf("signed-in check: dead=%v err=%v", dead, err)
+	}
+	if dead, err := CheckDocument("AbCdEfGh1/IjKlMnOp2", nil); dead || !errors.Is(err, ErrLoginRequired) {
+		t.Errorf("anonymous check: dead=%v err=%v, want unknown with ErrLoginRequired", dead, err)
 	}
 }

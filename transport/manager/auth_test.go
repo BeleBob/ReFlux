@@ -2,6 +2,7 @@ package manager
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,12 @@ func (p *pipe) Send(b []byte) error {
 
 func connectedManagers(t *testing.T, exitProvider CookieProvider) (client, exit *Manager) {
 	t.Helper()
+	return connectedPair(t, "yandex", nil, exitProvider)
+}
+
+// connectedPair is a client and an exit joined by one carrier of type typ.
+func connectedPair(t *testing.T, typ string, clientProvider, exitProvider CookieProvider) (client, exit *Manager) {
+	t.Helper()
 	const secret, ctx = "test-secret-long-enough", "test-ctx"
 	params := transport.PeerParameters{Capabilities: control.CapabilityIPv4 | control.CapabilityTCP, MaxPacketSize: 1500}
 	a, b := &pipe{}, &pipe{}
@@ -42,16 +49,16 @@ func connectedManagers(t *testing.T, exitProvider CookieProvider) (client, exit 
 		exit bool
 		wire *pipe
 		prov CookieProvider
-	}{{false, a, nil}, {true, b, exitProvider}} {
+	}{{false, a, clientProvider}, {true, b, exitProvider}} {
 		sess, err := transport.NewSession(params, side.exit)
 		if err != nil {
 			t.Fatal(err)
 		}
 		m := New(sess, nil, secret, ctx)
-		if err := sess.AddTransport("yandex", side.wire, secret, ctx, 100); err != nil {
+		if err := sess.AddTransport(typ, side.wire, secret, ctx, 100); err != nil {
 			t.Fatal(err)
 		}
-		if err := m.Add("yandex", "yandex", side.wire, 100, side.prov); err != nil {
+		if err := m.Add(typ, typ, side.wire, 100, side.prov); err != nil {
 			t.Fatal(err)
 		}
 		sess.SetControlHandler(m.DispatchControl)
@@ -129,5 +136,61 @@ func TestClientDoesNotForwardAuth(t *testing.T) {
 	case <-asked:
 		t.Fatal("client forwarded its own check to the exit")
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A mail.ru exit runs on its operator's account. A client that asks for the
+// exit's jar (every ten minutes) gets none of it, while a Yandex exit still
+// shares a passed check; and the exit does not ask clients to sign in to
+// mail.ru for it, which would hand the operator their account.
+func TestExitKeepsMailruAccount(t *testing.T) {
+	for _, c := range []struct {
+		typ   string
+		jar   map[string]string
+		share bool
+	}{
+		{"yandex", map[string]string{"spravka": "s1"}, true},
+		{"mailru", map[string]string{"Mpop": "m", "sdcs": "s"}, false},
+	} {
+		t.Run(c.typ, func(t *testing.T) {
+			got := &fakeCookieProvider{}
+			client, exit := connectedPair(t, c.typ, got, &fakeCookieProvider{jar: c.jar})
+			asked := make(chan string, 1)
+			client.SetRemoteAuthNotifier(func(_, _, _, reason string) { asked <- reason })
+			var local atomic.Int32
+			exit.SetCaptchaNotifier(func(string, string, string, string) { local.Add(1) })
+
+			if err := client.SendControl(control.SubtypeCookiesRequest, nil); err != nil {
+				t.Fatal(err)
+			}
+			exit.NotifyCaptcha(c.typ, "https://login.example/", "", "login")
+			select {
+			case <-asked:
+				if !c.share {
+					t.Fatal("the exit asked the client to sign in to mail.ru for it")
+				}
+			case <-time.After(time.Second):
+				if c.share {
+					t.Fatal("the exit's login request did not reach the client")
+				}
+			}
+			if n := local.Load(); n != 1 {
+				t.Fatalf("exit's own notifier got %d reports, want 1", n)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				jar, _ := got.FetchCookies()
+				if !c.share && len(jar) != 0 {
+					t.Fatalf("client got the exit's mail.ru cookies: %v", jar)
+				}
+				if c.share && jar["spravka"] == "s1" || !c.share && time.Now().After(deadline) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("client jar = %v, want the exit's passed check", jar)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
 	}
 }

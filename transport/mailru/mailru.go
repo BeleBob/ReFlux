@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -318,11 +317,26 @@ type MailruDocsTransport struct {
 	next atomic.Pointer[DocSession]
 
 	// limits are the package's variables when the transport was made, so
-	// a test may change them without racing a transport still running.
+	// a test may change them without racing a transport still running;
+	// apiURL is editAPIURL the same way.
 	limits limits
+	apiURL string
 
 	cookieJar *cookiejar.Jar
 	jarMu     sync.RWMutex
+	// csrf is the signed-in account's CSRF token for the editor API, ""
+	// until taken (login.go); fileCookies are the account's cookies from
+	// cookieFile (LoadCookieFile) as it was when cookieStamp was taken. All
+	// under jarMu.
+	csrf                    string
+	fileCookies             map[string]string
+	cookieFile, cookieStamp string
+
+	// errNotifier asks for a login (login.go), at most once a minute
+	// (loginAsked). Under errMu.
+	errMu       sync.Mutex
+	errNotifier func(err error, transportName, url, html, reason string)
+	loginAsked  time.Time
 
 	// reconnecting is set while a scheduled reconnect waits out its backoff:
 	// the reader's error and ApplyCookies both schedule one when the cookies
@@ -339,6 +353,7 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 		BaseTransport: transport.NewBaseTransport(config),
 		weblink:       normalizeWeblink(weblink),
 		limits:        currentLimits(),
+		apiURL:        editAPIURL,
 	}
 	t.baseUserID = randUserID()
 	jar, _ := cookiejar.New(nil)
@@ -519,7 +534,17 @@ func (t *MailruDocsTransport) connect(attempt int, replace *DocSession) {
 				t.rotationFailed(replace, err)
 				return
 			}
-			if utils.Throttled("m-docs.fetch", time.Minute) {
+			if errors.Is(err, ErrLoginRequired) {
+				// A login that came in a new cookies file is tried at
+				// once; otherwise one is asked for.
+				changed, ferr := t.readCookieFile()
+				if ferr != nil {
+					utils.Debugf("[M-DOCS] %v", ferr)
+				}
+				if !changed {
+					t.askLogin(err)
+				}
+			} else if utils.Throttled("m-docs.fetch", time.Minute) {
 				utils.Infof("[M-DOCS] cannot open the document: %v; retrying", err)
 			}
 			t.scheduleReconnect(attempt)
@@ -990,22 +1015,30 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 	}
 	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
 
+	email, csrf, err := t.signIn(client)
+	if err != nil {
+		return MailruDocsInfo{}, err
+	}
 	reqBody := map[string]string{
-		"x-email":  "anonym",
+		"x-email":  email,
 		"public":   "/" + weblink,
 		"platform": "desktop_web",
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	utils.Debugf("[M-DOCS] fetchDocInfo POST %s", editAPIURL)
+	utils.Debugf("[M-DOCS] fetchDocInfo POST %s", t.apiURL)
 
-	req, _ := http.NewRequest("POST", editAPIURL, bytes.NewBuffer(jsonData))
+	req, _ := http.NewRequest("POST", t.apiURL, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	req.Header.Set("User-Agent", mailruUserAgent)
 	req.Header.Set("X-Api-Version", "4")
 	req.Header.Set("Referer", fmt.Sprintf("https://cloud.mail.ru/public/%s?weblink=%s", weblink, weblink))
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+		req.Header.Set("X-Email", email)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1019,7 +1052,7 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 			Error string `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&e)
-		return MailruDocsInfo{}, &StatusError{Code: resp.StatusCode, Reason: e.Error}
+		return MailruDocsInfo{}, t.refused(&StatusError{Code: resp.StatusCode, Reason: e.Error})
 	}
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
@@ -1090,36 +1123,32 @@ func (t *MailruDocsTransport) FetchCookies() (map[string]string, error) {
 	if jar == nil {
 		return nil, fmt.Errorf("mailru: cookie jar is nil")
 	}
-	u, err := url.Parse("https://cloud.mail.ru/")
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]string)
-	for _, c := range jar.Cookies(u) {
-		out[c.Name] = c.Value
-	}
-	return out, nil
+	return jarValues(t.cloudURL(), jar), nil
 }
 
 // ApplyCookies replaces the transport's cookie jar with the provided values
-// and forces the current session to reconnect.
+// and forces the current session to reconnect. The account of a cookies
+// file (LoadCookieFile) stays: its cookies win over the values.
 func (t *MailruDocsTransport) ApplyCookies(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
-	u, _ := url.Parse("https://cloud.mail.ru/")
-	jar, _ := cookiejar.New(nil)
-	cookies := make([]*http.Cookie, 0, len(values))
-	for k, v := range values {
-		cookies = append(cookies, &http.Cookie{Name: k, Value: v, Path: "/"})
-	}
-	jar.SetCookies(u, cookies)
-
 	t.jarMu.Lock()
-	t.cookieJar = jar
+	merged := make(map[string]string, len(values)+len(t.fileCookies))
+	for k, v := range values {
+		merged[k] = v
+	}
+	for k, v := range t.fileCookies {
+		merged[k] = v
+	}
+	t.cookieJar = newJar(t.cloudURL(), merged)
+	t.csrf = ""
 	t.jarMu.Unlock()
+	t.errMu.Lock()
+	t.loginAsked = time.Time{}
+	t.errMu.Unlock()
 
-	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(cookies))
+	utils.Debugf("[M-DOCS] applied %d cookies, forcing reconnect", len(merged))
 
 	t.Mu.Lock()
 	session := t.session

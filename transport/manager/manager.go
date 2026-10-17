@@ -369,10 +369,15 @@ var accountCookies = map[string]bool{
 	"L": true, "yandex_login": true, "lah": true, "mda2_beacon": true,
 }
 
-// shareableCookies is jar without account login cookies: what an exit may
-// hand to a client that asks. Clients need a passed check, never the
-// login of whoever set up the exit.
-func shareableCookies(jar map[string]string) map[string]string {
+// shareableCookies is a jar of a transport of type typ without account
+// login cookies: what an exit may hand to a client that asks. Clients need
+// a passed check, never the login of whoever set up the exit. A mail.ru jar
+// is all the account's (Mail.ru has no check a cookie passes), so none of
+// it is shared.
+func shareableCookies(typ string, jar map[string]string) map[string]string {
+	if typ == "mailru" {
+		return map[string]string{}
+	}
 	out := make(map[string]string, len(jar))
 	for k, v := range jar {
 		if !accountCookies[k] {
@@ -433,6 +438,16 @@ func (m *Manager) cookieTransport(name, doc string) string {
 	return ""
 }
 
+// entryType is the type of an attached transport.
+func (m *Manager) entryType(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if e, ok := m.entries[name]; ok {
+		return e.Type
+	}
+	return ""
+}
+
 // entryURL is the document URL of an attached transport.
 func (m *Manager) entryURL(name string) string {
 	m.mu.RLock()
@@ -465,7 +480,7 @@ func (m *Manager) handleCookies(sub control.Subtype, payload []byte) {
 			utils.Debugf("[MANAGER] fetch cookies (%s): %v", name, err)
 			return
 		}
-		jar = shareableCookies(jar)
+		jar = shareableCookies(m.entryType(name), jar)
 		body, _ := (&control.CookiesPayload{Transport: name, Doc: m.entryURL(name), Jar: jar, Reason: "requested"}).Encode()
 		_ = m.SendControl(control.SubtypeCookiesResponse, body)
 	case control.SubtypeCookiesResponse, control.SubtypeCookiesOffer:
@@ -656,7 +671,9 @@ func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
 // proceed without external help. The local notifier (IPC to the app) gets
 // every report. On the exit node there is usually no app, and the check
 // has to be passed from the exit's address anyway, so the report also goes
-// to the client over whichever carrier still reaches it.
+// to the client over whichever carrier still reaches it - except a mail.ru
+// login: whoever signed in for the exit would give the exit's operator
+// their account, cookies and all. The exit's operator signs it in.
 func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
 	// A transport waiting on a check carries nothing; route around it,
 	// and in particular do not send its own AuthRequired through it.
@@ -667,7 +684,7 @@ func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
 	if n != nil {
 		n(name, url, html, reason)
 	}
-	if m.session.IsExit() {
+	if m.session.IsExit() && !(reason == "login" && m.entryType(name) == "mailru") {
 		m.forwardAuth(name, url, html, reason)
 	}
 }

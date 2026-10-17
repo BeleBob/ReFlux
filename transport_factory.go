@@ -13,6 +13,10 @@ import (
 // a Yandex login that every vyandex transport starts with.
 var yandexCookiesFile string
 
+// mailruCookiesFile is --mailru-cookies-file: the cookies of a signed-in
+// mail.ru account that every mailru transport opens its document with.
+var mailruCookiesFile string
+
 // transportFactory builds a raw transport from a control.TransportConfig.
 // main.go passes it into manager.New, and manager calls it whenever the peer
 // asks the exit to bring up an additional transport at runtime. The types are
@@ -31,6 +35,7 @@ func transportFactory(baseCfg transport.TransportConfig, isExit bool) manager.Fa
 			Base:              baseCfg,
 			IsExit:            isExit,
 			YandexCookiesFile: yandexCookiesFile,
+			MailruCookiesFile: mailruCookiesFile,
 		})
 	}
 }

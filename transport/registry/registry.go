@@ -20,6 +20,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
 	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // Options is what differs between the callers; the type, url and params are
@@ -36,6 +37,9 @@ type Options struct {
 	// YandexCookiesFile is the CLI's --yandex-cookies-file: a cookies.txt every
 	// vyandex transport starts with.
 	YandexCookiesFile string
+	// MailruCookiesFile is the CLI's --mailru-cookies-file: the cookies of a
+	// signed-in mail.ru account every mailru transport starts with.
+	MailruCookiesFile string
 	// StrictDirect makes a direct transport without an address an error (the
 	// apps tell the user); without it the CLI's behavior stays: the transport
 	// fails when it starts.
@@ -80,7 +84,16 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 	case "boards":
 		return yandex.NewBoardsTransport(url, base), nil
 	case "mailru":
-		return mailru.NewMailruDocsTransport(url, base), nil
+		t := mailru.NewMailruDocsTransport(url, base)
+		if o.MailruCookiesFile != "" {
+			// A file still to come is read once it is there.
+			if err := t.LoadCookieFile(o.MailruCookiesFile); errors.Is(err, os.ErrNotExist) {
+				utils.Infof("[M-DOCS] %v: documents open without a login until it is there", err)
+			} else if err != nil {
+				return nil, err
+			}
+		}
+		return t, nil
 	case "cupsonline":
 		return cupsonline.NewCupsonlineTransport(url, base, !o.IsExit), nil
 	case "oneme":

@@ -22,6 +22,9 @@ type hostState struct {
 	docDrops   int
 	nodeStatus *ipc.StatusPayload
 	backupAge  time.Duration // the newest backup's (0: backups not installed)
+	// mailru is the nodes' mail.ru login; nil: a good one, checked 5
+	// minutes ago. A zero MailruLogin: no cookies at all.
+	mailru *MailruLogin
 }
 
 // runDoctor sets up a data directory with one client and fakes the host
@@ -47,6 +50,16 @@ func fakeHost(t *testing.T, st hostState) Store {
 	s := Store{Root: home}
 	os.WriteFile(filepath.Join(home, "egress", "world-1.conf"), []byte("x"), 0o600)
 	os.WriteFile(filepath.Join(home, "egress", "ru-direct"), nil, 0o600)
+	login := st.mailru
+	if login == nil {
+		login = &MailruLogin{Account: "owner@mail.ru", Checked: time.Now().Add(-5 * time.Minute), OK: true}
+	}
+	if *login != (MailruLogin{}) {
+		os.WriteFile(s.mailruCookiesPath(), []byte("Mpop=1:2:owner@mail.ru:; sdcs=s\n"), 0o600)
+		if err := s.saveMailruState(*login); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if st.backupAge > 0 {
 		dir := filepath.Join(t.TempDir(), "backups")
 		writeJSON(s.backupConfigPath(), backupConfig{Dir: dir, Keep: 14})
@@ -126,6 +139,7 @@ func TestDoctorOnAHealthyHost(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ok    amneziawg kernel module loaded",
+		"ok    mail.ru: signed in as owner@mail.ru, checked 5m ago",
 		"ok    egress configs: world world-1.conf; russia direct",
 		"commit 9f4bef4, built",
 		"ok    world up via world-1.conf",
@@ -215,5 +229,43 @@ func TestDoctorWarnsAboutTheRussianFallback(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(out, "warn  russia leaves directly as a fallback") {
 		t.Errorf("err=%v\n%s", err, out)
+	}
+}
+
+// Since 2026-10-15 mail.ru opens documents for a signed-in account only:
+// the doctor fails a server with mail.ru clients and no login, or a login
+// mail.ru no longer takes, and only shows a check that could not be made.
+func TestDoctorMailruLogin(t *testing.T) {
+	healthy := hostState{
+		module: true, worldUp: true, nodeStart: "2026-09-29T17:00:05Z",
+		cron: "* * * * * $HOME/.local/bin/reflux heal >> $HOME/reflux/heal.log 2>&1\n", dfUsed: "86",
+		nodeStatus: &ipc.StatusPayload{Running: true, Connected: true, UptimeMs: 16 * 3600 * 1000},
+		backupAge:  3 * time.Hour,
+	}
+	checked := time.Date(2026, 10, 17, 13, 0, 0, 0, time.Local)
+	for _, c := range []struct {
+		name  string
+		login MailruLogin
+		want  string
+		fails bool
+	}{
+		{"none", MailruLogin{}, "FAIL  mail.ru: the nodes have no account to sign in with", true},
+		{"refused", MailruLogin{Account: "owner@mail.ru", Checked: checked, Refused: true, Error: "403 user"}, "FAIL  mail.ru no longer takes the login of owner@mail.ru (checked 17.10 13:00)", true},
+		{"unchecked", MailruLogin{Account: "owner@mail.ru", Error: "the egress could not check the login"}, "warn  mail.ru: the login of owner@mail.ru could not be checked", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := healthy
+			st.mailru = &c.login
+			out, err := runDoctor(t, st)
+			if !strings.Contains(out, c.want) || (err != nil) != c.fails {
+				t.Fatalf("err=%v, want a line %q:\n%s", err, c.want, out)
+			}
+			fs := runChecks(Store{Root: os.Getenv("REFLUX_HOME")})
+			for _, f := range fs {
+				if f.Key == "mailru" && c.name == "unchecked" && f.Sig != sigSilent {
+					t.Errorf("a check that could not be made is news: %+v", f)
+				}
+			}
+		})
 	}
 }

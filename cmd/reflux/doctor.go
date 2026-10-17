@@ -94,6 +94,7 @@ func runChecks(s Store) []finding {
 		d.egress()
 		d.nodes(s)
 	}
+	d.mailru(s)
 	d.cron()
 	d.disk(s)
 	d.backup(s)

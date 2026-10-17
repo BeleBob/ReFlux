@@ -39,6 +39,11 @@ func (b *bot) docsTick(now time.Time) {
 	var changes []docChange
 	var changed bool
 	if round {
+		// The nodes' mail.ru login first: the doctor tells the owner when
+		// mail.ru no longer takes it.
+		if _, lerr := b.s.CheckMailruLogin(now); lerr != nil {
+			log.Printf("bot: mail.ru login: %v", lerr)
+		}
 		changes, changed, err = b.s.checkDocs(now) // the lost ones too
 	} else {
 		changes, changed, err = b.s.checkClientDocs(now, off)

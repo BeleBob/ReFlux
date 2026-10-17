@@ -34,6 +34,7 @@ with inline examples.
 | `--direct-listen` | | | Listen address for `direct` (exit) |
 | `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`, `--cupsonline-url` | | | Per-type document URL in a session |
 | `--yandex-cookies-file` | | | Netscape `cookies.txt` with a Yandex login, for `vyandex` |
+| `--mailru-cookies-file` | | | Cookies of a signed-in mail.ru account, for `mailru` (`.conf`: `MailruCookiesFile`): a `cookies.txt`, a `Cookie` header, a JSON object or the name/value lines browser developer tools copy. Needs `Mpop` and `sdcs`. Read again when the login is refused and the file changed; a file not there yet is waited for |
 | `--oneme-token`, `--oneme-uid` | | | MAX credentials in a session |
 | `--script-path` | | | Script transport: path to `<name>.flux` or `<name>.js` (needs `<name>.js.sig` beside a bare `.js`). Also used with `--transport=script` |
 | `--script-pubkey` | | | Script transport: author's ed25519 public key (hex) |

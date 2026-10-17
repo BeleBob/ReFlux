@@ -14,7 +14,7 @@ engine for writing more without touching Go at all - see
 | `boards` | Yandex Board (WebSocket) | |
 | `oneme` | MAX/OneMe (WebRTC DataChannel) | Needs `--maxToken` / `--maxUid`; cannot be shared via a link (the token belongs to one account). |
 | `cupsonline` | Cups.online (Centrifugo rooms) | The exit prints a base64 room list; pass it to the client via `--url`. |
-| `mailru` | Mail.ru Docs (WebSocket) | Accepts a bare weblink (`AbCdEfGh1/IjKlMnOp2`) or a full `https://cloud.mail.ru/public/...` URL. |
+| `mailru` | Mail.ru Docs (WebSocket) | Accepts a bare weblink (`AbCdEfGh1/IjKlMnOp2`) or a full `https://cloud.mail.ru/public/...` URL. Since 2026-10-15 Mail.ru opens documents for signed-in accounts only: give each side a login, `--mailru-cookies-file` or the app's mail.ru sign-in (the transport asks for it with a `login` check). An exit never shares its account's cookies with clients and never asks them to sign in for it. |
 | `direct` | Plain TCP to the exit | Sessions only; needs the exit's port reachable from the client. |
 | `script` | Signed JS (goja) transport | Sessions only (needs `--encryption-key-file`); see [scripted-transports.md](scripted-transports.md). |
 
@@ -35,7 +35,8 @@ engine for writing more without touching Go at all - see
 
 # Mail.ru Docs (WS)
 ./openflux --role=exit --mode=l3 --transport=mailru \
-    --url="YOUR_MAILRU_PUBLIC_LINK" --debug
+    --url="YOUR_MAILRU_PUBLIC_LINK" --mailru-cookies-file=mailru-cookies.txt --debug
+# mailru-cookies.txt: the cookies a signed-in browser sends to cloud.mail.ru
 ```
 
 ## Codec

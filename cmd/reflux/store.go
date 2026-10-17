@@ -22,6 +22,7 @@ import (
 //	clients/<name>/node.conf    the exit node's config, rendered from client.json
 //	state/<name>/               the node's writable state (cookie store)
 //	egress/                     the egress tunnels' configs (see the egress image)
+//	mailru/                     the mail.ru account the nodes sign in with (mailrulogin.go)
 //	revoked/<name>-<time>/      client.json of revoked channels, without the key
 //	compose.yml                 rendered from all of the above
 type Store struct {
@@ -108,7 +109,7 @@ func (s Store) keyPath(name string) string   { return filepath.Join(s.clientDir(
 // Init creates the data directory layout. It is safe to run again.
 func (s Store) Init() error {
 	dirs := []string{s.Root}
-	for _, d := range []string{"clients", "state", "egress", "revoked"} {
+	for _, d := range []string{"clients", "state", "egress", "revoked", mailruDirName} {
 		dirs = append(dirs, filepath.Join(s.Root, d))
 	}
 	for _, p := range dirs {

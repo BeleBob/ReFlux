@@ -15,7 +15,7 @@ func TestShareableCookiesDropAccountLogin(t *testing.T) {
 		"Session_id": "s", "sessionid2": "s2", "sessar": "a", "L": "l",
 		"yandex_login": "me", "spravka": "captcha-pass", "yandexuid": "u",
 	}
-	got := shareableCookies(jar)
+	got := shareableCookies("vyandex", jar)
 	for _, name := range []string{"Session_id", "sessionid2", "sessar", "L", "yandex_login"} {
 		if _, ok := got[name]; ok {
 			t.Fatalf("%s must not be shared: %v", name, got)
@@ -26,6 +26,23 @@ func TestShareableCookiesDropAccountLogin(t *testing.T) {
 	}
 	if jar["Session_id"] != "s" {
 		t.Fatal("the source jar must not be modified")
+	}
+}
+
+// A mail.ru exit signed in with its owner's account hands clients none of
+// its jar: every cookie in it is that account's (Mpop is the mail.ru login,
+// sdcs the cloud session), and a client that applied them would open its
+// documents as the owner.
+func TestShareableCookiesKeepMailruAccount(t *testing.T) {
+	if got := shareableCookies("mailru", map[string]string{"Mpop": "m", "sdcs": "s", "t": "x"}); len(got) != 0 {
+		t.Fatalf("shared %v", got)
+	}
+	m := newTestManager(t)
+	if err := m.Add("mailru-2", "mailru", &fakeTransport{}, 100, &fakeCookieProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	if typ := m.entryType("mailru-2"); typ != "mailru" {
+		t.Fatalf("entryType = %q: a request for its jar would be answered as another type", typ)
 	}
 }
 

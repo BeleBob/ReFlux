@@ -15,6 +15,9 @@ import (
 // service sees the address the nodes come from, never the host's. Documents
 // arrive on stdin ("type url" or "url" per line), never as arguments, which
 // any process on the host may read; the answers name them by line number.
+// The first line may be "cookies <the account's cookies>": the mail.ru
+// account the nodes sign in with, which the documents are opened as (Mail.ru
+// opens them for a signed-in account only). It counts as line 1.
 
 // docCheck is the answer for line N (from 1).
 type docCheck struct {
@@ -24,8 +27,8 @@ type docCheck struct {
 }
 
 // checkDocument checks one document; tests replace it.
-var checkDocument = func(transport, url string) (dead bool, err error) {
-	return mailru.CheckDocument(url)
+var checkDocument = func(transport, url string, cookies map[string]string) (dead bool, err error) {
+	return mailru.CheckDocument(url, cookies)
 }
 
 const checkParallel = 4
@@ -36,8 +39,14 @@ func checkDocs(in io.Reader, out io.Writer) error {
 		transport, url string
 	}
 	var jobs []job
+	var cookies map[string]string
 	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 4096), 1<<20)
 	for n := 1; sc.Scan(); n++ {
+		if rest, ok := strings.CutPrefix(sc.Text(), "cookies "); ok && n == 1 {
+			cookies, _ = mailru.ParseCookies(rest) // none: anonymously
+			continue
+		}
 		f := strings.Fields(sc.Text())
 		switch len(f) {
 		case 1:
@@ -64,7 +73,7 @@ func checkDocs(in io.Reader, out io.Writer) error {
 				results[i] = r
 				return
 			}
-			dead, err := checkDocument(j.transport, j.url)
+			dead, err := checkDocument(j.transport, j.url, cookies)
 			switch {
 			case dead:
 				r.State = "dead"
