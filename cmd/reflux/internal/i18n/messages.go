@@ -53,6 +53,11 @@ var Messages = map[string][2]string{
 	"backup.none":           {"no backups in %s yet: reflux backup", "в %s пока нет резервных копий: reflux backup"},
 	"backup.old":            {"the last backup is %s old: systemctl --user status reflux-backup.timer", "последней резервной копии %s: systemctl --user status reflux-backup.timer"},
 	"backup.bad":            {"backups: %v", "резервные копии: %v"},
+	"mailru.none":           {"mail.ru: the nodes have no account to sign in with, and mail.ru opens documents for a signed-in account only: give the cookies of cloud.mail.ru (reflux mailru login, or the panel)", "mail.ru: у нод нет аккаунта для входа, а mail.ru пускает к документам только вошедших: дайте cookies cloud.mail.ru (reflux mailru login или панель)"},
+	"mailru.refused":        {"mail.ru no longer takes the login of %s (checked %s): the nodes cannot open their documents; give new cookies of cloud.mail.ru (reflux mailru login, or the panel)", "mail.ru больше не принимает вход %s (проверка %s): ноды не откроют документы; дайте новые cookies cloud.mail.ru (reflux mailru login или панель)"},
+	"mailru.unchecked":      {"mail.ru: the login of %s could not be checked: %s", "mail.ru: вход %s не удалось проверить: %s"},
+	"mailru.ok":             {"mail.ru: signed in as %s, checked %s ago", "mail.ru: вход %s, проверен %s назад"},
+	"mailru.bad":            {"mail.ru login: %v", "вход в mail.ru: %v"},
 
 	// speed test
 	"speed.russia": {"russia", "Россия"},
