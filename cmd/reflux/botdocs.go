@@ -57,6 +57,9 @@ func (b *bot) docsScreen(name string) screen {
 			row = append(row, b.btn("b.docs.pool", "dp:"+name))
 		}
 		kb = append(kb, append(row, b.btn("b.docs.url", "du:"+name)))
+		if c.cupsIndex() < 0 {
+			kb = append(kb, []telegram.Button{b.btn("b.docs.cups", "dcu:"+name)})
+		}
 	}
 	if len(docs) > 1 {
 		var row []telegram.Button
@@ -123,13 +126,16 @@ func (b *bot) removeDoc(name string, i int) screen {
 	})
 }
 
-// docsPress handles the documents screen's buttons: dc, dp, du, dr, dr!.
+// docsPress handles the documents screen's buttons: dc, dp, du, dr, dr!,
+// dcu (cups.online rooms, cups.go).
 func (b *bot) docsPress(kind, arg string) screen {
 	switch kind {
 	case "dc":
 		return b.docsScreen(arg)
 	case "dp":
 		return b.addDoc(arg, nil)
+	case "dcu":
+		return b.giveCups(arg)
 	case "du":
 		b.await = awaiting{kind: "doc", name: arg, at: time.Now()}
 		return screen{b.tr("ui.docs.prompt", html.EscapeString(arg)), keyboard{{b.btn("b.cancel", "dc:"+arg)}}}

@@ -103,11 +103,18 @@ func (b *bot) docsTick(now time.Time) {
 		if ch.New == nil || ch.Err != nil {
 			continue
 		}
+		msg := "cb.doc.replaced"
+		switch {
+		case ch.Cups && ch.Doc.URL != "":
+			// New rooms reach the app over mail.ru (the ConfigOffer), and
+			// the old link still works there.
+			continue
+		case ch.Cups:
+			msg = "cb.doc.cups"
+		case ch.Backup:
+			msg = "cb.doc.backup"
+		}
 		if c, err := b.s.Get(ch.Client); err == nil {
-			msg := "cb.doc.replaced"
-			if ch.Backup {
-				msg = "cb.doc.backup"
-			}
 			cb.docReplaced(c, msg)
 		}
 	}
@@ -116,6 +123,9 @@ func (b *bot) docsTick(now time.Time) {
 // docChangeMessage tells the owner what happened to one dead document.
 func docChangeMessage(ch docChange) (string, []any) {
 	e := html.EscapeString
+	if ch.Cups {
+		return cupsChangeMessage(ch)
+	}
 	if ch.Backup {
 		if ch.Err != nil {
 			return "docs.backup.failed", []any{e(ch.Client), e(ch.Err.Error())}

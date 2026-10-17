@@ -48,6 +48,12 @@ USAGE
                            quarantine and dead; check finds and replaces dead
                            ones now (the bot does it every 15 minutes), recheck
                            tries dead ones again
+  reflux cups [on | off | add <name> | remove <name>]
+                           cups.online rooms: the fast channel next to the
+                           mail.ru documents (4 rooms a client, made by the
+                           egress; the document checks replace closed ones);
+                           on/off for every client, add makes new rooms now,
+                           remove takes a client's away for good
   reflux mailru [login [<file>] | check]
                            the mail.ru account the nodes sign in with (mail.ru
                            opens documents for a signed-in account only): its
@@ -221,6 +227,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdMailru(s, rest, stdin, stdout)
 	case "pool":
 		return cmdPool(s, rest, stdout)
+	case "cups":
+		return cmdCups(s, rest, stdout)
 	case "heal":
 		return heal(s, stdout)
 	case "doctor":
@@ -247,7 +255,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
-	"docs": true, "pool": true, "requests": true, "mailru": true,
+	"docs": true, "pool": true, "requests": true, "mailru": true, "cups": true,
 	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true, "backup": true, "restore": true,
 }
@@ -480,8 +488,9 @@ func printAccess(s Store, c Client, stdout io.Writer, pngPath string) error {
 	if c.session() {
 		fmt.Fprintf(stdout, "  Mode            Session (several documents, in this order)\n")
 		names := carrierNames(c.Docs())
-		for i, d := range c.Docs() {
-			fmt.Fprintf(stdout, "  %-15s %s, priority %d: %s\n", names[i], d.Transport, docPriority(i), d.URL)
+		docs := c.Docs()
+		for i, d := range docs {
+			fmt.Fprintf(stdout, "  %-15s %s, priority %d: %s\n", names[i], d.Transport, docPriority(docs, i), d.URL)
 		}
 		fmt.Fprintf(stdout, "  Context         %s\n", c.context())
 	} else {

@@ -43,6 +43,8 @@ type docsState struct {
 	// declared dead: one bad answer is not enough.
 	Suspect map[string]int `json:"suspect,omitempty"`
 	Checked time.Time      `json:"checked,omitempty"` // the last automatic check
+	// Cups is how making cups.online rooms went (cups.go).
+	Cups cupsState `json:"cups,omitzero"`
 }
 
 func (s Store) docsStatePath() string { return filepath.Join(s.Root, "docs-state.json") }
@@ -89,6 +91,14 @@ func (st docsState) blocked(url string, now time.Time) bool {
 // quarantine puts documents that just left a client aside for a day and
 // back in the pool after it, so another client gets them then.
 func (s Store) quarantine(docs []Doc, client string, now time.Time) error {
+	// Rooms are a channel's own and never go to another client.
+	var keep []Doc
+	for _, d := range docs {
+		if !isCups(d) {
+			keep = append(keep, d)
+		}
+	}
+	docs = keep
 	if len(docs) == 0 {
 		return nil
 	}

@@ -290,6 +290,8 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.setLimit(arg), ""
 	case "cbhide":
 		return b.toggleClientBot(), ""
+	case "cupsw":
+		return b.toggleCups(), ""
 	case "gw":
 		return b.gatewayScreen(), ""
 	case "srv":
@@ -332,7 +334,7 @@ func (b *bot) button(action, arg string) (screen, string) {
 		return b.invitePress(action, arg), ""
 	case "rq", "rq1":
 		return b.requestPress(action, arg), ""
-	case "dc", "dp", "du", "dr", "dr!":
+	case "dc", "dp", "du", "dr", "dr!", "dcu":
 		return b.docsPress(action, arg), ""
 	case "rnk":
 		c, err := b.s.Get(arg)
@@ -568,6 +570,7 @@ func (b *bot) settingsScreen() screen {
 		[]telegram.Button{b.btn("b.temp.down", "lim:t-"), b.btn("b.temp.up", "lim:t+")},
 		[]telegram.Button{b.btn("b.cpu.down", "lim:c-"), b.btn("b.cpu.up", "lim:c+")})
 	kb = b.clientBotLines(&t, kb)
+	kb = b.cupsLines(&t, kb)
 	kb = append(kb, []telegram.Button{b.btn("b.home", "home")})
 	return screen{t.String(), kb}
 }
@@ -1007,8 +1010,9 @@ func (b *bot) show(name string) {
 	msg := b.tr("ui.show.text", e(c.Name), mins, b.tr(p.ID, p.Args...), e(c.Transport), e(c.URL), e(key), e(link))
 	if c.session() {
 		var docs strings.Builder
-		for i, d := range c.Docs() {
-			docs.WriteString(b.tr("ui.show.doc", i+1, e(d.Transport), docPriority(i), e(d.URL)) + "\n")
+		all := c.Docs()
+		for i, d := range all {
+			docs.WriteString(b.tr("ui.show.doc", i+1, e(d.Transport), docPriority(all, i), e(d.URL)) + "\n")
 		}
 		msg = b.tr("ui.show.session", e(c.Name), mins, b.tr(p.ID, p.Args...), docs.String(), e(c.context()), e(key), e(link))
 	}

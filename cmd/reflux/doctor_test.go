@@ -146,7 +146,7 @@ func TestDoctorOnAHealthyHost(t *testing.T) {
 		"ok    node phone: up 16h, client online, 1.4 GB down",
 		"ok    cron runs reflux heal",
 		"ok    last backup 3h ago, 1 kept in",
-		"ok    mail.ru channel direct: 2 addresses out of the uplink",
+		"ok    mail.ru and cups.online channels direct: 2 addresses out of the uplink",
 		"ok    disk / 86% used",
 		"0 problem(s), 0 warning(s)",
 	} {

@@ -439,8 +439,9 @@ func (w *webServer) clientData(name string) (clientData, error) {
 		live = v.status.docs
 		d.DocsNote = tr(l, "ui.docs.since", durationIn(l, v.status.up))
 	}
-	for i, x := range c.Docs() {
-		row := docRow{I: i, N: i + 1, Doc: x, Priority: docPriority(i)}
+	docs := c.Docs()
+	for i, x := range docs {
+		row := docRow{I: i, N: i + 1, Doc: x, Priority: docPriority(docs, i)}
 		if i < len(live) {
 			row.State = live[i].state(v.status.online)
 			row.Pill = docMarks[row.State].pill
