@@ -3,10 +3,13 @@ package mobile
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/control"
+	"github.com/p1neappleXpress/OpenFlux/transport/manager"
 )
 
 type fakeCaptchaTransport struct {
@@ -128,5 +131,64 @@ func TestSubmitCaptchaDataReadsTheScopedPayload(t *testing.T) {
 	}
 	if msg := SubmitCaptchaData(`oops`); msg == "" {
 		t.Fatal("a submission that is not JSON must be refused")
+	}
+}
+
+// One mail.ru sign-in serves every mail.ru document of a channel: the
+// cookies the person hands over for the document that asked reach the
+// others too, now and at the next start, and no other transport's.
+func TestMailruLoginServesEveryDocument(t *testing.T) {
+	dir := t.TempDir()
+	if err := SetCookieStorePath(filepath.Join(dir, "cookies.json")); err != "" {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetCookieStorePath("") })
+	sess, err := transport.NewSession(transport.PeerParameters{
+		Capabilities: control.CapabilityIPv4 | control.CapabilityTCP, MaxPacketSize: 1500,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sess.Stop() })
+	m := manager.New(sess, nil, testSecret, "ctx")
+	carriers := map[string]*stubCarrier{"mailru": {}, "mailru-2": {}, "yandex": {}}
+	keys := map[string]string{
+		"mailru":   "mailru https://cloud.mail.ru/public/a/1",
+		"mailru-2": "mailru https://cloud.mail.ru/public/b/2",
+		"yandex":   "yandex https://docs.yandex.ru/x",
+	}
+	for name, c := range carriers {
+		if err := m.Add(name, strings.SplitN(keys[name], " ", 2)[0], c, 100, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attachSessionCaptcha(m, keys, nil)
+	t.Cleanup(CancelCaptcha)
+
+	m.NotifyCaptcha("mailru-2", "https://account.mail.ru/login?page=x", "", "login")
+	if PendingCaptchaReason() != "login" {
+		t.Fatalf("pending reason %q", PendingCaptchaReason())
+	}
+	if msg := SubmitCaptchaCookies("Mpop=m; sdcs=s"); msg != "" {
+		t.Fatal(msg)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for carriers["mailru"].applied()["Mpop"] != "m" || carriers["mailru-2"].applied()["Mpop"] != "m" {
+		if time.Now().After(deadline) {
+			t.Fatalf("applied: mailru %v, mailru-2 %v", carriers["mailru"].applied(), carriers["mailru-2"].applied())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if carriers["yandex"].applied() != nil {
+		t.Errorf("the mail.ru login went to yandex: %v", carriers["yandex"].applied())
+	}
+	store, _ := transport.NewCookieStore(filepath.Join(dir, "cookies.json"))
+	for _, k := range []string{keys["mailru"], keys["mailru-2"]} {
+		if store.Load(k)["sdcs"] != "s" {
+			t.Errorf("not kept for the next start: %s", k)
+		}
+	}
+	if store.Load(keys["yandex"]) != nil {
+		t.Error("kept for yandex")
 	}
 }

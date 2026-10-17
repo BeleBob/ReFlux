@@ -19,7 +19,10 @@ var captcha struct {
 	mu    sync.Mutex
 	store *transport.CookieStore
 	key   string
-	url   string
+	// also are further store keys the cookies are saved under: the
+	// session's other mail.ru documents, for a mail.ru login.
+	also []string
+	url  string
 	// html is a page the script built itself (template_html.html's
 	// contract), shown instead of url when set - a script transport's
 	// own setup/login page rather than a real site.
@@ -74,6 +77,7 @@ func attachCaptcha(transportType, documentURL string, raw transport.Transport) {
 	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
+	captcha.also = nil
 	captcha.apply = nil
 	exchanger, _ := raw.(transport.CookieExchanger)
 	if exchanger != nil {
@@ -107,6 +111,7 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 	captcha.own = false
 	captcha.name = ""
 	captcha.proxy, captcha.remoteName = "", ""
+	captcha.also = nil
 	store := captcha.store
 	captcha.mu.Unlock()
 	if store != nil {
@@ -123,7 +128,31 @@ func attachSessionCaptcha(m *manager.Manager, keys map[string]string, proxy *aut
 		captcha.own = script.IsOwnPage(url, html)
 		captcha.name = name
 		captcha.proxy, captcha.remoteName = "", ""
+		captcha.also = nil
 		captcha.apply = func(jar map[string]string) error { return m.ApplyCookiesFor(name, jar) }
+		if reason == "login" && strings.HasPrefix(keys[name], "mailru ") {
+			// A mail.ru login is the person's account, which every mail.ru
+			// document opens with: one sign-in serves them all, instead of
+			// one for each document of the channel.
+			var names []string
+			for n, k := range keys {
+				if strings.HasPrefix(k, "mailru ") {
+					names = append(names, n)
+					if n != name {
+						captcha.also = append(captcha.also, k)
+					}
+				}
+			}
+			captcha.apply = func(jar map[string]string) error {
+				var first error
+				for _, n := range names {
+					if err := m.ApplyCookiesFor(n, jar); err != nil && first == nil {
+						first = err
+					}
+				}
+				return first
+			}
+		}
 		captcha.mu.Unlock()
 	})
 	if proxy == nil {
@@ -240,6 +269,7 @@ func CancelCaptcha() {
 	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
+	captcha.also = nil
 	captcha.mu.Unlock()
 }
 
@@ -275,17 +305,21 @@ func SubmitCaptchaData(json_ string) string {
 func submitCaptchaJar(jar map[string]string) string {
 	captcha.mu.Lock()
 	store, key, apply := captcha.store, captcha.key, captcha.apply
+	keys := append([]string{key}, captcha.also...)
 	captcha.url = ""
 	captcha.html = ""
 	captcha.own = false
 	captcha.name = ""
 	captcha.reason = ""
 	captcha.proxy, captcha.remoteName = "", ""
+	captcha.also = nil
 	captcha.mu.Unlock()
 
-	if store != nil && key != "" {
-		if err := store.Save(key, jar); err != nil {
-			appendLog(fmt.Sprintf("[ERROR] Не удалось сохранить cookies: %v", err))
+	for _, key := range keys {
+		if store != nil && key != "" {
+			if err := store.Save(key, jar); err != nil {
+				appendLog(fmt.Sprintf("[ERROR] Не удалось сохранить cookies: %v", err))
+			}
 		}
 	}
 	if apply != nil {
