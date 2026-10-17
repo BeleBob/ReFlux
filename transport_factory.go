@@ -17,6 +17,10 @@ var yandexCookiesFile string
 // mail.ru account that every mailru transport opens its document with.
 var mailruCookiesFile string
 
+// avitoCookiesStr is --avito-cookies: a raw cookie string or path to a
+// Netscape cookies.txt for code.avito.ru.
+var avitoCookiesStr string
+
 // transportFactory builds a raw transport from a control.TransportConfig.
 // main.go passes it into manager.New, and manager calls it whenever the peer
 // asks the exit to bring up an additional transport at runtime. The types are
@@ -31,11 +35,16 @@ func transportFactory(baseCfg transport.TransportConfig, isExit bool) manager.Fa
 		if cfg == nil {
 			return nil, fmt.Errorf("factory: nil config")
 		}
+		baseCfg := baseCfg
+		if n, _ := cfg.Params["network"].(string); n != "" {
+			baseCfg.Network = n // this carrier's network
+		}
 		return registry.New(cfg.Type, cfg.URL, cfg.Params, registry.Options{
 			Base:              baseCfg,
 			IsExit:            isExit,
 			YandexCookiesFile: yandexCookiesFile,
 			MailruCookiesFile: mailruCookiesFile,
+			AvitoCookies:      avitoCookiesStr,
 		})
 	}
 }

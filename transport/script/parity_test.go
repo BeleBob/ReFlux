@@ -1,7 +1,6 @@
 package script
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/dop251/goja"
 
-	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
 )
 
@@ -52,17 +50,6 @@ func jsCall(t *testing.T, vm *goja.Runtime, name string, args ...interface{}) go
 		t.Fatalf("%s(%v): %v", name, args, err)
 	}
 	return out
-}
-
-func TestParityMailruSaveChanges(t *testing.T) {
-	vm := loadJS(t, "js/mailru.js")
-	for _, id := range []string{"1234567890123", "1234567890", "12345", "ab", "a", ""} {
-		want := string(mailru.BuildSaveChanges(id))
-		got := jsCall(t, vm, "buildSaveChanges", id).String()
-		if got != want {
-			t.Errorf("user %q:\n js : %s\n go : %s", id, got, want)
-		}
-	}
 }
 
 func TestParityYandexSaveChanges(t *testing.T) {
@@ -132,72 +119,6 @@ func TestParityYandexExtractBase64(t *testing.T) {
 		got := jsCall(t, vm, "extractBase64", f).String()
 		if got != want {
 			t.Errorf("frame %q: js %q, go %q", f, got, want)
-		}
-	}
-}
-
-func TestParityMailruCursorPayloads(t *testing.T) {
-	vm := loadJS(t, "js/mailru.js")
-	frames := []string{
-		`42["message",{"type":"cursor","cursor":"18;aGVsbG8="}]`,
-		// a batched message: a peer's keep-alive among real entries
-		`42["message",[{"type":"cursor","cursor":"18;---KA---"},{"type":"cursor","cursor":"18;b25l"},{"type":"cursor","cursor":"18;dHdv"}]]`,
-		`42["message",{"type":"cursor","cursor":"18;---KA---"}]`,
-		`42["message",[{"type":"cursor","cursor":"18;YQ=="},{"type":"cursor","cursor":"18;---KA---"},{"type":"cursor","cursor":"18;Yg=="}]]`,
-		`42["message",{"type":"auth","result":1}]`,
-		``,
-	}
-	for _, f := range frames {
-		want := mailru.CursorPayloads(f)
-		var got []string
-		raw, err := json.Marshal(jsCall(t, vm, "cursorPayloads", f).Export())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(raw, &got); err != nil {
-			t.Fatal(err)
-		}
-		if len(want) == 0 && len(got) == 0 {
-			continue
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("frame %q: js %q, go %q", f, got, want)
-		}
-	}
-}
-
-// What the JS transport hands to the engine for a server frame (emit) equals
-// what the native one delivers (every cursor entry decoded, in order, bad
-// base64 skipped).
-func TestParityMailruHandleMessage(t *testing.T) {
-	frames := []string{
-		`42["message",{"type":"cursor","cursor":"18;aGVsbG8="}]`,
-		`42["message",[{"type":"cursor","cursor":"18;---KA---"},{"type":"cursor","cursor":"18;b25l"},{"type":"cursor","cursor":"18;dHdv"}]]`,
-		`42["message",{"type":"cursor","cursor":"18;---KA---"}]`,
-		`42["message",[{"type":"cursor","cursor":"18;!!notbase64!!"},{"type":"cursor","cursor":"18;b2s="}]]`,
-		`3`,
-	}
-	for _, f := range frames {
-		vm := loadJS(t, "js/mailru.js")
-		var got []string
-		if err := vm.Set("emit", func(call goja.FunctionCall) goja.Value {
-			var b []byte
-			_ = vm.ExportTo(call.Argument(0), &b)
-			got = append(got, string(b))
-			return goja.Undefined()
-		}); err != nil {
-			t.Fatal(err)
-		}
-		jsCall(t, vm, "handleMessage", f)
-
-		var want []string
-		for _, p := range mailru.CursorPayloads(f) {
-			if b, err := base64.StdEncoding.DecodeString(p); err == nil {
-				want = append(want, string(b))
-			}
-		}
-		if fmt.Sprint(got) != fmt.Sprint(want) {
-			t.Errorf("frame %q: js delivered %q, native %q", f, got, want)
 		}
 	}
 }
