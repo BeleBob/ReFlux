@@ -65,6 +65,27 @@ func SetCookieStorePath(path string) string {
 	return ""
 }
 
+// ForgetCookies drops the saved cookies of every transport of type typ: the
+// app's "sign out of mail.ru" ("mailru"), so the next start asks for a
+// sign-in again. A running transport keeps the ones it has until it stops.
+// Returns "" or a user-readable error.
+func ForgetCookies(typ string) string {
+	captcha.mu.Lock()
+	store := captcha.store
+	captcha.mu.Unlock()
+	if store == nil || typ == "" {
+		return ""
+	}
+	for key := range store.All() {
+		if strings.HasPrefix(key, typ+" ") {
+			if err := store.Delete(key); err != nil {
+				return err.Error()
+			}
+		}
+	}
+	return ""
+}
+
 // attachCaptcha wires the raw (unwrapped, not yet started) transport into
 // the flow and replays cookies saved from an earlier solve.
 func attachCaptcha(transportType, documentURL string, raw transport.Transport) {

@@ -192,3 +192,27 @@ func TestMailruLoginServesEveryDocument(t *testing.T) {
 		t.Error("kept for yandex")
 	}
 }
+
+// Signing out of mail.ru forgets every mail.ru document's saved login and
+// nothing else.
+func TestForgetCookies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cookies.json")
+	if err := SetCookieStorePath(path); err != "" {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetCookieStorePath("") })
+	captcha.mu.Lock()
+	store := captcha.store
+	captcha.mu.Unlock()
+	store.Save("mailru https://cloud.mail.ru/public/a/1", map[string]string{"Mpop": "m"})
+	store.Save("mailru https://cloud.mail.ru/public/b/2", map[string]string{"Mpop": "m"})
+	store.Save("yandex https://docs.yandex.ru/x", map[string]string{"spravka": "s"})
+	if msg := ForgetCookies("mailru"); msg != "" {
+		t.Fatal(msg)
+	}
+	reloaded, _ := transport.NewCookieStore(path)
+	all := reloaded.All()
+	if len(all) != 1 || all["yandex https://docs.yandex.ru/x"]["spravka"] != "s" {
+		t.Fatalf("left %v", all)
+	}
+}
