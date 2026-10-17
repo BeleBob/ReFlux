@@ -44,6 +44,8 @@ const (
 type clientBotConfig struct {
 	Token    string `json:"token"`
 	Username string `json:"username,omitempty"` // for invite links
+	// Hidden: the bot answers only the people it deals with (clienthide.go).
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 func (s Store) clientBotPath() string      { return filepath.Join(s.Root, "client-bot.json") }
@@ -175,6 +177,10 @@ func (cb *clientBot) handle(u telegram.Update) {
 		if q.From == nil || q.Message == nil || q.Message.Chat.Type != "private" {
 			return
 		}
+		if !cb.answers(q.From, "") {
+			cb.t.Answer(q.ID, "")
+			return
+		}
 		cb.seen(q.From)
 		sc := cb.press(q.From, q.Data)
 		cb.t.Answer(q.ID, "")
@@ -187,6 +193,9 @@ func (cb *clientBot) handle(u telegram.Update) {
 	}
 	m := u.Message
 	if m == nil || m.From == nil || m.Chat.Type != "private" {
+		return
+	}
+	if !cb.answers(m.From, strings.TrimSpace(m.Text)) {
 		return
 	}
 	cb.seen(m.From)
@@ -555,6 +564,17 @@ func (cb *clientBot) remind(now time.Time) {
 
 // clientBotSetup links the client bot: a token from @BotFather, checked.
 func clientBotSetup(s Store, args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) == 1 && (args[0] == "hide" || args[0] == "show") {
+		if err := s.setClientBotHidden(args[0] == "hide"); err != nil {
+			return err
+		}
+		if args[0] == "hide" {
+			fmt.Fprintln(stdout, "The client bot keeps quiet to strangers: it answers clients, their requests and invite links only.")
+		} else {
+			fmt.Fprintln(stdout, "The client bot answers everyone again.")
+		}
+		return nil
+	}
 	if len(args) == 1 && args[0] == "off" {
 		if err := ignoreMissing(os.Remove(s.clientBotPath())); err != nil {
 			return err

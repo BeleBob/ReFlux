@@ -465,6 +465,10 @@ svg.gauge { width:100%; max-width:150px; display:block; margin:0 auto -8px; }
 
 {{define "requests"}}{{template "head" .}}
 {{with .Body}}
+{{if .ClientBot}}<div class="card row">
+<p style="flex:1">{{if .Hidden}}{{t "ui.cbot.hidden"}}{{else}}{{t "ui.cbot.shown"}}{{end}}</p>
+{{if .Hidden}}<form method="post" action="/clientbot/show"><button>{{t "b.cbot.show"}}</button></form>{{else}}<form method="post" action="/clientbot/hide"><button>{{t "b.cbot.hide"}}</button></form>{{end}}
+</div>{{end}}
 <div class="card">
 <h2>{{t "web.rq.waiting"}}</h2>
 {{$any := false}}{{range .Rows}}{{if .Pending}}{{$any = true}}

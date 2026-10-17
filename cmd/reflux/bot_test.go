@@ -232,6 +232,7 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 	node := func(lv level) finding {
 		return finding{Key: "node:phone", Level: lv, Msg: "test.raw", Args: []any{"node phone " + lv.String()}, Sig: lv.String()}
 	}
+	paused := finding{Key: "node:phone", Level: levelOK, Msg: "test.raw", Args: []any{"node phone paused"}, Sig: "paused"}
 	steps := []struct {
 		fs   []finding
 		news string
@@ -245,6 +246,11 @@ func TestMonitorReportsLastingChangesOnly(t *testing.T) {
 		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, "ℹ️ world up via world-5.conf"}, // failover
 		{[]finding{world(levelOK, "world-5.conf")}, ""},
 		{[]finding{world(levelOK, "world-5.conf")}, ""}, // the client was revoked: no news
+		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, ""},
+		// Paused, then started again: the owner did it, no news either way.
+		{[]finding{world(levelOK, "world-5.conf"), paused}, ""},
+		{[]finding{world(levelOK, "world-5.conf"), paused}, ""},
+		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, ""},
 		{[]finding{world(levelOK, "world-5.conf"), node(levelOK)}, ""},
 	}
 	for i, st := range steps {
