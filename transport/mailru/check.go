@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 )
@@ -44,14 +45,18 @@ func (e *StatusError) blocked() bool {
 // ErrReadOnly: the link opens the document for viewing only.
 var ErrReadOnly = errors.New("the link opens the document read-only")
 
-// CheckDocument opens a public document the way the transport does, as an
-// anonymous visitor, without joining its co-authoring session. dead is true
-// when the document cannot carry a tunnel at all: the editor API says it or
-// its owner's account is gone or blocked (StatusError.blocked), or the link
-// may not edit it. Other errors (the network, the service having a bad
-// moment, a timeout) leave dead false.
-func CheckDocument(weblink string) (dead bool, err error) {
+// CheckDocument opens a public document the way the transport does, as the
+// account cookies hold (nil: anonymously, which Mail.ru refuses since
+// 2026-10-15), without joining its co-authoring session. dead is true when
+// the document cannot carry a tunnel at all: the editor API says it or its
+// owner's account is gone or blocked (StatusError.blocked), or the link may
+// not edit it. Other errors (the network, the service having a bad moment,
+// a timeout, a login it does not take) leave dead false.
+func CheckDocument(weblink string, cookies map[string]string) (dead bool, err error) {
 	t := NewMailruDocsTransport(weblink, transport.DefaultConfig())
+	if len(cookies) > 0 {
+		t.cookieJar = newJar(t.cloudURL(), cookies)
+	}
 	info, err := t.fetchDocInfo(t.weblink)
 	var se *StatusError
 	switch {
@@ -63,4 +68,20 @@ func CheckDocument(weblink string) (dead bool, err error) {
 		return true, ErrReadOnly
 	}
 	return false, nil
+}
+
+// CheckLogin says whether Mail.ru takes the account cookies hold: it asks
+// the cloud for the CSRF token the transport takes before it opens a
+// document. account is the address the login names ("" when it names
+// none). A login that is missing or over is ErrLoginRequired.
+func CheckLogin(cookies map[string]string) (account string, err error) {
+	if err := LoginCookies(cookies); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrLoginRequired, err)
+	}
+	t := NewMailruDocsTransport("", transport.DefaultConfig())
+	client := &http.Client{Jar: newJar(t.cloudURL(), cookies), Timeout: 15 * time.Second}
+	if _, err := fetchCSRF(client, t.cloudURL()); err != nil {
+		return "", err
+	}
+	return accountEmail(cookies[loginCookie]), nil
 }

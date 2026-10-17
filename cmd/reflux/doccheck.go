@@ -43,13 +43,19 @@ type docVerdict struct {
 	Error string `json:"error"`
 }
 
-// checkDocsInEgress checks documents from the egress namespace; the answers
-// come in the documents' order. The links go on stdin, never as arguments.
-func checkDocsInEgress(docs []Doc) ([]docVerdict, error) {
+// checkDocsInEgress checks documents from the egress namespace, signed in
+// as the nodes are (mailrulogin.go); the answers come in the documents'
+// order. The links and the cookies go on stdin, never as arguments.
+func (s Store) checkDocsInEgress(docs []Doc) ([]docVerdict, error) {
 	if len(docs) == 0 {
 		return nil, nil
 	}
 	var in strings.Builder
+	first := 1 // the line of the first document
+	if header, err := s.mailruCookies(); err == nil && header != "" {
+		fmt.Fprintf(&in, "cookies %s\n", header)
+		first = 2
+	}
 	for _, d := range docs {
 		fmt.Fprintf(&in, "%s %s\n", d.Transport, d.URL)
 	}
@@ -67,8 +73,8 @@ func checkDocsInEgress(docs []Doc) ([]docVerdict, error) {
 			Line int `json:"line"`
 			docVerdict
 		}
-		if json.Unmarshal(sc.Bytes(), &v) == nil && v.Line >= 1 && v.Line <= len(docs) {
-			verdicts[v.Line-1] = v.docVerdict
+		if json.Unmarshal(sc.Bytes(), &v) == nil && v.Line-first >= 0 && v.Line-first < len(docs) {
+			verdicts[v.Line-first] = v.docVerdict
 		}
 	}
 	return verdicts, nil
@@ -146,7 +152,7 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 	for i, t := range targets {
 		docs[i] = t.doc
 	}
-	verdicts, err := checkDocsInEgress(docs)
+	verdicts, err := s.checkDocsInEgress(docs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -284,7 +290,7 @@ func (s Store) recheckDead(urls []string, now time.Time) (back, still int, err e
 	if len(docs) == 0 {
 		return 0, 0, errors.New("no such dead document")
 	}
-	verdicts, err := checkDocsInEgress(docs)
+	verdicts, err := s.checkDocsInEgress(docs)
 	if err != nil {
 		return 0, 0, err
 	}

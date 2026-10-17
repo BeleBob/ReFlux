@@ -246,7 +246,7 @@ func TestWebPagesRender(t *testing.T) {
 		writeFile(t, proc+"/stat", "cpu  500 0 100 900 100 0 0 0 0 0\ncpu0 1 0 0 0\n")
 		w.stats.tick(time.Now())
 		wt.s.logEvents([]event{{At: time.Now(), Level: "FAIL", RU: "мир не работает", EN: "world is down"}})
-		for _, p := range []string{"/", "/server", "/events", "/c/phone", "/add", "/doctor", "/gateway", "/speed", "/logs/phone", "/logs/egress", "/?ok=added", "/c/phone?ok=restarted_node"} {
+		for _, p := range []string{"/", "/server", "/events", "/c/phone", "/add", "/doctor", "/gateway", "/speed", "/logs/phone", "/logs/egress", "/?ok=added", "/c/phone?ok=restarted_node", "/mailru", "/mailru?ok=mailru"} {
 			rec := wt.do("GET", p, nil)
 			if rec.Code != http.StatusOK {
 				t.Errorf("%s %s: %d\n%s", l, p, rec.Code, rec.Body)

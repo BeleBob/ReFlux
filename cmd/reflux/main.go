@@ -48,6 +48,11 @@ USAGE
                            quarantine and dead; check finds and replaces dead
                            ones now (the bot does it every 15 minutes), recheck
                            tries dead ones again
+  reflux mailru [login [<file>] | check]
+                           the mail.ru account the nodes sign in with (mail.ru
+                           opens documents for a signed-in account only): its
+                           state; login takes the cookies of cloud.mail.ru
+                           (a file, or pasted) and checks them; check again
   reflux revoke <name> [--yes]
   reflux apply [--dry-run] render compose.yml and start/stop containers
   reflux update            pull new images, apply, remove old ReFlux images
@@ -212,6 +217,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdInvite(s, rest, stdout)
 	case "docs":
 		return cmdDocs(s, rest, stdout)
+	case "mailru":
+		return cmdMailru(s, rest, stdin, stdout)
 	case "pool":
 		return cmdPool(s, rest, stdout)
 	case "heal":
@@ -240,7 +247,7 @@ const imageSourceLabel = "org.opencontainers.image.source=https://github.com/Bel
 // changes are the commands that change the data directory or the
 // containers; they run one at a time (Store.Lock).
 var changes = map[string]bool{
-	"docs": true, "pool": true, "requests": true,
+	"docs": true, "pool": true, "requests": true, "mailru": true,
 	"add": true, "pause": true, "resume": true, "expire": true, "revoke": true, "rename": true, "gateway": true,
 	"apply": true, "update": true, "restart": true, "heal": true, "backup": true, "restore": true,
 }

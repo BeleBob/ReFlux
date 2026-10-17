@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 )
 
 // A provider export: wg-quick keys, AWG 2.0 keys in mixed case, comments.
@@ -853,7 +856,11 @@ func TestCarriersGoOutOfTheUplink(t *testing.T) {
 func TestCheckDocs(t *testing.T) {
 	old := checkDocument
 	t.Cleanup(func() { checkDocument = old })
-	checkDocument = func(transport, url string) (bool, error) {
+	var signedIn atomic.Int32
+	checkDocument = func(transport, url string, cookies map[string]string) (bool, error) {
+		if cookies["Mpop"] == "m" && cookies["sdcs"] == "s" {
+			signedIn.Add(1)
+		}
 		switch {
 		case strings.HasSuffix(url, "/dead"):
 			return true, errors.New("API returned status 404")
@@ -862,7 +869,7 @@ func TestCheckDocs(t *testing.T) {
 		}
 		return false, nil
 	}
-	in := "mailru https://cloud.mail.ru/public/a/ok\n\nhttps://cloud.mail.ru/public/b/dead\nmailru https://cloud.mail.ru/public/c/flaky\nyandex https://disk.yandex.ru/i/x\n"
+	in := "cookies Mpop=m; sdcs=s\nmailru https://cloud.mail.ru/public/a/ok\n\nhttps://cloud.mail.ru/public/b/dead\nmailru https://cloud.mail.ru/public/c/flaky\nyandex https://disk.yandex.ru/i/x\n"
 	var out strings.Builder
 	if err := checkDocs(strings.NewReader(in), &out); err != nil {
 		t.Fatal(err)
@@ -870,13 +877,53 @@ func TestCheckDocs(t *testing.T) {
 	if strings.Contains(out.String(), "cloud.mail.ru") {
 		t.Errorf("a link in the answer:\n%s", out.String())
 	}
+	// The cookies line counts: the documents keep their line numbers.
 	want := []string{
-		`{"line":1,"state":"ok"}`,
-		`{"line":3,"state":"dead","error":"API returned status 404"}`,
-		`{"line":4,"state":"unknown","error":"timeout"}`,
-		`{"line":5,"state":"unknown","error":"no check for yandex documents"}`,
+		`{"line":2,"state":"ok"}`,
+		`{"line":4,"state":"dead","error":"API returned status 404"}`,
+		`{"line":5,"state":"unknown","error":"timeout"}`,
+		`{"line":6,"state":"unknown","error":"no check for yandex documents"}`,
 	}
 	if got := strings.Split(strings.TrimSpace(out.String()), "\n"); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if n := signedIn.Load(); n != 3 {
+		t.Errorf("%d of the 3 mail.ru documents were opened as the account", n)
+	}
+	if strings.Contains(out.String(), "Mpop") {
+		t.Errorf("a cookie in the answer:\n%s", out.String())
+	}
+}
+
+// The login check answers whether Mail.ru takes the account, and whether a
+// failure is about the login or about the moment, never with the cookies.
+func TestCheckLogin(t *testing.T) {
+	old := checkLogin
+	t.Cleanup(func() { checkLogin = old })
+	checkLogin = func(c map[string]string) (string, error) {
+		switch c["sdcs"] {
+		case "good":
+			return "someone@mail.ru", nil
+		case "expired":
+			return "", fmt.Errorf("%w (CSRF token: 403 user)", mailru.ErrLoginRequired)
+		}
+		return "", errors.New("timeout")
+	}
+	for _, c := range []struct{ in, want string }{
+		{"Mpop=SECRET; sdcs=good", `{"ok":true,"account":"someone@mail.ru"}`},
+		{"Mpop=SECRET; sdcs=expired", `{"ok":false,"refused":true,"error":"mailru: the document needs a signed-in mail.ru account (CSRF token: 403 user)"}`},
+		{"Mpop=SECRET; sdcs=slow", `{"ok":false,"error":"timeout"}`},
+		{"", `{"ok":false,"refused":true,"error":"the cookies: empty"}`},
+	} {
+		var out strings.Builder
+		if err := checkLoginCmd(strings.NewReader(c.in), &out); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(out.String()); got != c.want {
+			t.Errorf("%q: got %s, want %s", c.in, got, c.want)
+		}
+		if strings.Contains(out.String(), "SECRET") {
+			t.Errorf("a cookie in the answer: %s", out.String())
+		}
 	}
 }

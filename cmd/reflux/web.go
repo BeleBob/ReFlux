@@ -118,6 +118,8 @@ func (w *webServer) routes() http.Handler {
 	mux.HandleFunc("GET /doctor", w.page(w.doctor))
 	mux.HandleFunc("GET /gateway", w.page(w.gateway))
 	mux.HandleFunc("POST /gateway/{what}", w.action(w.gatewayAction))
+	mux.HandleFunc("GET /mailru", w.page(w.mailruPage))
+	mux.HandleFunc("POST /mailru/{what}", w.action(w.mailruAction))
 	mux.HandleFunc("GET /speed", w.page(w.speedForm))
 	mux.HandleFunc("POST /speed", w.page(w.speed))
 	mux.HandleFunc("POST /logout", w.logout)
