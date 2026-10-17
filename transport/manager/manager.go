@@ -671,7 +671,9 @@ func (m *Manager) SetCaptchaNotifier(n CaptchaNotifier) {
 // proceed without external help. The local notifier (IPC to the app) gets
 // every report. On the exit node there is usually no app, and the check
 // has to be passed from the exit's address anyway, so the report also goes
-// to the client over whichever carrier still reaches it.
+// to the client over whichever carrier still reaches it - except a mail.ru
+// login: whoever signed in for the exit would give the exit's operator
+// their account, cookies and all. The exit's operator signs it in.
 func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
 	// A transport waiting on a check carries nothing; route around it,
 	// and in particular do not send its own AuthRequired through it.
@@ -682,7 +684,7 @@ func (m *Manager) NotifyCaptcha(name, url, html, reason string) {
 	if n != nil {
 		n(name, url, html, reason)
 	}
-	if m.session.IsExit() {
+	if m.session.IsExit() && !(reason == "login" && m.entryType(name) == "mailru") {
 		m.forwardAuth(name, url, html, reason)
 	}
 }
