@@ -209,12 +209,16 @@ func (s *Session) newLink(name string, raw Transport, secret, context string, pr
 	classic, codec := s.classic, s.classicCodec
 	s.mu.Unlock()
 	enc.SetAlternateContexts(alternates)
+	batchHint := 0
+	if h, ok := raw.(BatchSizeHinter); ok {
+		batchHint = h.PreferredBatchBytes()
+	}
 	link := &transportLink{
 		name:      name,
 		raw:       raw,
 		demux:     d,
 		encrypted: enc,
-		batched:   NewBatchedTransport(enc),
+		batched:   NewBatchedTransport(enc, batchHint),
 		priority:  priority,
 	}
 	if classic != ClassicOff {
@@ -1783,12 +1787,14 @@ func (s *Session) Stats() TransportStats {
 
 	var out TransportStats
 	for _, l := range links {
-		st := l.raw.Stats()
+		st := l.batched.Stats()
 		out.BytesSent += st.BytesSent
 		out.BytesReceived += st.BytesReceived
 		out.PacketsSent += st.PacketsSent
 		out.PacketsRecv += st.PacketsRecv
 		out.Reconnects += st.Reconnects
+		out.QueueWaits += st.QueueWaits
+		out.SendRetries += st.SendRetries
 	}
 	out.Connected = s.IsConnected()
 	return out

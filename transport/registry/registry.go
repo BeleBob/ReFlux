@@ -13,8 +13,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/avito"
+	"github.com/p1neappleXpress/OpenFlux/transport/bitrix24"
 	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 	"github.com/p1neappleXpress/OpenFlux/transport/mailru"
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
@@ -40,6 +43,8 @@ type Options struct {
 	// MailruCookiesFile is the CLI's --mailru-cookies-file: the cookies of a
 	// signed-in mail.ru account every mailru transport starts with.
 	MailruCookiesFile string
+	// AvitoCookies is the raw cookie string for code.avito.ru.
+	AvitoCookies string
 	// StrictDirect makes a direct transport without an address an error (the
 	// apps tell the user); without it the CLI's behavior stays: the transport
 	// fails when it starts.
@@ -50,13 +55,19 @@ type Options struct {
 // existed; moving every user-facing word out of the core is a separate step.
 
 // Types are the transport types New accepts, in the order the apps list them.
-var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "telemost", "oneme", "direct", "script"}
+var Types = []string{"yandex", "vyandex", "boards", "mailru", "cupsonline", "avito", "telemost", "bitrix24", "oneme", "direct", "script"}
 
 // New builds the raw carrier of the given type. params carries what a type
 // needs beyond its url: "token"/"uid" (and "exit") for oneme, "dial"/"listen"
 // (and "is_exit") for direct, "path"/"pubkey"/"name" plus whatever the script
 // itself asked for for script. An empty type is yandex.
 func New(typ, url string, params map[string]interface{}, o Options) (transport.Transport, error) {
+	if links := typedLinks(url); links != nil {
+		return newMixed(links, params, o)
+	}
+	if urls := groupURLs(url, params); urls != nil {
+		return newGroup(typ, urls, params, o)
+	}
 	base := o.Base
 	if o.LowMemory {
 		base.MaxQueueSize = 512
@@ -95,7 +106,13 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 		}
 		return t, nil
 	case "cupsonline":
-		return cupsonline.NewCupsonlineTransport(url, base, !o.IsExit), nil
+		// Stripes over its rooms itself when the room list says so (see
+		// transport.PackRooms); an old list keeps the old wire.
+		return cupsonline.NewCupsonlineTransport(url, base, !roleParam(params, "exit", o.IsExit)), nil
+	case "avito":
+		return avito.NewAvitoTransport(url, base, o.AvitoCookies, !roleParam(params, "exit", o.IsExit)), nil
+	case "bitrix24":
+		return bitrix24.NewBitrix24Transport(url, base, str("cookies"), str("sessid"), str("chat_id")), nil
 	case "oneme":
 		uid, _ := strconv.ParseInt(str("uid"), 10, 64)
 		return oneme.NewOneMeTransport(roleParam(params, "exit", o.IsExit), str("token"), uid, base), nil
@@ -105,6 +122,9 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 		return newScript(url, params, o)
 	case "direct":
 		return newDirect(params, o)
+	case "mixed":
+		// A mixed group is recognised by its url ("type:link ..."), above.
+		return nil, errors.New("mixed: в url нужны ссылки вида тип:ссылка (cupsonline:... avito:... mailru:...)")
 	}
 	return nil, fmt.Errorf("unknown transport type %q", typ) // the apps never offer an unknown one
 }
@@ -151,7 +171,9 @@ func newTelemost(url string, params map[string]interface{}, o Options) transport
 		maxLanes = n
 	}
 	g := yandex.NewTelemostGroup(str("cookies"), url, n, o.IsExit, o.Base)
-	return transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
+	stripe := transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
+	stripe.SetHealthDeadline(60 * time.Second)
+	return stripe
 }
 
 // A Telemost carrier starts with telemostLanes lanes and adds one whenever
