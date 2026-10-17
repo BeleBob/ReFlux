@@ -480,7 +480,7 @@ URL = YOUR_YANDEX_DOC_URL
 ```
 
 Ключи `[Interface]`: `Role`, `Inbound`, `Transport`, `Mode`, `Codec`,
-`Socks5`, `EncryptionKeyFile`, `CookieStore`, `IPCSocket`, `ConfigOfferFile`, `URL`, `Debug`.
+`Socks5`, `EncryptionKeyFile`, `CookieStore`, `MailruCookiesFile`, `IPCSocket`, `ConfigOfferFile`, `URL`, `Debug`.
 Секции транспортов: `Type` (по умолчанию имя секции), `Priority` (по умолчанию
 50), `URL`, `Dial` / `Listen` (direct) и `Token` / `UID` (MAX). `.conf` с
 секциями транспортов всегда запускается как согласованная сессия.
@@ -568,9 +568,11 @@ URL = YOUR_YANDEX_DOC_URL
 # Yandex Board (WS)
 ./openflux --role=exit --mode=l3 --transport=boards --url="..." --debug
 
-# Mail.ru Docs (WS)
+# Mail.ru Docs (WS); с 15.10.2026 mail.ru пускает к документам только
+# вошедших: mailru-cookies.txt — cookies, которые браузер с выполненным входом
+# отправляет cloud.mail.ru (нужны Mpop и sdcs)
 ./openflux --role=exit --mode=l3 --transport=mailru \
-    --url="YOUR_MAILRU_PUBLIC_LINK" --debug
+    --url="YOUR_MAILRU_PUBLIC_LINK" --mailru-cookies-file=mailru-cookies.txt --debug
 # принимает как голый weblink (AbCdEfGh1/IjKlMnOp2), так и полный URL
 # (https://cloud.mail.ru/public/AbCdEfGh1/IjKlMnOp2)
 ```
@@ -603,6 +605,7 @@ URL = YOUR_YANDEX_DOC_URL
 | `--direct-listen` | | | Адрес прослушивания для `direct` (выходная нода) |
 | `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`, `--cupsonline-url` | | | Ссылка на документ по типу транспорта в сессии |
 | `--yandex-cookies-file` | | | Netscape `cookies.txt` с логином Яндекса, для `vyandex` |
+| `--mailru-cookies-file` | | | Cookies аккаунта mail.ru, для `mailru` (в `.conf` — `MailruCookiesFile`): `cookies.txt`, заголовок `Cookie`, JSON или строки «имя<TAB>значение» из инструментов разработчика браузера. Нужны `Mpop` и `sdcs` |
 | `--oneme-token`, `--oneme-uid` | | | Данные MAX в сессии |
 | `--config` | | | Файл `.conf`; флаги важнее него |
 | `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |
