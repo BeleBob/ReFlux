@@ -776,7 +776,7 @@ func TestLoadCarrierHosts(t *testing.T) {
 		t.Errorf("without the file: %v", h)
 	}
 	os.WriteFile(filepath.Join(dir, carrierFile), nil, 0o600)
-	if h := strings.Join(loadCarrierHosts(dir), ","); h != "cloud.mail.ru,docs.datacloudmail.ru" {
+	if h := strings.Join(loadCarrierHosts(dir), ","); h != "cloud.mail.ru,docs.datacloudmail.ru,interview.cups.online" {
 		t.Errorf("empty file: %s", h)
 	}
 	os.WriteFile(filepath.Join(dir, carrierFile), []byte("# mail.ru\ncloud.mail.ru\n\n docs.example \n"), 0o600)

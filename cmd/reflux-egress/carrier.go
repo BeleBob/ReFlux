@@ -23,9 +23,10 @@ import (
 // The egress reads it when it starts.
 const carrierFile = "carrier-direct"
 
-// defaultCarrierHosts are the hosts of the Mail.ru carrier: the editor
-// API and the co-authoring WebSocket.
-var defaultCarrierHosts = []string{"cloud.mail.ru", "docs.datacloudmail.ru"}
+// defaultCarrierHosts are the hosts of the Mail.ru carrier (the editor
+// API and the co-authoring WebSocket) and of cups.online (the room pages
+// and their Centrifugo WebSocket share one host).
+var defaultCarrierHosts = []string{"cloud.mail.ru", "docs.datacloudmail.ru", "interview.cups.online"}
 
 const (
 	// carrierEvery is how often the carrier hosts are resolved again.

@@ -18,6 +18,8 @@ import (
 // The first line may be "cookies <the account's cookies>": the mail.ru
 // account the nodes sign in with, which the documents are opened as (Mail.ru
 // opens them for a signed-in account only). It counts as line 1.
+// A cupsonline line is a channel's packed room list (rooms.go): dead once
+// cups.online says any of its rooms is gone.
 
 // docCheck is the answer for line N (from 1).
 type docCheck struct {
@@ -28,6 +30,9 @@ type docCheck struct {
 
 // checkDocument checks one document; tests replace it.
 var checkDocument = func(transport, url string, cookies map[string]string) (dead bool, err error) {
+	if transport == "cupsonline" {
+		return checkRoomList(url)
+	}
 	return mailru.CheckDocument(url, cookies)
 }
 
@@ -68,7 +73,7 @@ func checkDocs(in io.Reader, out io.Writer) error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			r := docCheck{Line: j.line, State: "unknown"}
-			if j.transport != "mailru" {
+			if j.transport != "mailru" && j.transport != "cupsonline" {
 				r.Error = "no check for " + j.transport + " documents"
 				results[i] = r
 				return
