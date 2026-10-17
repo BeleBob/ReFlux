@@ -276,6 +276,7 @@ func main() {
 	flag.StringVar(&yandexCookiesFile, "yandex-cookies-file", "", "Netscape cookies.txt with a Yandex login for vyandex transports")
 	boardsURL := flag.String("boards-url", "", "URL for the boards transport")
 	mailruURL := flag.String("mailru-url", "", "URL (weblink) for the mailru transport")
+	flag.StringVar(&mailruCookiesFile, "mailru-cookies-file", "", "Cookies of a signed-in mail.ru account for mailru transports")
 	cupsonlineURL := flag.String("cupsonline-url", "", "URL for the cupsonline transport")
 	onemeToken := flag.String("oneme-token", "", "MAX token for the oneme transport")
 	onemeUID := flag.String("oneme-uid", "", "MAX uid for the oneme transport")
@@ -358,6 +359,11 @@ TRANSPORTS  (multi-transport session; requires --encryption-key-file)
                                vyandex transports.
       --boards-url=<URL>       URL for the boards transport.
       --mailru-url=<WEBLINK>   Weblink for the mailru transport.
+      --mailru-cookies-file=<path>
+                               Cookies of a signed-in mail.ru account for
+                               mailru transports (cookies.txt or a Cookie
+                               header). Mail.ru opens documents only for a
+                               signed-in account.
       --cupsonline-url=<URL>   URL for the cupsonline transport.
       --oneme-token=<token>    MAX auth token for the oneme transport.
       --oneme-uid=<uid>        MAX user id for the oneme transport.
@@ -497,6 +503,7 @@ DEPRECATED (removed in v2)
 		applyConfString(conf.Interface, "EncryptionKeyFile", "encryption-key-file", encryptionKeyFile, setFlags)
 		applyConfString(conf.Interface, "SessionContext", "session-context", sessionContextFlag, setFlags)
 		applyConfString(conf.Interface, "CookieStore", "cookie-store", cookieStorePath, setFlags)
+		applyConfString(conf.Interface, "MailruCookiesFile", "mailru-cookies-file", &mailruCookiesFile, setFlags)
 		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
 		applyConfString(conf.Interface, "ConfigOfferFile", "config-offer-file", configOfferFile, setFlags)
 		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
@@ -989,7 +996,7 @@ DEPRECATED (removed in v2)
 		}
 		inner, err := registry.New(*transportType, globalDocUrl,
 			map[string]interface{}{"token": maxToken, "uid": maxUid, "exit": isExit},
-			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile})
+			registry.Options{Base: config, IsExit: isExit, YandexCookiesFile: yandexCookiesFile, MailruCookiesFile: mailruCookiesFile})
 		if err != nil {
 			log.Fatalf("%s: %v", *transportType, err)
 		}
@@ -1254,7 +1261,7 @@ func streamCarrier(transportType, url string) phpbox.Carrier {
 		log.Fatalf("--mode=stream: transport %q not supported (use cupsonline, yandex, vyandex, mailru)", transportType)
 	}
 	t, err := registry.New(transportType, url, nil, registry.Options{
-		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile,
+		Base: transport.DefaultConfig(), YandexCookiesFile: yandexCookiesFile, MailruCookiesFile: mailruCookiesFile,
 	})
 	if err != nil {
 		log.Fatalf("--mode=stream %s: %v", transportType, err)
