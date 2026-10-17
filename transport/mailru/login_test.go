@@ -40,7 +40,7 @@ func TestParseCookies(t *testing.T) {
 		{"netscape", netscape},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := parseCookies(c.text)
+			got, err := ParseCookies(c.text)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -51,7 +51,7 @@ func TestParseCookies(t *testing.T) {
 		})
 	}
 	for _, bad := range []string{"", "   ", "{}", "a\tb\tc"} {
-		if _, err := parseCookies(bad); err == nil {
+		if _, err := ParseCookies(bad); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
 	}
@@ -65,7 +65,8 @@ type cloudServer struct {
 	*httptest.Server
 	csrfCalls  atomic.Int32
 	editCalls  atomic.Int32
-	rejectNext atomic.Bool // answer the next edit with 403 "token"
+	okEdits    atomic.Int32 // signed in, with the token
+	rejectNext atomic.Bool  // answer the next edit with 403 "token"
 	mu         sync.Mutex
 	lastEdit   *http.Request
 	lastBody   map[string]string
@@ -105,6 +106,7 @@ func newCloudServer(t *testing.T) *cloudServer {
 			json.NewEncoder(w).Encode(map[string]string{"error": "token"})
 			return
 		}
+		cs.okEdits.Add(1)
 		json.NewEncoder(w).Encode(map[string]any{
 			"token": "tok", "api": "http://api",
 			"document": map[string]any{
@@ -246,5 +248,57 @@ func TestLoadCookieFileNeedsLogin(t *testing.T) {
 	}
 	if err := tr.LoadCookieFile(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("a missing file loaded")
+	}
+}
+
+// A login that expired is replaced by writing a new cookies file: the
+// running transport reads it at its next refusal, without a restart, and
+// a file that is not there yet is read once it appears.
+func TestCookieFileReadAgain(t *testing.T) {
+	cs := newCloudServer(t)
+	path := filepath.Join(t.TempDir(), "cookies")
+	tr := NewMailruDocsTransport("AbCdEfGh1/IjKlMnOp2", transport.DefaultConfig())
+	if err := tr.LoadCookieFile(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing file: err = %v, want os.ErrNotExist", err)
+	}
+	asked := make(chan struct{}, 8)
+	tr.SetErrorNotifier(func(error, string, string, string, string) { asked <- struct{}{} })
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Stop()
+	select {
+	case <-asked:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no login asked while the file was missing")
+	}
+
+	write := func(text string, at time.Time) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An expired login first, then the new one.
+	write("Mpop=1:2:someone@mail.ru:; sdcs=EXPIRED", time.Now().Add(time.Minute))
+	waitFor(t, "the expired login to be tried", func() bool { return cs.csrfCalls.Load() > 0 })
+	if cs.okEdits.Load() != 0 {
+		t.Fatal("opened the document with an expired login")
+	}
+	write("Mpop="+testMpop+"; sdcs=S1", time.Now().Add(2*time.Minute))
+	waitFor(t, "the new login to open the document", func() bool { return cs.okEdits.Load() > 0 })
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

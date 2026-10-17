@@ -20,6 +20,7 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport/oneme"
 	"github.com/p1neappleXpress/OpenFlux/transport/script"
 	"github.com/p1neappleXpress/OpenFlux/transport/yandex"
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // Options is what differs between the callers; the type, url and params are
@@ -85,7 +86,10 @@ func New(typ, url string, params map[string]interface{}, o Options) (transport.T
 	case "mailru":
 		t := mailru.NewMailruDocsTransport(url, base)
 		if o.MailruCookiesFile != "" {
-			if err := t.LoadCookieFile(o.MailruCookiesFile); err != nil {
+			// A file still to come is read once it is there.
+			if err := t.LoadCookieFile(o.MailruCookiesFile); errors.Is(err, os.ErrNotExist) {
+				utils.Infof("[M-DOCS] %v: documents open without a login until it is there", err)
+			} else if err != nil {
 				return nil, err
 			}
 		}

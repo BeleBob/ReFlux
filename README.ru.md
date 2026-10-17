@@ -605,7 +605,7 @@ URL = YOUR_YANDEX_DOC_URL
 | `--direct-listen` | | | Адрес прослушивания для `direct` (выходная нода) |
 | `--yandex-url`, `--vyandex-url`, `--boards-url`, `--mailru-url`, `--cupsonline-url` | | | Ссылка на документ по типу транспорта в сессии |
 | `--yandex-cookies-file` | | | Netscape `cookies.txt` с логином Яндекса, для `vyandex` |
-| `--mailru-cookies-file` | | | Cookies аккаунта mail.ru, для `mailru` (в `.conf` — `MailruCookiesFile`): `cookies.txt`, заголовок `Cookie`, JSON или строки «имя<TAB>значение» из инструментов разработчика браузера. Нужны `Mpop` и `sdcs` |
+| `--mailru-cookies-file` | | | Cookies аккаунта mail.ru, для `mailru` (в `.conf` — `MailruCookiesFile`): `cookies.txt`, заголовок `Cookie`, JSON или строки «имя<TAB>значение» из инструментов разработчика браузера. Нужны `Mpop` и `sdcs`. Файл перечитывается, когда mail.ru отказывает во входе, а файл изменился; файла, которого ещё нет, ядро ждёт |
 | `--oneme-token`, `--oneme-uid` | | | Данные MAX в сессии |
 | `--config` | | | Файл `.conf`; флаги важнее него |
 | `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |

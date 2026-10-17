@@ -213,15 +213,50 @@ func (t *MailruDocsTransport) askLogin(err error) {
 // a Cookie header ("a=1; b=2", "Cookie:" optional), a JSON object of
 // names to values, or the "name<TAB>value" lines a browser's developer
 // tools copy. Cookie values never appear in its errors.
+//
+// The transport keeps the file: when the login is refused (it expired,
+// or the file was missing or wrong), it reads the file again if it has
+// changed since, so a new login reaches a running transport without a
+// restart. An error that wraps os.ErrNotExist leaves the transport
+// anonymous until the file appears.
 func (t *MailruDocsTransport) LoadCookieFile(path string) error {
-	values, err := readCookieFile(path)
-	if err != nil {
-		return err
+	t.jarMu.Lock()
+	t.cookieFile = path
+	t.jarMu.Unlock()
+	_, err := t.readCookieFile()
+	return err
+}
+
+// readCookieFile signs in from the cookies file when it changed since the
+// last read: changed is false when it did not.
+func (t *MailruDocsTransport) readCookieFile() (changed bool, err error) {
+	t.jarMu.RLock()
+	path, stamp := t.cookieFile, t.cookieStamp
+	t.jarMu.RUnlock()
+	if path == "" {
+		return false, nil
 	}
-	for _, name := range []string{loginCookie, sessionCookie} {
-		if values[name] == "" {
-			return fmt.Errorf("mail.ru cookie file %s has no %s cookie: export the cookies of cloud.mail.ru while signed in", path, name)
-		}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, fmt.Errorf("mail.ru cookie file: %w", err)
+	}
+	now := fmt.Sprintf("%d %d", fi.ModTime().UnixNano(), fi.Size())
+	if now == stamp {
+		return false, nil
+	}
+	t.jarMu.Lock()
+	t.cookieStamp = now // a bad file is not read again until it changes
+	t.jarMu.Unlock()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, fmt.Errorf("mail.ru cookie file: %w", err)
+	}
+	values, err := ParseCookies(string(raw))
+	if err == nil {
+		err = LoginCookies(values)
+	}
+	if err != nil {
+		return false, fmt.Errorf("mail.ru cookie file %s: %w", path, err)
 	}
 	t.jarMu.Lock()
 	t.fileCookies = values
@@ -229,24 +264,23 @@ func (t *MailruDocsTransport) LoadCookieFile(path string) error {
 	t.csrf = ""
 	t.jarMu.Unlock()
 	utils.Infof("[M-DOCS] signed in with the mail.ru account from %s", path)
+	return true, nil
+}
+
+// LoginCookies says whether values hold a mail.ru login: the cookies the
+// cloud's API cannot do without.
+func LoginCookies(values map[string]string) error {
+	for _, name := range []string{loginCookie, sessionCookie} {
+		if values[name] == "" {
+			return fmt.Errorf("no %s cookie: export the cookies of cloud.mail.ru while signed in", name)
+		}
+	}
 	return nil
 }
 
-func readCookieFile(path string) (map[string]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("open mail.ru cookie file: %w", err)
-	}
-	values, err := parseCookies(string(raw))
-	if err != nil {
-		return nil, fmt.Errorf("mail.ru cookie file %s: %w", path, err)
-	}
-	return values, nil
-}
-
-// parseCookies reads the cookies a browser sends to cloud.mail.ru from
+// ParseCookies reads the cookies a browser sends to cloud.mail.ru from
 // any of LoadCookieFile's formats.
-func parseCookies(text string) (map[string]string, error) {
+func ParseCookies(text string) (map[string]string, error) {
 	text = strings.TrimSpace(strings.TrimPrefix(text, "\ufeff"))
 	if text == "" {
 		return nil, errors.New("empty")

@@ -326,9 +326,11 @@ type MailruDocsTransport struct {
 	jarMu     sync.RWMutex
 	// csrf is the signed-in account's CSRF token for the editor API, ""
 	// until taken (login.go); fileCookies are the account's cookies from
-	// LoadCookieFile. Both under jarMu.
-	csrf        string
-	fileCookies map[string]string
+	// cookieFile (LoadCookieFile) as it was when cookieStamp was taken. All
+	// under jarMu.
+	csrf                    string
+	fileCookies             map[string]string
+	cookieFile, cookieStamp string
 
 	// errNotifier asks for a login (login.go), at most once a minute
 	// (loginAsked). Under errMu.
@@ -533,7 +535,15 @@ func (t *MailruDocsTransport) connect(attempt int, replace *DocSession) {
 				return
 			}
 			if errors.Is(err, ErrLoginRequired) {
-				t.askLogin(err)
+				// A login that came in a new cookies file is tried at
+				// once; otherwise one is asked for.
+				changed, ferr := t.readCookieFile()
+				if ferr != nil {
+					utils.Debugf("[M-DOCS] %v", ferr)
+				}
+				if !changed {
+					t.askLogin(err)
+				}
 			} else if utils.Throttled("m-docs.fetch", time.Minute) {
 				utils.Infof("[M-DOCS] cannot open the document: %v; retrying", err)
 			}
