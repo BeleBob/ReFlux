@@ -189,6 +189,12 @@ func (r *Router) Decide(host string, addr netip.Addr) Action {
 	return Proxy
 }
 
+// WhitelistedName reports whether host is on the whitelist by name (its
+// address decides the rest), for a caller that has the name only.
+func (r *Router) WhitelistedName(host string) bool {
+	return r.whitelistMask != 0 && r.data.siteMask(host)&r.whitelistMask != 0
+}
+
 // MarkFailed records that host did not answer direct: for failedFor its
 // connections go through the tunnel.
 func (r *Router) MarkFailed(host string) {
