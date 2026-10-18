@@ -72,12 +72,24 @@ func carrierNames(docs []Doc) []string {
 	return out
 }
 
-// docPriority is a document's priority: the same for all, so the node and
-// the app share the client's flows among the documents that reach the peer
-// and a dead one simply drops out. Since 2026-10-14 mail.ru lets a
-// connection carry only about 9 KB/s; with distinct priorities (100, 90,
-// ...) everything went over the main document and the others idled.
-func docPriority(int) int { return 100 }
+// docPriority is the priority of document i of docs: the same for all
+// documents, so the node and the app share the client's flows among the
+// documents that reach the peer and a dead one simply drops out. Since
+// 2026-10-14 mail.ru lets a connection carry only about 9 KB/s; with
+// distinct priorities (100, 90, ...) everything went over the main document
+// and the others idled. cups.online rooms carry much more: with rooms, they
+// take the flows and the documents stand by (cups.go).
+func docPriority(docs []Doc, i int) int {
+	if isCups(docs[i]) {
+		return cupsPriority
+	}
+	for _, d := range docs {
+		if isCups(d) {
+			return docsPriority
+		}
+	}
+	return 100
+}
 
 // docsWanted is how many documents the document check gives an active
 // client: the second keeps the channel when one dies, the third is for
@@ -197,6 +209,11 @@ func (s Store) TakeDoc(name string, i int) (Client, error) {
 	docs := c.Docs()
 	if c, err = s.RemoveDoc(name, i); err != nil {
 		return c, err
+	}
+	if isCups(docs[i]) {
+		// Rooms the owner took away do not come back on their own.
+		c.NoCups = true
+		return c, s.Save(c)
 	}
 	return c, s.quarantine([]Doc{docs[i]}, name, time.Now())
 }

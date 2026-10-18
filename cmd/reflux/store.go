@@ -48,6 +48,9 @@ type Client struct {
 	Context string `json:"context,omitempty"`
 	// Note says who or what the client is, for the owner.
 	Note string `json:"note,omitempty"`
+	// NoCups: the owner took the client's cups.online rooms away, and it
+	// gets none until given them again (cups.go).
+	NoCups bool `json:"no_cups,omitempty"`
 }
 
 // TGAccount is a Telegram account a client is linked to.

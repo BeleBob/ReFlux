@@ -105,6 +105,15 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   docs`, the bot and the panel, and the doctor warns when an online client is
   not heard over some of them. The core places each new flow on the least
   loaded carrier of equal priority (`transport/flowplace.go`).
+  cups.online rooms (`cups.go`): every active client also gets a Doc of
+  type `cupsonline` whose URL is a packed list of 4 rooms the egress makes
+  (`reflux-egress create-rooms`, `cupsonline.CreateRooms`); rooms take
+  priority 100 and the mail.ru documents next to them 50 (`docPriority`),
+  so mail.ru stands by and brings the app new rooms (ConfigOffer). The
+  document check gives one client without rooms per round, replaces a list
+  with a gone room by new rooms (never the pool or the dead list), waits
+  `cupsRetry` after cups.online refuses (doctor `cups.failing`); rooms the
+  owner removed stay away (`Client.NoCups`); `cups.json` turns them off.
   Dead documents (`doccheck.go`, `docstate.go`, bot `botpool.go`): every
   `docCheckEvery` the bot has the egress check clients' and free pool
   documents (`reflux-egress check-docs`, links on stdin, mail.ru only via
@@ -151,7 +160,7 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `awg-ru` (or, with `egress/ru-direct`, out of `eth0` with the kill switch
   opening only nft set `ru4`; with `egress/ru-fallback-direct`, out of `eth0` only
   while `awg-ru` fails `failLimit` rounds, back after `recoverRounds`),
-  with `egress/carrier-direct` the carriers' servers (mail.ru hosts, resolved every
+  with `egress/carrier-direct` the carriers' servers (mail.ru and cups.online hosts, resolved every
   minute into nft set `carrier4` and /32 routes) out of `eth0` while other RU
   traffic stays in the tunnel,
   the owner's world server choice in `egress/world-select` (`reflux gateway`,

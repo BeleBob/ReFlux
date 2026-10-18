@@ -4,13 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
+// fakeRooms answers the egress's create-rooms in fakeEgressCheck: nil
+// makes none, as in the tests that are not about rooms.
+var fakeRooms func(n int) (string, error)
+
 // fakeEgressCheck answers check-docs: the links in dead are dead, the rest
-// open. It records whether a link ever went into the arguments.
+// open; and create-rooms (fakeRooms). It records whether a link ever went
+// into the arguments.
 func fakeEgressCheck(t *testing.T, dead ...string) *[]string {
 	var calls []string
 	old := runDockerIn
@@ -19,6 +25,18 @@ func fakeEgressCheck(t *testing.T, dead ...string) *[]string {
 		calls = append(calls, call)
 		if strings.Contains(call, "http") {
 			t.Errorf("a document link in the docker arguments: %s", call)
+		}
+		if n, ok := strings.CutPrefix(call, "exec reflux-egress reflux-egress create-rooms "); ok {
+			r := map[string]any{"rooms": 0, "error": "no rooms in this test"}
+			if fakeRooms != nil {
+				count, _ := strconv.Atoi(n)
+				if list, err := fakeRooms(count); err != nil {
+					r["error"] = err.Error()
+				} else {
+					r = map[string]any{"list": list, "rooms": roomCount(list)}
+				}
+			}
+			return json.NewEncoder(stdout).Encode(r)
 		}
 		if call != "exec -i reflux-egress reflux-egress check-docs" {
 			return fmt.Errorf("unexpected docker %s", call)

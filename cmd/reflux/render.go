@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/p1neappleXpress/OpenFlux/share"
@@ -58,7 +59,7 @@ ConfigOfferFile = /config/offer
 `, c.context(), mailruNodeFile, ipcSocket)
 	docs := c.Docs()
 	for i, name := range carrierNames(docs) {
-		fmt.Fprintf(&b, "\n[Transport \"%s\"]\nType = %s\nPriority = %d\nURL = %s\n", name, docs[i].Transport, docPriority(i), docs[i].URL)
+		fmt.Fprintf(&b, "\n[Transport \"%s\"]\nType = %s\nPriority = %d\nURL = %s\n", name, docs[i].Transport, docPriority(docs, i), docs[i].URL)
 	}
 	return b.String()
 }
@@ -90,7 +91,7 @@ func shareConfig(c Client, key string) share.Config {
 	cfg.Negotiate, cfg.Context = true, c.context()
 	docs := c.Docs()
 	for i, name := range carrierNames(docs) {
-		cfg.Transports = append(cfg.Transports, share.Transport{Type: docs[i].Transport, Name: name, URL: docs[i].URL, Priority: docPriority(i)})
+		cfg.Transports = append(cfg.Transports, share.Transport{Type: docs[i].Transport, Name: name, URL: docs[i].URL, Priority: docPriority(docs, i)})
 	}
 	return cfg
 }
@@ -161,6 +162,17 @@ var noProxy = map[string]string{
 	"http_proxy": "", "https_proxy": "", "all_proxy": "", "no_proxy": "",
 }
 
+// nodeEnv is a node's environment: noProxy, and the rooms a node makes
+// when every one of its cups.online rooms is gone at start (cupsRooms, not
+// the core's 8; the document check gives the channel new ones anyway).
+var nodeEnv = func() map[string]string {
+	env := map[string]string{"CUPS_ROOMS": strconv.Itoa(cupsRooms)}
+	for k, v := range noProxy {
+		env[k] = v
+	}
+	return env
+}()
+
 var defaultLogging = composeLogging{
 	Driver:  "json-file",
 	Options: map[string]string{"max-size": "10m", "max-file": "3"},
@@ -219,7 +231,7 @@ func composeYAML(root string, clients []Client, o Options) ([]byte, error) {
 			Restart:       "unless-stopped",
 			Entrypoint:    []string{"openflux"},
 			Command:       []string{"--config", "/config/node.conf"},
-			Environment:   noProxy,
+			Environment:   nodeEnv,
 			User:          fmt.Sprintf("%d:%d", o.UID, o.GID),
 			ReadOnly:      true,
 			Tmpfs:         []string{"/tmp"},

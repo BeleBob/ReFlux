@@ -85,6 +85,9 @@ type docChange struct {
 	// Backup: not a dead document but a backup given to a client that had
 	// only one (ensureBackups); Doc is then the new document.
 	Backup bool
+	// Cups: the client's cups.online rooms (cups.go). Doc is the list
+	// whose rooms are gone, empty when the client got rooms it had not.
+	Cups   bool
 	Doc    Doc
 	Reason string // the check's answer
 	Client string // "" for a pool document
@@ -172,6 +175,16 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 		if st.Suspect[t.doc.URL] < docDeadAfter {
 			continue
 		}
+		if isCups(t.doc) {
+			// Gone rooms never come back: no dead list, new rooms.
+			delete(st.Suspect, t.doc.URL)
+			ch := docChange{Cups: true, Doc: t.doc, Reason: v.Error, Client: t.client}
+			var moved bool
+			ch.New, moved, ch.Err = s.replaceCups(t.client, t.doc, &st, now)
+			changed = changed || moved
+			changes = append(changes, ch)
+			continue
+		}
 		st.markDead(t.doc, t.client, v.Error, now)
 		ch := docChange{Doc: t.doc, Reason: v.Error, Client: t.client}
 		if t.client != "" {
@@ -185,17 +198,29 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 		}
 		changes = append(changes, ch)
 	}
-	if only != nil {
-		return changes, changed, s.saveDocsState(st)
+	if only == nil {
+		st.Checked = now
+		if err := s.saveDocsState(st); err != nil {
+			return changes, changed, err
+		}
+		added, err := s.ensureBackups(st, now)
+		changes = append(changes, added...)
+		for _, ch := range added {
+			changed = changed || ch.Err == nil
+		}
+		if err != nil {
+			return changes, changed, err
+		}
 	}
-	st.Checked = now
-	if err := s.saveDocsState(st); err != nil {
-		return changes, changed, err
-	}
-	added, err := s.ensureBackups(st, now)
+	// Rooms between the rounds too: a list just replaced without new rooms
+	// gets them as soon as cups.online makes them.
+	added, err := s.ensureCups(&st, now)
 	changes = append(changes, added...)
 	for _, ch := range added {
 		changed = changed || ch.Err == nil
+	}
+	if serr := s.saveDocsState(st); err == nil {
+		err = serr
 	}
 	return changes, changed, err
 }
@@ -215,7 +240,10 @@ func (s Store) ensureBackups(st docsState, now time.Time) ([]docChange, error) {
 	var out []docChange
 	for _, c := range clients {
 		n := len(c.Docs())
-		if !c.Active(now) || n >= docsWanted {
+		if c.cupsIndex() >= 0 {
+			n-- // rooms are not a document
+		}
+		if !c.Active(now) || n >= docsWanted || len(c.Docs()) >= maxDocs {
 			continue
 		}
 		if n >= 2 {
