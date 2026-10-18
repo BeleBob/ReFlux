@@ -122,33 +122,53 @@ func startPacket(build func() (transport.Transport, error)) string {
 	if err != nil {
 		return fail(err)
 	}
-	maxQueue := transport.DefaultConfig().MaxQueueSize
+	// With routing on, the router takes the direct connections aside and
+	// learns sites from DNS answers (routing.go).
+	var pr *packetRouter
+	if r := newRouter(); r != nil {
+		pr = newPacketRouter(r, routingUpstream(), queuePacket)
+	}
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)
-		client.mu.Lock()
-		if !client.running {
-			client.mu.Unlock()
-			return
+		if pr != nil {
+			packet = pr.inbound(packet)
 		}
-		if len(client.packets) >= maxQueue {
-			client.packets = client.packets[1:]
-		}
-		client.packets = append(client.packets, packet)
-		arrived := client.arrived
-		client.mu.Unlock()
-		select {
-		case arrived <- struct{}{}:
-		default:
-		}
+		queuePacket(packet)
 	})
 	if err := trans.Start(); err != nil {
+		if pr != nil {
+			pr.close()
+		}
 		return fail(err)
+	}
+	if pr != nil {
+		active.Store(pr)
 	}
 
 	client.mu.Lock()
 	client.transport = trans
 	client.mu.Unlock()
 	return ""
+}
+
+// queuePacket hands a packet to the device (Read).
+func queuePacket(packet []byte) {
+	maxQueue := transport.DefaultConfig().MaxQueueSize
+	client.mu.Lock()
+	if !client.running {
+		client.mu.Unlock()
+		return
+	}
+	if len(client.packets) >= maxQueue {
+		client.packets = client.packets[1:]
+	}
+	client.packets = append(client.packets, packet)
+	arrived := client.arrived
+	client.mu.Unlock()
+	select {
+	case arrived <- struct{}{}:
+	default:
+	}
 }
 
 // validateClassic checks a classic profile before it starts. exit is the
@@ -244,6 +264,9 @@ func Stop() {
 	CancelCaptcha()
 	setAuthProxy(nil)
 	clearRoute()
+	if pr := active.Swap(nil); pr != nil {
+		pr.close()
+	}
 	appendLog("[ANDROID] Остановка транспорта")
 	if trans != nil {
 		_ = trans.Stop()
@@ -264,6 +287,11 @@ func Send(packet []byte) string {
 	client.mu.Unlock()
 	if !running || trans == nil {
 		return "Транспорт не запущен"
+	}
+	if pr := active.Load(); pr != nil {
+		if packet = pr.outbound(packet); packet == nil {
+			return "" // the router took it
+		}
 	}
 	if err := trans.Send(packet); err != nil {
 		return err.Error()

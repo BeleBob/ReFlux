@@ -85,7 +85,9 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 
 	tun := tunnel.NewTCPTunnel(trans, false)
 	var dialer socks5.Dialer = tun
-	if strings.TrimSpace(bypassDomains) != "" {
+	if r := newRouter(); r != nil {
+		dialer = &routerDialer{tunnel: tun, router: r}
+	} else if strings.TrimSpace(bypassDomains) != "" {
 		dialer = newSplitDialer(tun, strings.Split(bypassDomains, "\n"))
 	}
 	server := socks5.NewSOCKS5Server(listenAddr, dialer)
