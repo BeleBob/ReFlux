@@ -222,11 +222,11 @@ func TestOwnerTakesRoomsAway(t *testing.T) {
 	}
 }
 
-// Backups are counted without the rooms: a client with rooms still gets
-// its documents up to docsWanted.
+// Backups are counted without the rooms: a client with rooms gets its
+// documents up to docsWithCups, not further.
 func TestBackupsBesideRooms(t *testing.T) {
 	s := Store{Root: t.TempDir()}
-	writeFile(t, s.poolPath(), "mailru "+docB+"\n")
+	writeFile(t, s.poolPath(), "mailru "+docB+"\nmailru "+docC+"\nmailru https://cloud.mail.ru/public/DDDD/dddd\nmailru https://cloud.mail.ru/public/EEEE/eeee\nmailru https://cloud.mail.ru/public/FFFF/ffff\n")
 	if _, err := s.Add("phone", "mailru", testURL); err != nil {
 		t.Fatal(err)
 	}
@@ -242,5 +242,9 @@ func TestBackupsBesideRooms(t *testing.T) {
 	c, _ := s.Get("phone")
 	if names := carrierNames(c.Docs()); strings.Join(names, ",") != "mailru,cupsonline,mailru-2" {
 		t.Errorf("carriers %v", names)
+	}
+	// A pool with plenty to spare: still no third document beside rooms.
+	if changes, _, _ := s.checkDocs(time.Now()); len(changes) != 0 {
+		t.Errorf("a third document beside rooms: %+v", changes)
 	}
 }

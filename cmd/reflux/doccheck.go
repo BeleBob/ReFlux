@@ -225,7 +225,7 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 	return changes, changed, err
 }
 
-// ensureBackups gives every active client with fewer than docsWanted
+// ensureBackups gives every active client with fewer than its wantedDocs
 // documents a free pool document, one per check. With a second one a
 // client keeps its channel when a document dies, and the replacement
 // reaches the app over the other (the node's ConfigOffer); a third shares
@@ -243,7 +243,7 @@ func (s Store) ensureBackups(st docsState, now time.Time) ([]docChange, error) {
 		if c.cupsIndex() >= 0 {
 			n-- // rooms are not a document
 		}
-		if !c.Active(now) || n >= docsWanted || len(c.Docs()) >= maxDocs {
+		if !c.Active(now) || n >= c.wantedDocs() || len(c.Docs()) >= maxDocs {
 			continue
 		}
 		if n >= 2 {
