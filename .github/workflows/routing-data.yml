@@ -1,0 +1,50 @@
+name: Routing data
+
+# The app's routing lists (cmd/routing-data), rebuilt daily from their
+# sources and published as routing.dat.gz on the "routing-data" release.
+# That release is a prerelease and never the latest one: install.sh takes
+# the reflux binaries from releases/latest.
+on:
+  schedule:
+    - cron: "40 9 * * *" # after runetfreedom's 08:00 UTC build
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Download the sources
+        run: |
+          set -eu
+          mkdir -p src
+          base=https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download
+          for f in geosite.dat geoip.dat; do
+            curl -fsSL -o "src/$f" "$base/$f"
+            curl -fsSL -o "src/$f.sha256sum" "$base/$f.sha256sum"
+            (cd src && sha256sum -c "$f.sha256sum")
+          done
+          wl=https://github.com/ancored/ru-mobile-whitelist/releases/latest/download
+          curl -fsSL -o src/sni.txt "$wl/ru-mobile-whitelist-sni.txt"
+          curl -fsSL -o src/ip.txt "$wl/ru-mobile-whitelist-ip.txt"
+      - name: Build
+        run: |
+          go run ./cmd/routing-data -geosite src/geosite.dat -geoip src/geoip.dat \
+            -whitelist-sni src/sni.txt -whitelist-ip src/ip.txt -o routing.dat.gz
+          sha256sum routing.dat.gz > routing.dat.gz.sha256
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if ! gh release view routing-data >/dev/null 2>&1; then
+            gh release create routing-data --prerelease --latest=false --title "Routing data" \
+              --notes "The ReFlux app's routing lists, rebuilt daily (cmd/routing-data). Not a release of ReFlux."
+          fi
+          gh release upload routing-data routing.dat.gz routing.dat.gz.sha256 --clobber

@@ -168,6 +168,19 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   return; after a restart it starts with the owner's choice, else the last world
   server that held `rememberAfter` (`world-last` in the `egress-state` volume). Never exits on errors: nodes share its netns; after an egress
   restart `reflux heal` (cron) recreates the stranded nodes.
+- `routing/` + `mobile/routing*.go` — the app's routing (ReFlux): `routing`
+  decides direct / tunnel / block per connection over category lists in one
+  data file (`cmd/routing-data` builds it from runetfreedom geosite/geoip and
+  the ancored mobile whitelists; `routing-data.yml` publishes it daily on the
+  prerelease `routing-data`, never the latest release). Modes `tunnel`,
+  `russia`, `whitelist`, plus ad blocking and own direct sites. In the
+  tunnel mode `Send` hands packets to `packetRouter`: tunnel flows pass
+  untouched, direct/blocked ones go into a local gVisor stack that dials
+  from the app (outside the VPN); sites are learned from DNS answers, the
+  VPN's DNS is `RoutingDNSAddress` (10.10.10.53, NATed to the upstream
+  through the tunnel, ad names answered 0.0.0.0). Whitelisted sites that do
+  not connect move to the tunnel on the device's next SYN; ones that do not
+  answer are marked failed for 6 h. The proxy mode uses `routerDialer`.
 - `deploy/reflux/install.sh` (release asset: downloads `reflux`, checks
   SHA256SUMS, runs `reflux setup`; `TestInstallScript` runs it),
   `deploy/reflux/egress/Dockerfile` (build from repo root),
