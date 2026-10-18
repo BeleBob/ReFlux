@@ -134,11 +134,13 @@ func startPacket(build func() (transport.Transport, error)) string {
 	var pr *packetRouter
 	if r := newRouter(); r != nil {
 		pr = newPacketRouter(r, routingUpstream(), queuePacket)
+		pr.primaryUp = IsConnected
 	}
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)
-		if pr != nil {
-			packet = pr.inbound(packet)
+		// The router of this start, or one a second exit set up later.
+		if r := active.Load(); r != nil {
+			packet = r.inbound(packet)
 		}
 		queuePacket(packet)
 	})
@@ -271,6 +273,7 @@ func Stop() {
 	CancelCaptcha()
 	setAuthProxy(nil)
 	clearRoute()
+	StopExtras()
 	if pr := active.Swap(nil); pr != nil {
 		pr.close()
 	}
