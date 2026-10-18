@@ -94,11 +94,22 @@ func docPriority(docs []Doc, i int) int {
 // docsWanted is how many documents the document check gives an active
 // client: the second keeps the channel when one dies, the third is for
 // speed and comes only while the pool keeps poolReserve free documents
-// for dead ones' replacements and new clients.
+// for dead ones' replacements and new clients. A client with cups.online
+// rooms (cups.go) runs over the rooms; its documents only stand by and
+// bring the app new rooms, so docsWithCups of them do.
 const (
-	docsWanted  = 3
-	poolReserve = 2
+	docsWanted   = 3
+	docsWithCups = 2
+	poolReserve  = 2
 )
+
+// wantedDocs is how many mail.ru (or Yandex) documents c should have.
+func (c Client) wantedDocs() int {
+	if c.cupsIndex() >= 0 {
+		return docsWithCups
+	}
+	return docsWanted
+}
 
 // docUsers maps every document URL to the client using it, and to clients
 // revoked less than docQuarantine ago: an old app may still reach for its
