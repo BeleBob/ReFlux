@@ -29,12 +29,12 @@ type packetRouter struct {
 	stop   chan struct{}
 	now    func() time.Time
 
-	// A second exit (second_exit.go): tunnel flows are shared between the
-	// main exit (0, whatever Send's caller sends to) and this one (1), a
-	// site always through the same one.
-	second    transport.Transport
+	// Extra exits (extra_exits.go): tunnel flows are shared between the
+	// main exit (0, whatever Send's caller sends to) and these (1 to
+	// maxExtraExits, extras[i-1]), a site always through the same one.
+	extras    [maxExtraExits]transport.Transport
 	primaryUp func() bool
-	exitFlows [2]int
+	exitFlows [1 + maxExtraExits]int
 	sticky    map[string]stickyExit
 }
 
@@ -225,11 +225,14 @@ func (pr *packetRouter) outbound(b []byte) []byte {
 	}
 	f.last = now
 	a, exit := f.action, f.exit
-	second := pr.second
+	var extra transport.Transport
+	if exit > 0 {
+		extra = pr.extras[exit-1]
+	}
 	pr.mu.Unlock()
 	if a == routing.Proxy {
-		if exit == 1 && second != nil {
-			second.Send(b)
+		if extra != nil {
+			extra.Send(b)
 			return nil
 		}
 		return b
@@ -302,26 +305,43 @@ func (pr *packetRouter) moveToTunnel(src, dst netip.Addr, sport, dport uint16, p
 }
 
 // pickExit chooses the tunnel exit of a new flow to host (or, unnamed, to
-// addr): the site's exit while it keeps using it, else the exit with fewer
-// flows. A dead exit takes nothing new. The caller holds pr.mu.
+// addr): the site's exit while it keeps using it and is up, else the
+// connected exit with the fewest flows (the main one on a tie). The caller
+// holds pr.mu.
 func (pr *packetRouter) pickExit(host string, addr netip.Addr, now time.Time) int {
-	if pr.second == nil || !pr.second.IsConnected() {
-		return 0
+	up := func(e int) bool {
+		if e == 0 {
+			return pr.primaryUp()
+		}
+		t := pr.extras[e-1]
+		return t != nil && t.IsConnected()
 	}
-	if !pr.primaryUp() {
-		return 1
+	anyExtra := false
+	for e := 1; e <= maxExtraExits; e++ {
+		if up(e) {
+			anyExtra = true
+			break
+		}
+	}
+	if !anyExtra {
+		return 0
 	}
 	key := host
 	if key == "" {
 		key = addr.String()
 	}
-	if c, ok := pr.sticky[key]; ok && now.Sub(c.at) < stickyFor {
+	if c, ok := pr.sticky[key]; ok && now.Sub(c.at) < stickyFor && up(c.exit) {
 		pr.sticky[key] = stickyExit{c.exit, now}
 		return c.exit
 	}
-	e := 0
-	if pr.exitFlows[1] < pr.exitFlows[0] {
-		e = 1
+	best := -1
+	for e := 0; e <= maxExtraExits; e++ {
+		if up(e) && (best < 0 || pr.exitFlows[e] < pr.exitFlows[best]) {
+			best = e
+		}
+	}
+	if best < 0 {
+		best = 0 // nothing is up: the main exit, as without extras
 	}
 	if len(pr.sticky) >= maxSticky {
 		for k, c := range pr.sticky {
@@ -333,18 +353,27 @@ func (pr *packetRouter) pickExit(host string, addr netip.Addr, now time.Time) in
 			pr.sticky = map[string]stickyExit{}
 		}
 	}
-	pr.sticky[key] = stickyExit{e, now}
-	return e
+	pr.sticky[key] = stickyExit{best, now}
+	return best
 }
 
 // viaAnyExit sends a packet that belongs to no flow (DNS) through the main
-// exit, or through the second one while the main one is down.
+// exit, or through a connected extra one while the main one is down.
 func (pr *packetRouter) viaAnyExit(b []byte) []byte {
+	if pr.primaryUp() {
+		return b
+	}
 	pr.mu.Lock()
-	second := pr.second
+	var via transport.Transport
+	for _, t := range pr.extras {
+		if t != nil && t.IsConnected() {
+			via = t
+			break
+		}
+	}
 	pr.mu.Unlock()
-	if second != nil && second.IsConnected() && !pr.primaryUp() {
-		second.Send(b)
+	if via != nil {
+		via.Send(b)
 		return nil
 	}
 	return b
@@ -358,12 +387,24 @@ func (pr *packetRouter) forget(k flowKey) {
 	delete(pr.flows, k)
 }
 
-// setSecond attaches (or, nil, detaches) the second exit.
-func (pr *packetRouter) setSecond(t transport.Transport) {
+// setExtra puts an extra exit in its slot (1 to maxExtraExits), or nil to
+// take it out; its sites then choose again.
+func (pr *packetRouter) setExtra(slot int, t transport.Transport) {
 	pr.mu.Lock()
-	pr.second = t
+	pr.extras[slot-1] = t
 	if t == nil {
-		pr.sticky = map[string]stickyExit{}
+		for k, c := range pr.sticky {
+			if c.exit == slot {
+				delete(pr.sticky, k)
+			}
+		}
+		// Its flows are gone with it; a later exit in the slot must not
+		// get their packets.
+		for k, f := range pr.flows {
+			if f.action == routing.Proxy && f.exit == slot {
+				pr.forget(k)
+			}
+		}
 	}
 	pr.mu.Unlock()
 }

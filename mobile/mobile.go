@@ -266,7 +266,7 @@ func Stop() {
 	CancelCaptcha()
 	setAuthProxy(nil)
 	clearRoute()
-	StopSecondary()
+	StopExtras()
 	if pr := active.Swap(nil); pr != nil {
 		pr.close()
 	}

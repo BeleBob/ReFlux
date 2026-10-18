@@ -53,68 +53,75 @@ func syn(dst string, sport uint16) []byte {
 	return b
 }
 
-func TestSecondExitSharesSitesAndKeepsThem(t *testing.T) {
+func TestExtraExitsShareSitesAndKeepThem(t *testing.T) {
 	pr := newPacketRouter(routing.NewRouter(routing.Config{Mode: routing.ModeTunnel}, nil), upstream, func([]byte) {})
 	defer pr.close()
 	var primaryUp atomic.Bool
 	primaryUp.Store(true)
 	pr.primaryUp = primaryUp.Load
-	sec := &fakeExit{}
-	sec.up.Store(true)
-	pr.setSecond(sec)
-	// Sites the device looked up.
-	pr.learn(dnsAnswer(t, 1, "a.example.", [4]byte{93, 184, 0, 1}))
-	pr.learn(dnsAnswer(t, 2, "b.example.", [4]byte{93, 184, 0, 2}))
-	pr.learn(dnsAnswer(t, 3, "c.example.", [4]byte{93, 184, 0, 3}))
-
+	x1, x2 := &fakeExit{}, &fakeExit{}
+	x1.up.Store(true)
+	x2.up.Store(true)
+	pr.setExtra(1, x1)
+	pr.setExtra(2, x2)
+	for i := byte(1); i <= 6; i++ {
+		pr.learn(dnsAnswer(t, uint16(i), string([]byte{'a' + i - 1})+".example.", [4]byte{93, 184, 0, i}))
+	}
 	main := 0
-	send := func(dst string, sport uint16) {
-		if pr.outbound(syn(dst, sport)) != nil {
+	send := func(site byte, sport uint16) {
+		if pr.outbound(syn("93.184.0."+string('0'+rune(site)), sport)) != nil {
 			main++
 		}
 	}
-	send("93.184.0.1", 1000) // a: main (both exits empty)
-	send("93.184.0.2", 1001) // b: second (fewer flows)
-	send("93.184.0.3", 1002) // c: main again (1:1)
-	if main != 2 || sec.count() != 1 {
-		t.Fatalf("main %d, second %d; want 2 and 1", main, sec.count())
+	// Six sites over three exits: two each, in turn.
+	for i := byte(1); i <= 6; i++ {
+		send(i, uint16(1000+int(i)))
 	}
-	// More connections to b stay on the second exit, to a on the main.
-	for i := uint16(0); i < 5; i++ {
-		send("93.184.0.2", 2000+i)
-		send("93.184.0.1", 3000+i)
+	if main != 2 || x1.count() != 2 || x2.count() != 2 {
+		t.Fatalf("main %d, extra 1 %d, extra 2 %d; want 2 each", main, x1.count(), x2.count())
 	}
-	if main != 7 || sec.count() != 6 {
-		t.Fatalf("sites moved between exits: main %d, second %d", main, sec.count())
+	// Each site keeps its exit.
+	for i := byte(1); i <= 6; i++ {
+		send(i, uint16(2000+int(i)))
+	}
+	if main != 4 || x1.count() != 4 || x2.count() != 4 {
+		t.Fatalf("sites moved: main %d, extra 1 %d, extra 2 %d", main, x1.count(), x2.count())
 	}
 
-	// DNS goes through the main exit, or the second one while it is down.
+	// DNS: the main exit, or an extra one while it is down.
 	q := udpPacket(device, routingDNS, 40000, 53, dnsQuery(t, 9, "x.example.", dnsmessage.TypeA))
 	if pr.outbound(q) == nil {
 		t.Error("DNS did not go through the main exit")
 	}
 	primaryUp.Store(false)
-	before := sec.count()
+	n1, n2 := x1.count(), x2.count()
 	q = udpPacket(device, routingDNS, 40001, 53, dnsQuery(t, 10, "x.example.", dnsmessage.TypeA))
-	if pr.outbound(q) != nil || sec.count() != before+1 {
-		t.Error("DNS did not move to the second exit with the main one down")
+	if pr.outbound(q) != nil || x1.count()+x2.count() != n1+n2+1 {
+		t.Error("DNS did not move to an extra exit with the main one down")
 	}
-	// New sites too.
-	pr.learn(dnsAnswer(t, 4, "d.example.", [4]byte{93, 184, 0, 4}))
-	if pr.outbound(syn("93.184.0.4", 4000)) != nil {
-		t.Error("a new site went to the dead main exit")
+	// A main-exit site moves while its exit is down.
+	if pr.outbound(syn("93.184.0.1", 3000)) != nil {
+		t.Error("a site stayed on the dead main exit")
 	}
 	primaryUp.Store(true)
 
-	// The second exit down: new sites take the main one.
-	sec.up.Store(false)
-	pr.learn(dnsAnswer(t, 5, "e.example.", [4]byte{93, 184, 0, 5}))
-	if pr.outbound(syn("93.184.0.5", 5000)) == nil {
-		t.Error("a new site went to the dead second exit")
+	// An extra exit down: its sites go elsewhere, nothing new comes to it.
+	x2.up.Store(false)
+	before := x2.count()
+	for i := byte(1); i <= 6; i++ {
+		send(i, uint16(4000+int(i)))
 	}
-	// Detached: everything is the main exit's.
-	pr.setSecond(nil)
-	if pr.outbound(syn("93.184.0.2", 6000)) == nil {
-		t.Error("a flow went to a detached second exit")
+	if x2.count() != before {
+		t.Error("a dead extra exit got new flows")
+	}
+	// Taken out: its flows are forgotten, its slot sends nowhere.
+	pr.setExtra(1, nil)
+	pr.setExtra(2, nil)
+	n1 = x1.count()
+	for i := byte(1); i <= 6; i++ {
+		send(i, uint16(5000+int(i)))
+	}
+	if x1.count() != n1 {
+		t.Error("a removed extra exit got flows")
 	}
 }
