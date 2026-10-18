@@ -35,6 +35,10 @@ type sessionOptions struct {
 	// strict turns the classic fallback a single-carrier Session client
 	// gets by default off.
 	strict bool
+	// secondary builds a second exit's client next to the running tunnel
+	// (second_exit.go): it leaves the UI's route, the exit's configuration
+	// offers, the captchas and the auth proxy to the main one.
+	secondary bool
 }
 
 // parseSessionSpecs reads what the app sends: a JSON array of sessionSpec,
@@ -174,6 +178,11 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 		appendLog(fmt.Sprintf("[ANDROID] Session: транспорт %s (%s), приоритет %d", spec.Name, spec.Type, spec.Priority))
 	}
 	sess.SetControlHandler(m.DispatchControl)
+	if opt.secondary {
+		applyInitialCookies(m, specs)
+		appendLog("[ANDROID] Второй канал: шифрование AES-256-GCM, согласование с нодой")
+		return m, sess, nil
+	}
 	if !exit {
 		m.SetControlCallback(receiveConfigOffer)
 	}

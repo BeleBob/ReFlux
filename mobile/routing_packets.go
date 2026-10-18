@@ -10,6 +10,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/p1neappleXpress/OpenFlux/routing"
+	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // packetRouter sits between the TUN and the tunnel (see routing.go).
@@ -27,6 +28,19 @@ type packetRouter struct {
 	natted map[natKey]time.Time
 	stop   chan struct{}
 	now    func() time.Time
+
+	// A second exit (second_exit.go): tunnel flows are shared between the
+	// main exit (0, whatever Send's caller sends to) and this one (1), a
+	// site always through the same one.
+	second    transport.Transport
+	primaryUp func() bool
+	exitFlows [2]int
+	sticky    map[string]stickyExit
+}
+
+type stickyExit struct {
+	exit int
+	at   time.Time
 }
 
 type flowKey struct {
@@ -39,6 +53,7 @@ type flow struct {
 	action routing.Action
 	host   string
 	last   time.Time
+	exit   int // the tunnel exit of a Proxy flow
 }
 
 type natKey struct {
@@ -50,8 +65,12 @@ const (
 	protoTCP = 6
 	protoUDP = 17
 
-	maxFlows     = 1 << 15
-	maxNames     = 1 << 14
+	maxFlows  = 1 << 15
+	maxNames  = 1 << 14
+	maxSticky = 1 << 12
+	// stickyFor: a site keeps its exit while used this recently, so it
+	// does not see the address change in the middle of a session.
+	stickyFor    = 30 * time.Minute
 	flowIdle     = 5 * time.Minute
 	natIdle      = 2 * time.Minute
 	sweepEvery   = 30 * time.Second
@@ -62,14 +81,16 @@ const (
 
 func newPacketRouter(r *routing.Router, upstream netip.Addr, toTUN func([]byte)) *packetRouter {
 	pr := &packetRouter{
-		router:   r,
-		upstream: upstream,
-		toTUN:    toTUN,
-		flows:    map[flowKey]*flow{},
-		names:    map[netip.Addr]string{},
-		natted:   map[natKey]time.Time{},
-		stop:     make(chan struct{}),
-		now:      time.Now,
+		router:    r,
+		upstream:  upstream,
+		toTUN:     toTUN,
+		flows:     map[flowKey]*flow{},
+		names:     map[netip.Addr]string{},
+		natted:    map[natKey]time.Time{},
+		stop:      make(chan struct{}),
+		now:       time.Now,
+		sticky:    map[string]stickyExit{},
+		primaryUp: func() bool { return true },
 	}
 	pr.local = newLocalStack(pr)
 	go pr.sweep()
@@ -164,7 +185,7 @@ func (pr *packetRouter) outbound(b []byte) []byte {
 		pr.natted[natKey{p.proto, p.sport}] = pr.now()
 		pr.mu.Unlock()
 		setAddr(b, p, 16, pr.upstream)
-		return b
+		return pr.viaAnyExit(b)
 	}
 	if p.dport == dnsPort {
 		if p.proto == protoUDP {
@@ -173,7 +194,7 @@ func (pr *packetRouter) outbound(b []byte) []byte {
 				return nil
 			}
 		}
-		return b // other DNS servers: through the tunnel
+		return pr.viaAnyExit(b) // other DNS servers: through the tunnel
 	}
 	k := flowKey{p.src, p.dst, p.sport, p.dport, p.proto}
 	now := pr.now()
@@ -196,12 +217,21 @@ func (pr *packetRouter) outbound(b []byte) []byte {
 			pr.dropOldest()
 		}
 		f = &flow{action: a, host: host}
+		if a == routing.Proxy {
+			f.exit = pr.pickExit(host, p.dst, now)
+			pr.exitFlows[f.exit]++
+		}
 		pr.flows[k] = f
 	}
 	f.last = now
-	a := f.action
+	a, exit := f.action, f.exit
+	second := pr.second
 	pr.mu.Unlock()
 	if a == routing.Proxy {
+		if exit == 1 && second != nil {
+			second.Send(b)
+			return nil
+		}
 		return b
 	}
 	pr.local.inject(b, a)
@@ -262,7 +292,78 @@ func (pr *packetRouter) flowOf(src, dst netip.Addr, sport, dport uint16, proto u
 func (pr *packetRouter) moveToTunnel(src, dst netip.Addr, sport, dport uint16, proto uint8) {
 	pr.mu.Lock()
 	if f := pr.flows[flowKey{src, dst, sport, dport, proto}]; f != nil {
-		f.action = routing.Proxy
+		if f.action != routing.Proxy {
+			f.action = routing.Proxy
+			f.exit = pr.pickExit(f.host, dst, pr.now())
+			pr.exitFlows[f.exit]++
+		}
+	}
+	pr.mu.Unlock()
+}
+
+// pickExit chooses the tunnel exit of a new flow to host (or, unnamed, to
+// addr): the site's exit while it keeps using it, else the exit with fewer
+// flows. A dead exit takes nothing new. The caller holds pr.mu.
+func (pr *packetRouter) pickExit(host string, addr netip.Addr, now time.Time) int {
+	if pr.second == nil || !pr.second.IsConnected() {
+		return 0
+	}
+	if !pr.primaryUp() {
+		return 1
+	}
+	key := host
+	if key == "" {
+		key = addr.String()
+	}
+	if c, ok := pr.sticky[key]; ok && now.Sub(c.at) < stickyFor {
+		pr.sticky[key] = stickyExit{c.exit, now}
+		return c.exit
+	}
+	e := 0
+	if pr.exitFlows[1] < pr.exitFlows[0] {
+		e = 1
+	}
+	if len(pr.sticky) >= maxSticky {
+		for k, c := range pr.sticky {
+			if now.Sub(c.at) >= stickyFor {
+				delete(pr.sticky, k)
+			}
+		}
+		if len(pr.sticky) >= maxSticky {
+			pr.sticky = map[string]stickyExit{}
+		}
+	}
+	pr.sticky[key] = stickyExit{e, now}
+	return e
+}
+
+// viaAnyExit sends a packet that belongs to no flow (DNS) through the main
+// exit, or through the second one while the main one is down.
+func (pr *packetRouter) viaAnyExit(b []byte) []byte {
+	pr.mu.Lock()
+	second := pr.second
+	pr.mu.Unlock()
+	if second != nil && second.IsConnected() && !pr.primaryUp() {
+		second.Send(b)
+		return nil
+	}
+	return b
+}
+
+// forget drops a flow. The caller holds pr.mu.
+func (pr *packetRouter) forget(k flowKey) {
+	if f := pr.flows[k]; f != nil && f.action == routing.Proxy {
+		pr.exitFlows[f.exit]--
+	}
+	delete(pr.flows, k)
+}
+
+// setSecond attaches (or, nil, detaches) the second exit.
+func (pr *packetRouter) setSecond(t transport.Transport) {
+	pr.mu.Lock()
+	pr.second = t
+	if t == nil {
+		pr.sticky = map[string]stickyExit{}
 	}
 	pr.mu.Unlock()
 }
@@ -275,7 +376,7 @@ func (pr *packetRouter) dropOldest() {
 			oldest, at = k, f.last
 		}
 	}
-	delete(pr.flows, oldest)
+	pr.forget(oldest)
 }
 
 func (pr *packetRouter) sweep() {
@@ -291,7 +392,7 @@ func (pr *packetRouter) sweep() {
 		pr.mu.Lock()
 		for k, f := range pr.flows {
 			if now.Sub(f.last) > flowIdle {
-				delete(pr.flows, k)
+				pr.forget(k)
 			}
 		}
 		for k, at := range pr.natted {
