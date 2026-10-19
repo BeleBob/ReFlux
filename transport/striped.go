@@ -1569,6 +1569,15 @@ func (r *reorderBuffer) push(seq, low uint32, data []byte) {
 		r.late++
 		return
 	}
+	// The sender never sends anything before its low mark again: it was
+	// acked - perhaps by our previous run, when we restarted and the sender
+	// did not - or given up on. Waiting there would only cost the hole
+	// deadline.
+	if d := low - r.next; seqBefore(r.next, low) && d < reorderWindow && !seqBefore(seq, low) {
+		for seqBefore(r.next, low) {
+			r.skipToLocked(r.lowestLocked(low))
+		}
+	}
 	// Too far ahead for the window: give up on the oldest holes.
 	for seq-r.next >= reorderWindow {
 		r.skipToLocked(r.lowestLocked(seq))
