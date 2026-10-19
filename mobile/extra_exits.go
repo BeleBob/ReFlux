@@ -106,7 +106,10 @@ func startExtraWith(id string, build func() (transport.Transport, error)) string
 	trans.Receive(func(data []byte) {
 		packet := append([]byte(nil), data...)
 		if pr := active.Load(); pr != nil {
-			packet = pr.inbound(packet)
+			// Counts the exit as heard and keeps its probe answers.
+			if packet = pr.fromExtra(trans, packet); packet == nil {
+				return
+			}
 		}
 		queuePacket(packet)
 	})
@@ -176,10 +179,20 @@ func extraIDs() []string {
 // comma-separated.
 func ExtraIDs() string { return strings.Join(extraIDs(), ",") }
 
-// ExtraIsConnected reports whether the extra exit id is up.
+// ExtraIsConnected reports whether the extra exit id is up: its node
+// answers (its probes), not only its carriers.
 func ExtraIsConnected(id string) bool {
 	extras.Lock()
 	e := extras.byID[id]
 	extras.Unlock()
-	return e != nil && e.trans.IsConnected()
+	if e == nil {
+		return false
+	}
+	pr := active.Load()
+	if pr == nil {
+		return e.trans.IsConnected()
+	}
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	return pr.extraUp(e.slot, pr.now())
 }

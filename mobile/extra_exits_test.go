@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 
@@ -30,6 +31,12 @@ func (f *fakeExit) Send(b []byte) error {
 	f.mu.Unlock()
 	return nil
 }
+func (f *fakeExit) reset() {
+	f.mu.Lock()
+	f.sent = nil
+	f.mu.Unlock()
+}
+
 func (f *fakeExit) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,6 +71,13 @@ func TestExtraExitsShareSitesAndKeepThem(t *testing.T) {
 	x2.up.Store(true)
 	pr.setExtra(1, x1)
 	pr.setExtra(2, x2)
+	// Both answered their probes.
+	hear := func(x *fakeExit) { pr.fromExtra(x, udpPacket(upstream, tunDevice, 53, 1, nil)) }
+	hear(x1)
+	hear(x2)
+	time.Sleep(50 * time.Millisecond) // the probes setExtra sent
+	x1.reset()
+	x2.reset()
 	for i := byte(1); i <= 6; i++ {
 		pr.learn(dnsAnswer(t, uint16(i), string([]byte{'a' + i - 1})+".example.", [4]byte{93, 184, 0, i}))
 	}
@@ -123,5 +137,62 @@ func TestExtraExitsShareSitesAndKeepThem(t *testing.T) {
 	}
 	if x1.count() != n1 {
 		t.Error("a removed extra exit got flows")
+	}
+}
+
+// An extra exit whose carrier is up but whose node never answers (a slot
+// switched off) takes no sites and no DNS; its probe answers stay away
+// from the device, and one that falls silent stops taking sites.
+func TestSilentExtraExitTakesNothing(t *testing.T) {
+	var toDevice [][]byte
+	pr := newPacketRouter(routing.NewRouter(routing.Config{Mode: routing.ModeTunnel}, nil), upstream, func(b []byte) { toDevice = append(toDevice, b) })
+	defer pr.close()
+	now := time.Unix(1_800_000_000, 0)
+	pr.now = func() time.Time { return now }
+	var primaryUp atomic.Bool
+	primaryUp.Store(true)
+	pr.primaryUp = primaryUp.Load
+	x := &fakeExit{}
+	x.up.Store(true)
+	pr.setExtra(1, x)
+	pr.learn(dnsAnswer(t, 1, "a.example.", [4]byte{93, 184, 0, 1}))
+	pr.learn(dnsAnswer(t, 2, "b.example.", [4]byte{93, 184, 0, 2}))
+	pr.learn(dnsAnswer(t, 3, "c.example.", [4]byte{93, 184, 0, 3}))
+
+	// setExtra probed it at once (in the background).
+	time.Sleep(50 * time.Millisecond)
+	if x.count() == 0 {
+		t.Fatal("the extra exit was not probed")
+	}
+	sent := x.count()
+	for i := uint16(0); i < 4; i++ {
+		if pr.outbound(syn("93.184.0.1", 100+i)) == nil {
+			t.Fatal("a site went to an extra exit that never answered")
+		}
+	}
+	primaryUp.Store(false)
+	q := udpPacket(device, routingDNS, 40000, 53, dnsQuery(t, 9, "x.example.", dnsmessage.TypeA))
+	if pr.outbound(q) == nil || x.count() != sent {
+		t.Error("DNS went to an extra exit that never answered")
+	}
+	primaryUp.Store(true)
+
+	// The probe's answer: the exit is heard, the answer is not the device's.
+	answer := udpPacket(upstream, tunDevice, 53, extraProbePort+1, dnsAnswer(t, 1, "ya.ru.", [4]byte{5, 255, 255, 242}))
+	if pr.fromExtra(x, answer) != nil {
+		t.Error("the probe answer went to the device")
+	}
+	if pr.outbound(syn("93.184.0.2", 200)) != nil {
+		t.Error("a new site did not go to the extra exit that answered")
+	}
+	// Silent for extraHealthy: no new sites.
+	now = now.Add(extraHealthy)
+	if pr.outbound(syn("93.184.0.3", 300)) == nil {
+		t.Error("a site went to an extra exit silent for too long")
+	}
+	// Ordinary traffic from it still reaches the device.
+	data := udpPacket(netip.MustParseAddr("93.184.0.2"), device, 443, 200, []byte("x"))
+	if pr.fromExtra(x, data) == nil {
+		t.Error("the extra exit's traffic was kept from the device")
 	}
 }
