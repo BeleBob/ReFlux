@@ -1388,6 +1388,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 			// keep the lanes busy and the ring full.
 			e.ok, e.buf, e.queued = false, nil, false
 			q.gaveUp++
+			q.leftLaneLocked(e)
 			continue
 		}
 		if e.queued {
@@ -1400,6 +1401,7 @@ func (q *sender) detectLocked(now time.Time) bool {
 				continue
 			}
 			q.rtxTime++
+			q.leftLaneLocked(e)
 		}
 		q.lane[e.lane].lostOne()
 		e.queued = true
@@ -1414,6 +1416,17 @@ func (q *sender) detectLocked(now time.Time) bool {
 		q.low++
 	}
 	return added
+}
+
+// leftLaneLocked takes a piece its lane did not deliver - lost by the
+// timeout, or given up on - out of the lane's pieces in flight (laneTx -
+// laneAck): no ack will ever take it out. A lane whose window filled with
+// such pieces (a carrier that lost everything for a few seconds, a peer
+// that went away) would otherwise never send again, its resends included.
+func (q *sender) leftLaneLocked(e *txEntry) {
+	if e.laneIdx > q.laneAck[e.lane] {
+		q.laneAck[e.lane] = e.laneIdx
+	}
 }
 
 // giveUpAfter is how long the sender keeps resending a piece: longer than the

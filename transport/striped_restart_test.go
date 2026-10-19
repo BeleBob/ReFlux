@@ -106,3 +106,71 @@ func TestStripedSenderServesARestartedPeer(t *testing.T) {
 	wg.Wait()
 	t.Logf("the new phone got %d frames, the first after %v", got2.Load(), time.Since(start))
 }
+
+// The carrier loses everything for a few seconds while the exit streams
+// (cups.online's SFU does, now and then): every lane's window fills with
+// pieces nobody acks. Once the carrier is back the stream must go on; a
+// lane counted those pieces in flight forever and never sent again.
+func TestStripedStreamSurvivesABlackout(t *testing.T) {
+	const lanes = 4
+	var aLanes, bLanes []Transport
+	var all []*lossyLane
+	for i := 0; i < lanes; i++ {
+		a := &lossyLane{delay: 150 * time.Millisecond, rnd: rand.New(rand.NewSource(int64(i + 1)))}
+		b := &lossyLane{delay: 150 * time.Millisecond, rnd: rand.New(rand.NewSource(int64(i + 100)))}
+		a.peer, b.peer = b, a
+		aLanes, bLanes = append(aLanes, a), append(bLanes, b)
+		all = append(all, a, b)
+	}
+	setLoss := func(p float64) {
+		for _, l := range all {
+			l.mu.Lock()
+			l.loss = p
+			l.mu.Unlock()
+		}
+	}
+	exit, phone := NewStripedTransport(aLanes), NewStripedTransport(bLanes)
+	exit.SetOptions(cupsLikeOptions)
+	phone.SetOptions(cupsLikeOptions)
+	var got atomic.Int32
+	exit.Receive(func([]byte) {})
+	phone.Receive(func([]byte) { got.Add(1) })
+	for _, s := range []*StripedTransport{exit, phone} {
+		if err := s.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer s.Stop()
+	}
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b := make([]byte, 1200)
+		for !stop.Load() {
+			exit.Send(b)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	defer func() { stop.Store(true); wg.Wait() }()
+	wait := func(what string, within time.Duration, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(within)
+		for !ok() {
+			if time.Now().After(deadline) {
+				st := exit.snd.snapshot()
+				t.Fatalf("%s: not within %v; exit lanes: win %v in flight %v, gave up %d", what, within, st.laneWin[:lanes], st.laneFlight[:lanes], st.gaveUp)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	wait("the stream starts", 5*time.Second, func() bool { return got.Load() > 500 })
+
+	setLoss(1)
+	time.Sleep(5 * time.Second)
+	setLoss(0)
+	before := got.Load()
+	start := time.Now()
+	wait("the stream goes on after the blackout", 10*time.Second, func() bool { return got.Load() > before+500 })
+	t.Logf("the stream went on %v after the blackout", time.Since(start).Round(time.Millisecond))
+}
