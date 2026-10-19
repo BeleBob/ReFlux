@@ -36,7 +36,25 @@ type packetRouter struct {
 	primaryUp func() bool
 	exitFlows [1 + maxExtraExits]int
 	sticky    map[string]stickyExit
+	// heard is when each extra exit last delivered anything: its rooms or
+	// documents may be up while its node is gone (a slot switched off), and
+	// only an answer tells. probeExtras keeps asking (extraProbeEvery).
+	heard [maxExtraExits]time.Time
 }
+
+const (
+	// An extra exit takes new sites only while it answered within
+	// extraHealthy; every extraProbeEvery it is sent a DNS question to the
+	// upstream from port extraProbePort+slot, whose answer is kept from
+	// the device.
+	extraHealthy    = 45 * time.Second
+	extraProbeEvery = 15 * time.Second
+	extraProbePort  = 53050
+)
+
+// tunDevice is the app's TUN address (OpenFluxTunnelService), the source of
+// the extra exits' probes.
+var tunDevice = netip.MustParseAddr("10.10.10.2")
 
 type stickyExit struct {
 	exit int
@@ -94,6 +112,7 @@ func newPacketRouter(r *routing.Router, upstream netip.Addr, toTUN func([]byte))
 	}
 	pr.local = newLocalStack(pr)
 	go pr.sweep()
+	go pr.probeExtras()
 	return pr
 }
 
@@ -313,8 +332,7 @@ func (pr *packetRouter) pickExit(host string, addr netip.Addr, now time.Time) in
 		if e == 0 {
 			return pr.primaryUp()
 		}
-		t := pr.extras[e-1]
-		return t != nil && t.IsConnected()
+		return pr.extraUp(e, now)
 	}
 	anyExtra := false
 	for e := 1; e <= maxExtraExits; e++ {
@@ -365,9 +383,10 @@ func (pr *packetRouter) viaAnyExit(b []byte) []byte {
 	}
 	pr.mu.Lock()
 	var via transport.Transport
-	for _, t := range pr.extras {
-		if t != nil && t.IsConnected() {
-			via = t
+	now := pr.now()
+	for e := 1; e <= maxExtraExits; e++ {
+		if pr.extraUp(e, now) {
+			via = pr.extras[e-1]
 			break
 		}
 	}
@@ -377,6 +396,66 @@ func (pr *packetRouter) viaAnyExit(b []byte) []byte {
 		return nil
 	}
 	return b
+}
+
+// extraUp: extra exit e (from 1) is attached, connected and answered
+// lately. The caller holds pr.mu.
+func (pr *packetRouter) extraUp(e int, now time.Time) bool {
+	t := pr.extras[e-1]
+	return t != nil && t.IsConnected() && !pr.heard[e-1].IsZero() && now.Sub(pr.heard[e-1]) < extraHealthy
+}
+
+// fromExtra takes what extra exit t delivered: the exit counts as heard,
+// and the answer to its probe is kept from the device (nil returned).
+func (pr *packetRouter) fromExtra(t transport.Transport, b []byte) []byte {
+	pr.mu.Lock()
+	slot := 0
+	for i, x := range pr.extras {
+		if x == t {
+			slot = i + 1
+		}
+	}
+	if slot > 0 {
+		pr.heard[slot-1] = pr.now()
+	}
+	pr.mu.Unlock()
+	if p, ok := parsePacket(b); ok && slot > 0 && p.proto == protoUDP && p.sport == dnsPort && p.dport == uint16(extraProbePort+slot) && p.dst == tunDevice {
+		return nil
+	}
+	return pr.inbound(b)
+}
+
+// probeExtras asks every extra exit a DNS question every extraProbeEvery.
+func (pr *packetRouter) probeExtras() {
+	t := time.NewTicker(extraProbeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-pr.stop:
+			return
+		case <-t.C:
+		}
+		pr.mu.Lock()
+		extras := pr.extras
+		pr.mu.Unlock()
+		for i, x := range extras {
+			if x != nil {
+				pr.probe(i+1, x)
+			}
+		}
+	}
+}
+
+// probe sends extra exit t in slot a DNS question for the upstream.
+func (pr *packetRouter) probe(slot int, t transport.Transport) {
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: uint16(slot), RecursionDesired: true})
+	b.StartQuestions()
+	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("ya.ru."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+	msg, err := b.Finish()
+	if err != nil {
+		return
+	}
+	t.Send(udpPacket(tunDevice, pr.upstream, uint16(extraProbePort+slot), dnsPort, msg))
 }
 
 // forget drops a flow. The caller holds pr.mu.
@@ -392,6 +471,10 @@ func (pr *packetRouter) forget(k flowKey) {
 func (pr *packetRouter) setExtra(slot int, t transport.Transport) {
 	pr.mu.Lock()
 	pr.extras[slot-1] = t
+	pr.heard[slot-1] = time.Time{}
+	if t != nil {
+		go pr.probe(slot, t)
+	}
 	if t == nil {
 		for k, c := range pr.sticky {
 			if c.exit == slot {
