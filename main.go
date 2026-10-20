@@ -320,6 +320,8 @@ func main() {
 		"Exit: address clients dial for direct in the --share link. Default: this host's first public IPv4")
 	configOfferFile := flag.String("config-offer-file", "",
 		"Exit only: a JSON {link, version} file whose openflux:// link the Session client is told (ReFlux config self-update)")
+	clientLogDir := flag.String("client-log-dir", "",
+		"Exit only: a directory that keeps the logs the Session client sends (ReFlux); empty = refuse them")
 	ipcSocketPath := flag.String("ipc-socket", "",
 		"Path to the Unix domain socket used by the mobile app to talk to the core. "+
 			"Empty = no IPC server.")
@@ -538,6 +540,7 @@ DEPRECATED (removed in v2)
 		applyConfString(conf.Interface, "MailruCookiesFile", "mailru-cookies-file", &mailruCookiesFile, setFlags)
 		applyConfString(conf.Interface, "IPCSocket", "ipc-socket", ipcSocketPath, setFlags)
 		applyConfString(conf.Interface, "ConfigOfferFile", "config-offer-file", configOfferFile, setFlags)
+		applyConfString(conf.Interface, "ClientLogDir", "client-log-dir", clientLogDir, setFlags)
 		applyConfString(conf.Interface, "URL", "url", &globalDocUrl, setFlags)
 		if v, ok := confValue(conf.Interface, "Debug"); ok && !setFlags["debug"] {
 			if b, err := strconv.Atoi(v); err == nil {
@@ -1036,6 +1039,9 @@ DEPRECATED (removed in v2)
 		sess.SetControlHandler(managerInst.DispatchControl)
 		if isExit && *configOfferFile != "" {
 			go runConfigOffer(sess, *configOfferFile, nil)
+		}
+		if isExit {
+			managerInst.SetControlCallback(newClientLogSink(*clientLogDir, sess.SendControl).handle)
 		}
 
 		// Optional IPC bridge: if --ipc-socket is set, the core talks to the

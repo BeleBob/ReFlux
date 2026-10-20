@@ -137,6 +137,14 @@ predates idle pacing keeps pinging every 10 seconds, which is still answered.
 | 0x10..0x13 | client <-> exit | transport start, stop, status, list |
 | 0x20 LinkPing, 0x21 LinkPong | both | none |
 | 0x30 ConfigOffer | exit -> client | `{"link","version"}`: the client's current `openflux://` configuration; a client applies it only when `version` is newer than its own (ReFlux) |
+| 0x31 ClientLog | client -> exit | one part of a log the user sends to the exit's owner (ReFlux): log ID (4 bytes), part number from 0 (2), number of parts (2, at most 256), then up to 1024 bytes of the zstd-compressed UTF-8 log, all big-endian |
+| 0x32 ClientLogAck | exit -> client | `{"id","status","retry_after","bytes"}` for a whole log: `status` is `ok`, `too_soon` (`retry_after` seconds), `too_big`, `bad`, `off` (the exit keeps no logs) or `error` |
+
+An exit decides alone what it takes of ClientLog: the ReFlux core keeps at
+most one log every 2 minutes and 20 a day, 1 MiB of text each, as plain text
+without control characters, and answers the first part of a log it refuses.
+A log's ID is never 0. A peer that does not know 0x31 ignores it, and the
+client hears no answer.
 
 An empty `transport` (older peers) means the highest-priority transport that
 carries cookies. Cookie messages and AuthRequired may carry `"doc"`, the

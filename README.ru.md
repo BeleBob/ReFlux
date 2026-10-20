@@ -480,7 +480,7 @@ URL = YOUR_YANDEX_DOC_URL
 ```
 
 Ключи `[Interface]`: `Role`, `Inbound`, `Transport`, `Mode`, `Codec`,
-`Socks5`, `EncryptionKeyFile`, `CookieStore`, `MailruCookiesFile`, `IPCSocket`, `ConfigOfferFile`, `URL`, `Debug`.
+`Socks5`, `EncryptionKeyFile`, `CookieStore`, `MailruCookiesFile`, `IPCSocket`, `ConfigOfferFile`, `ClientLogDir`, `URL`, `Debug`.
 Секции транспортов: `Type` (по умолчанию имя секции), `Priority` (по умолчанию
 50), `URL`, `Dial` / `Listen` (direct) и `Token` / `UID` (MAX). `.conf` с
 секциями транспортов всегда запускается как согласованная сессия.
@@ -623,6 +623,7 @@ URL = YOUR_YANDEX_DOC_URL
 | `--cookie-store` | | `./cookies-<transport>.json` | Файл с cookies |
 | `--ipc-socket` | | | Unix-сокет для приложения (запросы капчи, cookies) |
 | `--config-offer-file` | | | Exit: JSON-файл `{"link","version"}`, ссылку `reflux://` или `openflux://` из которого получает клиент Session (`ConfigOffer`, при каждом рукопожатии и изменении) |
+| `--client-log-dir` | | | Exit: каталог для журналов, которые клиент Session отправляет из приложения (`ClientLog`): не чаще раза в 2 минуты и 20 в сутки, до 1 МБ, хранятся 10 последних. Без флага нода журналы не принимает |
 | `--share` | | `false` | Выходная нода: напечатать ссылку `openflux://` и QR-код для клиентов |
 | `--share-host` | | (первый публичный IPv4) | Выходная нода: адрес для `direct` в этой ссылке |
 | `--node-wizard` | | | Единственный аргумент: запускает протокол развёртывания по JSON-over-stdio вместо обычного запуска CLI (см. [Ключевые особенности](#ключевые-особенности)) |

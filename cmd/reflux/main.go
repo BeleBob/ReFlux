@@ -76,6 +76,9 @@ USAGE
   reflux web <install|login|run>
                            web panel for the home network (same as the bot)
   reflux logs <name|egress> [--follow]
+  reflux client-logs [<name> [last|<file>]]
+                           the logs clients sent from the app: who sent any,
+                           a client's list, or one printed (last: the newest)
   reflux backup [list]     back up the data directory now / list the backups
   reflux backup install [--dir <dir>] [--keep <n>]
                            a backup a day (default ~/reflux-backups, 14 kept);
@@ -215,6 +218,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdRestart(s, stdout)
 	case "logs":
 		return cmdLogs(rest, stdout)
+	case "client-logs":
+		return cmdClientLogs(s, rest, stdout)
 	case "setup":
 		return cmdSetup(s, rest, stdin, stdout)
 	case "requests":

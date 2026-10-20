@@ -103,7 +103,7 @@ func TestSessionNodeConfAndLink(t *testing.T) {
 	}
 	c.Backups = []Doc{{"mailru", docB}, {"yandex", docY}}
 	want := "[Interface]\nRole = exit\nMode = l4\nURL = " + testURL + "\n" +
-		"EncryptionKeyFile = /config/key\nCookieStore = /state/cookies.json\nMailruCookiesFile = /mailru/cookies\nIPCSocket = /state/ipc.sock\nConfigOfferFile = /config/offer\n\n" +
+		"EncryptionKeyFile = /config/key\nCookieStore = /state/cookies.json\nMailruCookiesFile = /mailru/cookies\nIPCSocket = /state/ipc.sock\nConfigOfferFile = /config/offer\nClientLogDir = /state/client-logs\n\n" +
 		"[Transport \"mailru\"]\nType = mailru\nPriority = 100\nURL = " + testURL + "\n\n" +
 		"[Transport \"mailru-2\"]\nType = mailru\nPriority = 100\nURL = " + docB + "\n\n" +
 		"[Transport \"yandex\"]\nType = yandex\nPriority = 100\nURL = " + docY + "\n"
