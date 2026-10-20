@@ -92,7 +92,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on
   the server by the owner's decision, never sent through the bot or the panel.
-  `restore` backs up the current state first, swaps the contents in place (the
+  Before recreating or removing containers reflux copies their logs into
+  `logs/<container>-<started>.log` (`containerlogs.go`, last 3 runs each,
+  not in backups). `restore` backs up the current state first, swaps the contents in place (the
   directory and its `.lock` stay) and recreates every container. Commands that change clients or containers hold the flock
   `~/reflux/.lock` (`Store.Lock`; `heal` skips when busy).
   Several documents per client (`docs.go`, `botdocs.go`): `client.json` keeps

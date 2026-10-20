@@ -346,8 +346,15 @@ func TestRevokeStopsTheNodeBeforeDeletingItsKey(t *testing.T) {
 	if err := run([]string{"revoke", "phone", "--yes"}, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) < 2 || (*calls)[0] != "rm --force reflux-node-phone" ||
-		!strings.Contains((*calls)[len(*calls)-1], "up --detach --remove-orphans") {
+	// inspect only asks which run's log to keep (containerlogs.go).
+	var changes []string
+	for _, c := range *calls {
+		if !strings.HasPrefix(c, "inspect ") {
+			changes = append(changes, c)
+		}
+	}
+	if len(changes) < 2 || changes[0] != "rm --force reflux-node-phone" ||
+		!strings.Contains(changes[len(changes)-1], "up --detach --remove-orphans") {
 		t.Errorf("docker calls = %q", *calls)
 	}
 }

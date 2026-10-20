@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +16,8 @@ func TestMain(m *testing.M) {
 	// machine must not change what the checks say. Tests that need them
 	// fake them (fakeHostTree).
 	host.ProcRoot, host.SysRoot = "/nonexistent/proc", "/nonexistent/sys"
+	// Nor this machine's containers: tests that keep logs fake them.
+	dockerLogs = func(string, io.Writer) error { return errors.New("no docker in tests") }
 	os.Exit(m.Run())
 }
 
