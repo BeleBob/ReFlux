@@ -276,6 +276,7 @@ func cmdRestart(s Store, stdout io.Writer) error {
 	if err := checkHost(); err != nil {
 		return err
 	}
+	saveAllLogs(s, stdout)
 	return runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans", "--force-recreate")...)
 }
 
@@ -291,6 +292,7 @@ func restartNode(s Store, name string, stdout io.Writer) error {
 	if err := render(s); err != nil {
 		return err
 	}
+	saveLogs(s, []string{"reflux-node-" + name}, stdout)
 	return runDocker(stdout, composeArgs(s, "up", "--detach", "--no-deps", "--force-recreate", "node-"+name)...)
 }
 
@@ -534,6 +536,7 @@ func cmdRevoke(s Store, args []string, stdin io.Reader, stdout io.Writer) error 
 	}
 	// Stop the node before its key goes: a running node keeps the key in
 	// memory and would go on serving the channel.
+	saveLogs(s, []string{"reflux-node-" + name}, stdout)
 	if err := runDocker(io.Discard, "rm", "--force", "reflux-node-"+name); err != nil {
 		return fmt.Errorf("stopping reflux-node-%s failed, nothing revoked: %w", name, err)
 	}
@@ -558,6 +561,7 @@ func cmdRename(s Store, old, name string, stdout io.Writer) error {
 	if _, err := s.Get(name); err == nil {
 		return fmt.Errorf("client %q already exists", name)
 	}
+	saveLogs(s, []string{"reflux-node-" + old}, stdout)
 	if err := runDocker(io.Discard, "rm", "--force", "reflux-node-"+old); err != nil {
 		return fmt.Errorf("stopping reflux-node-%s failed, nothing renamed: %w", old, err)
 	}
@@ -634,6 +638,9 @@ func apply(s Store, stdout io.Writer) error {
 	if err := checkHost(); err != nil {
 		return err
 	}
+	// up recreates what changed (an image, compose.yml) and removes the
+	// nodes of revoked clients.
+	saveAllLogs(s, stdout)
 	if err := runDocker(stdout, composeArgs(s, "up", "--detach", "--remove-orphans")...); err != nil {
 		return err
 	}
@@ -678,6 +685,12 @@ func startTimes(clients []Client) map[string]time.Time {
 	for _, c := range clients {
 		names = append(names, "reflux-node-"+c.Name)
 	}
+	return containerStarts(names)
+}
+
+// containerStarts maps the running containers among names to when they
+// started.
+func containerStarts(names []string) map[string]time.Time {
 	var out strings.Builder
 	args := append([]string{"inspect", "--format", "{{.Name}} {{.State.Running}} {{.State.StartedAt}}"}, names...)
 	// inspect fails when a container is missing; what it printed still counts.
@@ -746,5 +759,10 @@ func heal(s Store, stdout io.Writer) error {
 	if err := render(s); err != nil {
 		return err
 	}
+	var containers []string
+	for _, n := range stranded {
+		containers = append(containers, "reflux-"+n)
+	}
+	saveLogs(s, containers, stdout)
 	return runDocker(stdout, composeArgs(s, append([]string{"up", "--detach", "--no-deps", "--force-recreate"}, stranded...)...)...)
 }
