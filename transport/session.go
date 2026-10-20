@@ -52,6 +52,11 @@ type Session struct {
 	keepaliveIdle   time.Duration
 	linkTimeoutIdle time.Duration
 	lastData        time.Time // the last IPv4 sent or received
+
+	// One-way carriers, see session_answer.go. 0 turns a rule off.
+	peerDataWindow       time.Duration
+	unansweredAfter      time.Duration
+	probeUnansweredAfter time.Duration
 	activeSince     time.Time // when IPv4 resumed after an idle spell
 	// peerHeard: the last time anything came from the peer on any carrier
 	// (PeerHeard). Not cleared when a carrier is marked stalled.
@@ -149,6 +154,12 @@ type transportLink struct {
 	started   bool
 	lastHeard time.Time
 	dead      bool
+
+	// See session_answer.go.
+	dataHeard time.Time // the last IPv4 from the peer on this carrier
+	pongHeard time.Time // the last LinkPong on it
+	sendWait  time.Time // the first IPv4 sent since the peer last answered
+	probed    bool      // pinged since sendWait
 }
 
 // SetClassic lets this Session also speak the classic layering: a client
@@ -265,6 +276,10 @@ func NewSession(p PeerParameters, exit bool) (*Session, error) {
 		idleAfter:       time.Minute,
 		keepaliveIdle:   25 * time.Second,
 		linkTimeoutIdle: 80 * time.Second,
+
+		peerDataWindow:       10 * time.Second,
+		unansweredAfter:      8 * time.Second,
+		probeUnansweredAfter: 3 * time.Second,
 	}
 	if _, err := rand.Read(s.local[:]); err != nil {
 		return nil, err
@@ -744,9 +759,12 @@ func (s *Session) pingQuiet(quiet time.Duration) {
 	var links []*transportLink
 	s.mu.Lock()
 	if s.ready {
+		now := time.Now()
 		for _, name := range s.order {
 			l := s.links[name]
-			if l.started && !l.dead && time.Since(l.lastHeard) >= quiet {
+			// A carrier left for not answering (session_answer.go) is
+			// pinged too: only a pong brings it back.
+			if l.started && !l.dead && (now.Sub(l.lastHeard) >= quiet || s.unansweredLocked(l, now)) {
 				links = append(links, l)
 			}
 		}
@@ -1209,6 +1227,12 @@ func (s *Session) Send(p []byte) error {
 	raw = append(raw, p...)
 
 	chosen := s.placement.pick(topLinks(links), p, time.Now())
+	s.mu.Lock()
+	probe := s.sentDataLocked(chosen, time.Now())
+	s.mu.Unlock()
+	if probe {
+		go s.probeUnanswered(chosen)
+	}
 
 	n := s.cntDataSent.Add(1)
 	if n == 1 || n%100 == 0 {
@@ -1235,7 +1259,7 @@ func (s *Session) liveLinksLocked() []*transportLink {
 		}
 	}
 	if len(out) > 0 {
-		return out
+		return s.answeringLocked(out, time.Now())
 	}
 	for _, name := range s.order {
 		if l := s.links[name]; s.connectedLocked(l) {
@@ -1655,6 +1679,7 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 		return
 	}
 	link.lastHeard = time.Now()
+	link.dataHeard = link.lastHeard
 	s.peerHeard = link.lastHeard
 	woke := s.markDataLocked(link.lastHeard)
 	cb := s.dataCallback
@@ -1702,6 +1727,7 @@ func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Env
 		return
 	case control.SubtypeLinkPong:
 		s.peerKeepalive = true
+		link.pongHeard = link.lastHeard
 		s.mu.Unlock()
 		utils.Debugf("[SESSION] LinkPong from %q: peer keepalive enabled", link.name)
 		return
