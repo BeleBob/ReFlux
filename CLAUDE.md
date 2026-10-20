@@ -92,6 +92,11 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on
   the server by the owner's decision, never sent through the bot or the panel.
+  Client logs: the app sends its log over the Session (`control.SubtypeClientLog`
+  0x31 parts, `ClientLogAck` 0x32; core `client_log.go`, `mobile/client_log.go`
+  `SendLog`); the node keeps it in `ClientLogDir = /state/client-logs` with its
+  own limits; `reflux client-logs [name [last|file]]` (`clientlogs.go`) reads
+  them — that is where to look when the owner reports a problem.
   Before recreating or removing containers reflux copies their logs into
   `logs/<container>-<started>.log` (`containerlogs.go`, last 3 runs each,
   not in backups). `restore` backs up the current state first, swaps the contents in place (the

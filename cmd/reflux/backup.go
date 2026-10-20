@@ -77,6 +77,9 @@ func backupSkip(rel string, mode fs.FileMode) bool {
 	if rel == "logs" || strings.HasPrefix(rel, "logs/") {
 		return true // containerlogs.go
 	}
+	if strings.HasPrefix(rel, "state/") && strings.Contains(rel+"/", "/client-logs/") {
+		return true // clientlogs.go
+	}
 	switch rel {
 	case "heal.log", "metrics.json", "web-login.json", "web-sessions.json":
 		return true
