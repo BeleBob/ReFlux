@@ -105,6 +105,19 @@ that never answers predates keepalive, and liveness stays the carrier's own
 connection state. Data and control use the highest-priority live carrier; flows
 are hashed across carriers only when they share that priority.
 
+A carrier can work one way only: the peer is still heard on it (its pings
+arrive) while what this side sends there is lost, or the other way round.
+Against a peer that answers pings, two local rules leave such a carrier out of
+what data is sent on, as long as another live carrier remains:
+- a carrier that has carried this side's IPv4 for 3 seconds with no answer on
+  it (IPv4 or a LinkPong; the peer's own pings do not count) gets a LinkPing,
+  and after 8 seconds without an answer it is left until one comes; it is
+  pinged on every keepalive tick meanwhile;
+- an exit sends on the carriers the client's IPv4 came in on within the last
+  10 seconds: a client sends its data where it hears the exit.
+
+Neither changes what is sent on the wire.
+
 With no IPv4 either way for a minute the session is idle: a carrier is pinged
 once quiet for 25 seconds and live if heard within 80 seconds, so a phone's
 radio can sleep between pings. The first IPv4 after an idle spell pings every
