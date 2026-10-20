@@ -184,7 +184,7 @@ func buildSessionWith(specsJSON, secret string, exit bool, opt sessionOptions) (
 		return m, sess, nil
 	}
 	if !exit {
-		m.SetControlCallback(receiveConfigOffer)
+		m.SetControlCallback(receiveExitControl)
 	}
 	setSessionRoute(sess, types)
 	applyInitialCookies(m, specs)
