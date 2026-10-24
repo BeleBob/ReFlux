@@ -92,6 +92,10 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   sockets, logs, `metrics.json`, web sign-ins) into `~/reflux-backups` daily
   (user timer `reflux-backup.timer`, settings in `backup.json`); backups stay on
   the server by the owner's decision, never sent through the bot or the panel.
+  `reflux debug <name> [0-3]` (`nodedebug.go`) sets a client's node log level
+  in `client.json` (`Debug` in node.conf, so apply/update keep it): 1 is the
+  carriers' per-lane figures every 5 s — what tells a one-way channel from a
+  working one — 2 and 3 a line per packet.
   Client logs: the app sends its log over the Session (`control.SubtypeClientLog`
   0x31 parts, `ClientLogAck` 0x32; core `client_log.go`, `mobile/client_log.go`
   `SendLog`); the node keeps it in `ClientLogDir = /state/client-logs` with its

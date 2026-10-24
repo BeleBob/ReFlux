@@ -79,6 +79,10 @@ USAGE
   reflux client-logs [<name> [last|<file>]]
                            the logs clients sent from the app: who sent any,
                            a client's list, or one printed (last: the newest)
+  reflux debug [<name> [0-3]]
+                           how much a client's node logs: 1 adds the carriers'
+                           per-lane figures (cheap), 2 a line per packet,
+                           3 hexdumps; the node is recreated
   reflux backup [list]     back up the data directory now / list the backups
   reflux backup install [--dir <dir>] [--keep <n>]
                            a backup a day (default ~/reflux-backups, 14 kept);
@@ -220,6 +224,8 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 		return cmdLogs(rest, stdout)
 	case "client-logs":
 		return cmdClientLogs(s, rest, stdout)
+	case "debug":
+		return cmdDebug(s, rest, stdout)
 	case "setup":
 		return cmdSetup(s, rest, stdin, stdout)
 	case "requests":
