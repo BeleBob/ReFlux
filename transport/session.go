@@ -57,7 +57,8 @@ type Session struct {
 	peerDataWindow       time.Duration
 	unansweredAfter      time.Duration
 	probeUnansweredAfter time.Duration
-	activeSince     time.Time // when IPv4 resumed after an idle spell
+	followed             string    // the carriers last reported as the client's
+	activeSince          time.Time // when IPv4 resumed after an idle spell
 	// peerHeard: the last time anything came from the peer on any carrier
 	// (PeerHeard). Not cleared when a carrier is marked stalled.
 	peerHeard time.Time

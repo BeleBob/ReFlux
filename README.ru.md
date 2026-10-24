@@ -480,7 +480,7 @@ URL = YOUR_YANDEX_DOC_URL
 ```
 
 Ключи `[Interface]`: `Role`, `Inbound`, `Transport`, `Mode`, `Codec`,
-`Socks5`, `EncryptionKeyFile`, `CookieStore`, `MailruCookiesFile`, `IPCSocket`, `ConfigOfferFile`, `ClientLogDir`, `URL`, `Debug`.
+`Socks5`, `EncryptionKeyFile`, `CookieStore`, `MailruCookiesFile`, `IPCSocket`, `ConfigOfferFile`, `ClientLogDir`, `URL`, `Debug` (0–3, как `-d`/`-dd`/`-ddd`).
 Секции транспортов: `Type` (по умолчанию имя секции), `Priority` (по умолчанию
 50), `URL`, `Dial` / `Listen` (direct) и `Token` / `UID` (MAX). `.conf` с
 секциями транспортов всегда запускается как согласованная сессия.

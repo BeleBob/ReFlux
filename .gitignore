@@ -71,3 +71,6 @@ phpbox_bundle/
 /probe_*.php
 /stress-out/
 /stresstest/
+# Local builds of the ReFlux host CLI (go build ./cmd/reflux).
+/reflux
+/reflux-egress

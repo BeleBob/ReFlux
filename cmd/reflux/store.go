@@ -51,6 +51,11 @@ type Client struct {
 	// NoCups: the owner took the client's cups.online rooms away, and it
 	// gets none until given them again (cups.go).
 	NoCups bool `json:"no_cups,omitempty"`
+	// Debug is the node's log level (`reflux debug`): 0 off, 1 the
+	// carriers' per-lane figures, 2 every session and crypto step, 3 with
+	// hexdumps. It belongs to the client so that it survives apply and
+	// update, which rewrite node.conf.
+	Debug int `json:"debug,omitempty"`
 }
 
 // TGAccount is a Telegram account a client is linked to.

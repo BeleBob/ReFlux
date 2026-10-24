@@ -1,9 +1,12 @@
 package transport
 
 import (
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/p1neappleXpress/OpenFlux/utils"
 )
 
 // oneWayPair starts a client and an exit over a preferred carrier "direct"
@@ -84,6 +87,37 @@ func comesBack(t *testing.T, client *Session, echoes *atomic.Int32, w *startCoun
 		}
 	}
 	echoed(t, client, echoes, 10, 3*time.Second)
+}
+
+// What the exit says about the carriers it answers on: following the
+// client's data is an ordinary change of carrier, only a carrier that
+// answers nothing is reported as carrying nothing back.
+func TestSessionNamesWhyItLeavesACarrier(t *testing.T) {
+	var lines []string
+	utils.SetLogSink(func(s string) { lines = append(lines, s) })
+	t.Cleanup(func() { utils.SetLogSink(nil) })
+	said := func(what string) bool {
+		for _, l := range lines {
+			if strings.Contains(l, what) {
+				return true
+			}
+		}
+		return false
+	}
+	client, _, ew, echoes := oneWayPair(t)
+	echoed(t, client, echoes, 5, 3*time.Second)
+	if !said(`the client's data comes in on [direct]: answering there`) {
+		t.Errorf("the exit did not say where it answers:\n%s", strings.Join(lines, "\n"))
+	}
+	if said("carry nothing back") {
+		t.Errorf("a working carrier was called broken:\n%s", strings.Join(lines, "\n"))
+	}
+	lines = nil
+	blackhole(ew["direct"])
+	echoed(t, client, echoes, 20, 5*time.Second)
+	if !said(`[direct] carry nothing back from the peer`) {
+		t.Errorf("the dead carrier was not named:\n%s", strings.Join(lines, "\n"))
+	}
 }
 
 // The other way round: the client's packets stop reaching the exit on the
