@@ -161,9 +161,14 @@ type avitoWS struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 	connID  string
-	ver     int
-	docLen  int
-	seq     int
+	// ver is the document version ShareDB expects on the next op. Both
+	// loops of a room move it - readLoop from a peer's op, sendLoop from
+	// the ack to ours - so it is behind verMu. docLen and seq are only
+	// sendLoop's.
+	verMu  sync.Mutex
+	ver    int
+	docLen int
+	seq    int
 
 	connected atomic.Bool
 	onData    func([]byte)
@@ -267,7 +272,7 @@ func (w *avitoWS) subscribe() error {
 		doc = sub
 	}
 	if v, ok := doc["v"].(float64); ok {
-		w.ver = int(v)
+		w.setVersion(int(v))
 	}
 	data, _ := doc["data"].(string)
 	w.docLen = len(data)
@@ -288,7 +293,7 @@ func (w *avitoWS) subscribe() error {
 		if errMsg := reply["error"]; errMsg != nil {
 			return fmt.Errorf("create error: %v", errMsg)
 		}
-		w.ver = 1
+		w.setVersion(1)
 		w.docLen = 0
 		w.seq = 2
 	}
@@ -336,7 +341,7 @@ func (w *avitoWS) connectAndServe() error {
 		return err
 	}
 	w.connected.Store(true)
-	utils.Debugf("[AVITO] WS ready: %s ver=%d docLen=%d", w.roomID[:8], w.ver, w.docLen)
+	utils.Debugf("[AVITO] WS ready: %s ver=%d docLen=%d", w.roomID[:8], w.version(), w.docLen)
 
 	// Single reader dispatches acks to sendLoop and peer ops to onData. Both
 	// loops belong to this socket: done ends them with it, and the send loop
@@ -444,11 +449,37 @@ func (w *avitoWS) handlePeerOp(msg map[string]interface{}) {
 	}
 	// Track the version from peer ops so our next send uses the right one.
 	if v, ok := msg["v"].(float64); ok {
-		newVer := int(v) + 1
-		if newVer > w.ver {
-			w.ver = newVer
-		}
+		w.raiseVersion(int(v) + 1)
 	}
+}
+
+// version is the version the next op carries.
+func (w *avitoWS) version() int {
+	w.verMu.Lock()
+	defer w.verMu.Unlock()
+	return w.ver
+}
+
+func (w *avitoWS) setVersion(v int) {
+	w.verMu.Lock()
+	w.ver = v
+	w.verMu.Unlock()
+}
+
+// raiseVersion moves the version forward, never back.
+func (w *avitoWS) raiseVersion(v int) {
+	w.verMu.Lock()
+	if v > w.ver {
+		w.ver = v
+	}
+	w.verMu.Unlock()
+}
+
+// bumpVersion counts our own op in, when the ack names no version.
+func (w *avitoWS) bumpVersion() {
+	w.verMu.Lock()
+	w.ver++
+	w.verMu.Unlock()
 }
 
 func (w *avitoWS) sendLoop(c *avitoConn) error {
@@ -481,7 +512,7 @@ func (w *avitoWS) sendOp(c *avitoConn, data []byte) error {
 
 	if err := w.writeJSON(map[string]interface{}{
 		"a": "op", "c": "docs", "d": w.roomID,
-		"v": w.ver, "src": w.connID, "seq": w.seq, "op": op,
+		"v": w.version(), "src": w.connID, "seq": w.seq, "op": op,
 	}); err != nil {
 		return err
 	}
@@ -494,9 +525,9 @@ func (w *avitoWS) sendOp(c *avitoConn, data []byte) error {
 			return fmt.Errorf("op error: %v", errMsg)
 		}
 		if v, ok := reply["v"].(float64); ok {
-			w.ver = int(v) + 1
+			w.setVersion(int(v) + 1)
 		} else {
-			w.ver++
+			w.bumpVersion()
 		}
 	case <-c.done:
 		return errStopped
