@@ -2,6 +2,8 @@ package mobile
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +16,14 @@ import (
 // logExit gathers a log's parts like an exit and answers with ack, or not
 // at all when silent.
 type logExit struct {
-	mu     sync.Mutex
-	parts  map[uint16][]byte
-	got    string
-	silent bool
-	ack    control.ClientLogAck
+	mu       sync.Mutex
+	parts    map[uint16][]byte
+	got      string
+	silent   bool
+	ack      control.ClientLogAck
+	dropPart int // this part is lost once, then asked for
+	asked    int
+	refuse   int // refuse this many sends, as a full queue does
 }
 
 func (e *logExit) IsConnected() bool { return true }
@@ -30,6 +35,19 @@ func (e *logExit) SendControl(sub control.Subtype, b []byte) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.refuse > 0 {
+		e.refuse--
+		return errors.New("batch queue full")
+	}
+	if int(p.Part) == e.dropPart {
+		// Lost once; ask for it as the exit does.
+		e.dropPart = -1
+		e.asked++
+		ack := control.ClientLogAck{ID: p.ID, Status: control.ClientLogResend, Missing: []uint16{p.Part}}
+		body, _ := ack.Encode()
+		go receiveExitControl(control.SubtypeClientLogAck, body)
+		return nil
+	}
 	if e.parts == nil {
 		e.parts = map[uint16][]byte{}
 	}
@@ -54,6 +72,47 @@ func (e *logExit) SendControl(sub control.Subtype, b []byte) error {
 		go receiveExitControl(control.SubtypeClientLogAck, b)
 	}
 	return nil
+}
+
+// A part that does not arrive: the exit asks for it and SendLog sends it
+// again, instead of the person seeing "the server did not answer".
+func TestSendLogResendsWhatTheExitMisses(t *testing.T) {
+	old := sleepLog
+	sleepLog = func(time.Duration) {}
+	defer func() { sleepLog = old }()
+	e := &logExit{ack: control.ClientLogAck{Status: control.ClientLogOK}, dropPart: 1}
+	useLogExit(t, e)
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&b, "17:0%d:%02d [STRIPE] per-lane %d: s%d/r%d\n", i%10, i%60, i%4, i*7, i*13)
+	}
+	if got := SendLog(b.String()); !strings.Contains(got, `"status":"ok"`) {
+		t.Fatalf("answer %s", got)
+	}
+	if e.got != b.String() {
+		t.Errorf("the exit put together %d bytes of %d", len(e.got), b.Len())
+	}
+	if e.asked != 1 {
+		t.Errorf("the exit asked %d time(s), want 1", e.asked)
+	}
+}
+
+// A carrier whose queue is momentarily full: the part is offered again,
+// and the log is not given up on.
+func TestSendLogWaitsOutAFullQueue(t *testing.T) {
+	old := sleepLog
+	sleepLog = func(time.Duration) {}
+	defer func() { sleepLog = old }()
+	e := &logExit{ack: control.ClientLogAck{Status: control.ClientLogOK}, refuse: 3}
+	useLogExit(t, e)
+	if got := SendLog("a line\n"); !strings.Contains(got, `"status":"ok"`) {
+		t.Fatalf("answer %s", got)
+	}
+	e.refuse = sendLogTries + 1
+	e.parts, e.got = nil, ""
+	if got := SendLog("a line\n"); !strings.Contains(got, `"not_connected"`) {
+		t.Errorf("a carrier that never takes it: %s", got)
+	}
 }
 
 func useLogExit(t *testing.T, e *logExit) {
