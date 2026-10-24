@@ -29,6 +29,13 @@ import (
 // option answers every log with "off".
 
 var (
+	// clientLogGap: a log with holes this long after its last part is
+	// asked for the parts that are missing, up to clientLogAsks times. A
+	// control message goes out once and nothing retransmits it, so one
+	// lost part would otherwise leave the log unfinished, unanswered, and
+	// the person looking at "the server did not answer".
+	clientLogGap      = 3 * time.Second
+	clientLogAsks     = 5
 	clientLogEvery    = 2 * time.Minute
 	clientLogPerDay   = 20
 	clientLogKept     = 10
@@ -39,13 +46,15 @@ var (
 const clientLogStamp = "20060102T150405Z"
 
 type clientLogSink struct {
-	dir  string
-	send func(control.Subtype, []byte) error
-	now  func() time.Time
+	dir   string
+	send  func(control.Subtype, []byte) error
+	now   func() time.Time
+	sleep func(time.Duration)
 
 	mu      sync.Mutex
 	cur     *clientLogParts
 	settled uint32 // the last log answered: its late parts are ignored
+	waiting bool   // an askLoop is running
 }
 
 type clientLogParts struct {
@@ -53,10 +62,12 @@ type clientLogParts struct {
 	parts   [][]byte
 	got     int
 	started time.Time
+	last    time.Time // when the newest part came
+	asked   int       // resends asked for so far
 }
 
 func newClientLogSink(dir string, send func(control.Subtype, []byte) error) *clientLogSink {
-	return &clientLogSink{dir: dir, send: send, now: time.Now}
+	return &clientLogSink{dir: dir, send: send, now: time.Now, sleep: time.Sleep}
 }
 
 // handle is the exit's control callback: it takes client log parts and
@@ -111,7 +122,9 @@ func (c *clientLogSink) take(p control.ClientLogPart) (ack control.ClientLogAck,
 		c.cur.parts[p.Part] = append([]byte(nil), p.Data...)
 		c.cur.got++
 	}
+	c.cur.last = now
 	if c.cur.got < len(c.cur.parts) {
+		c.waitForRestLocked(p.ID)
 		return ack, false
 	}
 	data := bytes.Join(c.cur.parts, nil)
@@ -133,6 +146,67 @@ func (c *clientLogSink) take(p control.ClientLogPart) (ack control.ClientLogAck,
 		ack.Status, ack.Bytes = control.ClientLogOK, n
 	}
 	return ack, true
+}
+
+// waitForRestLocked arranges for the missing parts to be asked for once
+// the log has been quiet for clientLogGap. Caller holds c.mu.
+func (c *clientLogSink) waitForRestLocked(id uint32) {
+	if c.waiting {
+		return
+	}
+	c.waiting = true
+	go c.askLoop(id)
+}
+
+// askLoop asks for the parts of log id that have not arrived, while it
+// stays the log being assembled.
+func (c *clientLogSink) askLoop(id uint32) {
+	defer func() {
+		c.mu.Lock()
+		c.waiting = false
+		c.mu.Unlock()
+	}()
+	for {
+		c.sleep(clientLogGap)
+		c.mu.Lock()
+		cur := c.cur
+		if cur == nil || cur.id != id {
+			c.mu.Unlock()
+			return // finished, replaced, or given up on
+		}
+		if c.now().Sub(cur.last) < clientLogGap {
+			c.mu.Unlock()
+			continue // parts are still coming
+		}
+		if cur.asked >= clientLogAsks {
+			utils.Infof("[CLIENT-LOG] the client's log is %d part(s) short: giving up", len(cur.parts)-cur.got)
+			c.cur = nil
+			c.mu.Unlock()
+			return
+		}
+		cur.asked++
+		ack := control.ClientLogAck{ID: id, Status: control.ClientLogResend, Missing: missingParts(cur)}
+		c.mu.Unlock()
+		b, err := ack.Encode()
+		if err != nil {
+			return
+		}
+		utils.Debugf("[CLIENT-LOG] asking for %d missing part(s)", len(ack.Missing))
+		if err := c.send(control.SubtypeClientLogAck, b); err != nil {
+			utils.Debugf("[CLIENT-LOG] asking: %v", err)
+		}
+	}
+}
+
+// missingParts numbers the parts that have not arrived.
+func missingParts(cur *clientLogParts) []uint16 {
+	var out []uint16
+	for i, p := range cur.parts {
+		if p == nil {
+			out = append(out, uint16(i))
+		}
+	}
+	return out
 }
 
 var errClientLogTooBig = errors.New("client log: too big")

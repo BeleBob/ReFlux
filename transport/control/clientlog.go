@@ -81,6 +81,7 @@ func SplitClientLog(id uint32, data []byte) ([]ClientLogPart, error) {
 // What an exit answers a client log with.
 const (
 	ClientLogOK      = "ok"       // kept
+	ClientLogResend  = "resend"   // parts are missing: Missing lists them
 	ClientLogTooSoon = "too_soon" // the exit takes no more now: RetryAfter
 	ClientLogTooBig  = "too_big"
 	ClientLogBad     = "bad" // the parts do not make a log
@@ -96,6 +97,10 @@ type ClientLogAck struct {
 	RetryAfter int `json:"retry_after,omitempty"`
 	// Bytes, with ok: the size of the log as kept.
 	Bytes int `json:"bytes,omitempty"`
+	// Missing, with resend: the parts that have not arrived. A control
+	// message is sent once and nothing retransmits it, so a lost part
+	// would otherwise leave the log unfinished and unanswered.
+	Missing []uint16 `json:"missing,omitempty"`
 }
 
 // Encode serializes the answer to JSON.
@@ -109,6 +114,12 @@ func DecodeClientLogAck(b []byte) (ClientLogAck, error) {
 	}
 	if a.Status == "" {
 		return a, errors.New("control: a client log answer needs a status")
+	}
+	if a.Status == ClientLogResend && len(a.Missing) == 0 {
+		return a, errors.New("control: a resend names no parts")
+	}
+	if len(a.Missing) > ClientLogMaxParts {
+		return a, errors.New("control: a resend names too many parts")
 	}
 	return a, nil
 }

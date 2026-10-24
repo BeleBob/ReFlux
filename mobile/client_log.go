@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"encoding/json"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"sync"
@@ -17,8 +18,17 @@ import (
 // any control message, so only to the exit this app holds the key of. What
 // the exit takes, and how often, the exit decides; the app shows its answer.
 
-// sendLogWait is how long SendLog waits for the exit's answer.
+// sendLogWait is how long SendLog waits for the exit's answer; every
+// answer that asks for missing parts gives it that long again.
 var sendLogWait = 60 * time.Second
+
+// sendLogGap paces the parts: a log is tens of control messages, and a
+// burst of them into a carrier's queue is what the queue drops first.
+var sendLogGap = 25 * time.Millisecond
+
+// sendLogTries is how many times one part is offered to a carrier whose
+// queue is full before the log is given up on.
+const sendLogTries = 5
 
 // sendLogMaxText is the most of the log that is sent: its newest part.
 const sendLogMaxText = 1 << 20
@@ -78,19 +88,66 @@ func SendLog(text string) string {
 		delete(logAcks.waiting, id)
 		logAcks.Unlock()
 	}()
-	for _, p := range parts {
-		if err := s.SendControl(control.SubtypeClientLog, p.Encode()); err != nil {
-			appendLog("[LOG] sending the log: " + err.Error())
-			return logAnswer(control.ClientLogAck{Status: "not_connected"})
+	if err := sendLogParts(s, parts); err != nil {
+		appendLog("[LOG] sending the log: " + err.Error())
+		return logAnswer(control.ClientLogAck{Status: "not_connected"})
+	}
+	// The exit asks for whatever did not arrive (a control message is sent
+	// once and nothing retransmits it); it gives up by itself, so the
+	// rounds here are only a bound of our own.
+	for round := 0; round < control.ClientLogMaxParts; round++ {
+		select {
+		case a := <-ch:
+			if a.Status != control.ClientLogResend {
+				return logAnswer(a)
+			}
+			again := pickParts(parts, a.Missing)
+			appendLog(fmt.Sprintf("[LOG] the server is %d part(s) short: sending them again", len(again)))
+			if err := sendLogParts(s, again); err != nil {
+				appendLog("[LOG] sending the log: " + err.Error())
+				return logAnswer(control.ClientLogAck{Status: "not_connected"})
+			}
+		case <-time.After(sendLogWait):
+			return logAnswer(control.ClientLogAck{Status: "no_answer"})
 		}
 	}
-	select {
-	case a := <-ch:
-		return logAnswer(a)
-	case <-time.After(sendLogWait):
-		return logAnswer(control.ClientLogAck{Status: "no_answer"})
-	}
+	return logAnswer(control.ClientLogAck{Status: "no_answer"})
 }
+
+// sendLogParts hands the parts to the exit, paced, waiting out a carrier
+// queue that is momentarily full.
+func sendLogParts(s controlSender, parts []control.ClientLogPart) error {
+	for i, p := range parts {
+		var err error
+		for try := 0; try < sendLogTries; try++ {
+			if err = s.SendControl(control.SubtypeClientLog, p.Encode()); err == nil {
+				break
+			}
+			sleepLog(sendLogGap * time.Duration(try+2))
+		}
+		if err != nil {
+			return err
+		}
+		if i < len(parts)-1 {
+			sleepLog(sendLogGap)
+		}
+	}
+	return nil
+}
+
+// pickParts selects the numbered parts, ignoring numbers out of range.
+func pickParts(parts []control.ClientLogPart, want []uint16) []control.ClientLogPart {
+	var out []control.ClientLogPart
+	for _, n := range want {
+		if int(n) < len(parts) {
+			out = append(out, parts[n])
+		}
+	}
+	return out
+}
+
+// sleepLog is time.Sleep; tests replace it.
+var sleepLog = time.Sleep
 
 // packLog compresses the newest sendLogMaxText of text, cutting more off
 // its start while it is over what one log may take on the wire.
