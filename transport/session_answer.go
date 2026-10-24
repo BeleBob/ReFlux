@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"strings"
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport/control"
@@ -74,22 +75,46 @@ func (s *Session) unansweredLocked(l *transportLink, now time.Time) bool {
 // would leave none. Caller holds s.mu.
 func (s *Session) answeringLocked(heard []*transportLink, now time.Time) []*transportLink {
 	out := heard
+	// Following the client's data is the ordinary case - a client sends
+	// where it hears us - so it is logged as a change of carrier, and only
+	// a carrier that answers nothing is reported as broken.
 	if s.exit && s.peerDataWindow > 0 {
 		if f := keepLinks(out, func(l *transportLink) bool { return now.Sub(l.dataHeard) < s.peerDataWindow }); len(f) > 0 {
+			if s.logFollowed(f) {
+				utils.Infof("[SESSION] the client's data comes in on %v: answering there", linkNames(f))
+			}
 			out = f
 		}
 	}
 	if f := keepLinks(out, func(l *transportLink) bool { return !s.unansweredLocked(l, now) }); len(f) > 0 {
+		// Per session: an app with several exits running has one Session
+		// each, and one must not silence another's report.
+		if len(f) < len(out) && utils.Throttled("session.unanswered."+shortID(s.local), time.Minute) {
+			utils.Infof("[SESSION] %v carry nothing back from the peer: sending on %v", linkNames(leftOut(out, f)), linkNames(f))
+		}
 		out = f
 	}
-	if len(out) < len(heard) && utils.Throttled("session.answering", time.Minute) {
-		var left []string
-		for _, l := range heard {
-			if !containsLink(out, l) {
-				left = append(left, l.name)
-			}
+	return out
+}
+
+// logFollowed reports whether the carriers the exit answers on have
+// changed since it last said so. Caller holds s.mu.
+func (s *Session) logFollowed(links []*transportLink) bool {
+	names := strings.Join(linkNames(links), " ")
+	if names == s.followed {
+		return false
+	}
+	s.followed = names
+	return true
+}
+
+// leftOut lists the links of all that kept does not hold.
+func leftOut(all, kept []*transportLink) []*transportLink {
+	var out []*transportLink
+	for _, l := range all {
+		if !containsLink(kept, l) {
+			out = append(out, l)
 		}
-		utils.Infof("[SESSION] %v carry nothing back from the peer: sending on %v", left, linkNames(out))
 	}
 	return out
 }
