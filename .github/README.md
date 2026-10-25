@@ -1,8 +1,5 @@
 <div align="center">
-  <h1>
-    <img src="logo.svg" width="110" align="middle" alt="">
-    ReFlux
-  </h1>
+  <h1>ReFlux</h1>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Последний релиз"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="Статус CI"></a>
