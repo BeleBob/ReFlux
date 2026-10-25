@@ -1,7 +1,8 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="ReFlux logo">
-  <h1>ReFlux</h1>
-  <p>The ReFlux tunnel server: exit nodes in Docker for several clients, out to the internet only through AmneziaWG.</p>
+  <h1>
+    <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="64" alt="">
+    ReFlux
+  </h1>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Latest release"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -25,10 +26,6 @@ It is managed from the command line, a Telegram bot and a web panel.
 
 **[Download the latest release](https://github.com/BeleBob/ReFlux/releases/latest)** ·
 **[The Android app](https://github.com/BeleBob/ReFlux-Android)**
-
-```text
-Client -> Mail.ru / Yandex document -> the client's node -> egress: AmneziaWG tunnels -> Internet
-```
 
 ## Contents
 - [Features](#features)
@@ -63,7 +60,7 @@ Client -> Mail.ru / Yandex document -> the client's node -> egress: AmneziaWG tu
 - AmneziaWG configuration files for the outgoing tunnels.
 
 ### Install
-Run as the user who will manage the server (not root):
+Run as the user who will manage the server:
 
 ```sh
 curl -fsSL https://github.com/BeleBob/ReFlux/releases/latest/download/install.sh | sh

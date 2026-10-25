@@ -1,7 +1,8 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="Логотип ReFlux">
-  <h1>ReFlux</h1>
-  <p>Сервер туннелей ReFlux: exit-ноды в Docker для нескольких клиентов, выход в интернет только через AmneziaWG.</p>
+  <h1>
+    <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="64" alt="">
+    ReFlux
+  </h1>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Последний релиз"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="Статус CI"></a>
@@ -26,10 +27,6 @@ ReFlux — сервер туннелей: разворачивает и обсл
 
 **[Скачать последний релиз](https://github.com/BeleBob/ReFlux/releases/latest)** ·
 **[Приложение для Android](https://github.com/BeleBob/ReFlux-Android)**
-
-```text
-Клиент -> документ Mail.ru / Яндекса -> нода клиента -> egress: туннели AmneziaWG -> Интернет
-```
 
 ## Содержание
 - [Возможности](#возможности)
@@ -67,7 +64,7 @@ ReFlux — сервер туннелей: разворачивает и обсл
 - Конфигурационные файлы AmneziaWG для исходящих туннелей.
 
 ### Установка
-Выполните от имени пользователя, который будет управлять сервером (не root):
+Выполните от имени пользователя, который будет управлять сервером:
 
 ```sh
 curl -fsSL https://github.com/BeleBob/ReFlux/releases/latest/download/install.sh | sh
