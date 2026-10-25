@@ -1,6 +1,6 @@
 <div align="center">
   <h1>
-    <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="64" align="middle" alt="">
+    <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="40" align="middle" alt="">
     ReFlux
   </h1>
   <p>
