@@ -1,6 +1,6 @@
 <div align="center">
   <h1>
-    <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/logo.svg" width="64" align="middle" alt="">
+    <img src="logo.svg" width="110" align="middle" alt="">
     ReFlux
   </h1>
   <p>
@@ -36,6 +36,7 @@ It is managed from the command line, a Telegram bot and a web panel.
 - [Contributing](#contributing)
 - [To do](#to-do)
 - [Origin and license](#origin-and-license)
+- [Disclaimer](#disclaimer)
 
 ## Features
 - **Isolated clients.** Every client runs in a container of its own with its
@@ -149,3 +150,19 @@ core's documentation is the [OpenFlux README](../README.md).
 
 It is distributed under the GNU GPL v3.0 or any later version: see
 [LICENSE](../LICENSE), [COPYRIGHT](../COPYRIGHT) and [NOTICE](../NOTICE).
+
+## Disclaimer
+The program is provided "as is", without warranty of any kind, including
+fitness for a particular purpose and uninterrupted operation (sections 15 and
+16 of the [license](../LICENSE)). The authors are not liable for any damage,
+direct or indirect, arising from its use.
+
+How you use it is your own responsibility, as is keeping to the laws of your
+country, your provider's terms and the rules of the services the traffic goes
+through. ReFlux is not affiliated with, nor endorsed by, Mail.ru, Yandex,
+cups.online, MAX, Avito, AmneziaWG, Docker, GitHub or any other company or
+service named here; it uses only their public interfaces, and such use may sit
+at odds with their terms of service.
+
+The project exists to study network protocols and for personal access to the
+network. Do not use it to break the law or anyone's rights.
