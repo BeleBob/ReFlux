@@ -1,7 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="ReFlux logo">
   <h1>ReFlux</h1>
-  <p>The ReFlux tunnel server: exit nodes in Docker for several clients, out to the internet only through AmneziaWG.</p>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Latest release"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -26,10 +24,6 @@ It is managed from the command line, a Telegram bot and a web panel.
 **[Download the latest release](https://github.com/BeleBob/ReFlux/releases/latest)** ·
 **[The Android app](https://github.com/BeleBob/ReFlux-Android)**
 
-```text
-Client -> Mail.ru / Yandex document -> the client's node -> egress: AmneziaWG tunnels -> Internet
-```
-
 ## Contents
 - [Features](#features)
 - [Usage](#usage)
@@ -39,6 +33,7 @@ Client -> Mail.ru / Yandex document -> the client's node -> egress: AmneziaWG tu
 - [Contributing](#contributing)
 - [To do](#to-do)
 - [Origin and license](#origin-and-license)
+- [Disclaimer](#disclaimer)
 
 ## Features
 - **Isolated clients.** Every client runs in a container of its own with its
@@ -63,7 +58,7 @@ Client -> Mail.ru / Yandex document -> the client's node -> egress: AmneziaWG tu
 - AmneziaWG configuration files for the outgoing tunnels.
 
 ### Install
-Run as the user who will manage the server (not root):
+Run as the user who will manage the server:
 
 ```sh
 curl -fsSL https://github.com/BeleBob/ReFlux/releases/latest/download/install.sh | sh
@@ -152,3 +147,19 @@ core's documentation is the [OpenFlux README](../README.md).
 
 It is distributed under the GNU GPL v3.0 or any later version: see
 [LICENSE](../LICENSE), [COPYRIGHT](../COPYRIGHT) and [NOTICE](../NOTICE).
+
+## Disclaimer
+The program is provided "as is", without warranty of any kind, including
+fitness for a particular purpose and uninterrupted operation (sections 15 and
+16 of the [license](../LICENSE)). The authors are not liable for any damage,
+direct or indirect, arising from its use.
+
+How you use it is your own responsibility, as is keeping to the laws of your
+country, your provider's terms and the rules of the services the traffic goes
+through. ReFlux is not affiliated with, nor endorsed by, Mail.ru, Yandex,
+cups.online, MAX, Avito, AmneziaWG, Docker, GitHub or any other company or
+service named here; it uses only their public interfaces, and such use may sit
+at odds with their terms of service.
+
+The project exists to study network protocols and for personal access to the
+network. Do not use it to break the law or anyone's rights.

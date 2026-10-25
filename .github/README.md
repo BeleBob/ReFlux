@@ -1,7 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/BeleBob/ReFlux-Android/main/design/logo/icon.svg" width="112" alt="Логотип ReFlux">
   <h1>ReFlux</h1>
-  <p>Сервер туннелей ReFlux: exit-ноды в Docker для нескольких клиентов, выход в интернет только через AmneziaWG.</p>
   <p>
     <a href="https://github.com/BeleBob/ReFlux/releases/latest"><img src="https://img.shields.io/github/v/release/BeleBob/ReFlux?filter=reflux-v*&amp;display_name=tag&amp;style=flat-square&amp;color=EA1A1A&amp;label=release" alt="Последний релиз"></a>
     <a href="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml"><img src="https://github.com/BeleBob/ReFlux/actions/workflows/ci.yml/badge.svg" alt="Статус CI"></a>
@@ -27,10 +25,6 @@ ReFlux — сервер туннелей: разворачивает и обсл
 **[Скачать последний релиз](https://github.com/BeleBob/ReFlux/releases/latest)** ·
 **[Приложение для Android](https://github.com/BeleBob/ReFlux-Android)**
 
-```text
-Клиент -> документ Mail.ru / Яндекса -> нода клиента -> egress: туннели AmneziaWG -> Интернет
-```
-
 ## Содержание
 - [Возможности](#возможности)
 - [Использование](#использование)
@@ -40,6 +34,7 @@ ReFlux — сервер туннелей: разворачивает и обсл
 - [Contributing](#contributing)
 - [To do](#to-do)
 - [Происхождение и лицензия](#происхождение-и-лицензия)
+- [Отказ от ответственности](#отказ-от-ответственности)
 
 ## Возможности
 - **Изоляция клиентов.** Для каждого клиента запускается отдельный контейнер
@@ -67,7 +62,7 @@ ReFlux — сервер туннелей: разворачивает и обсл
 - Конфигурационные файлы AmneziaWG для исходящих туннелей.
 
 ### Установка
-Выполните от имени пользователя, который будет управлять сервером (не root):
+Выполните от имени пользователя, который будет управлять сервером:
 
 ```sh
 curl -fsSL https://github.com/BeleBob/ReFlux/releases/latest/download/install.sh | sh
@@ -159,3 +154,19 @@ ReFlux — изменённая версия [OpenFlux](https://github.com/p1nea
 
 Распространяется по лицензии GNU GPL v3.0 или более поздней версии: см.
 [LICENSE](../LICENSE), [COPYRIGHT](../COPYRIGHT) и [NOTICE](../NOTICE).
+
+## Отказ от ответственности
+Программа распространяется «как есть», без каких-либо гарантий — в том числе
+гарантий пригодности для конкретной цели и бесперебойной работы (разделы 15 и
+16 [лицензии](../LICENSE)). Авторы не отвечают за любой ущерб, прямой или
+косвенный, возникший при её использовании.
+
+Вы сами отвечаете за то, как её применяете, и за соблюдение законов своей
+страны, условий своего провайдера и правил тех сервисов, через которые идёт
+трафик. ReFlux не связан с Mail.ru, Яндексом, cups.online, MAX, Avito,
+AmneziaWG, Docker, GitHub и другими упомянутыми компаниями и сервисами, не
+одобрен ими и использует их только как общедоступные интерфейсы; такое
+применение может расходиться с их пользовательскими соглашениями.
+
+Проект создан для изучения сетевых протоколов и личного доступа к сети.
+Не используйте его для нарушения закона или чужих прав.
