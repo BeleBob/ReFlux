@@ -345,7 +345,7 @@ var Messages = map[string][2]string{
 	"web.add.url.hint":     {"mail.ru, Yandex Documents or Boards, anyone with the link can edit; a new document for every client.", "mail.ru, Яндекс Документы или Доски, доступ по ссылке с редактированием; для каждого клиента новый документ."},
 	"web.add.who":          {"Client", "Клиент"},
 	"web.add.note":         {"Note", "Заметка"},
-	"web.add.note.example": {"e.g. Dima's phone", "например, телефон Димы"},
+	"web.add.note.example": {"e.g. Moron", "например, Дебил"},
 	"web.add.note.hint":    {"Who or what it is: shown on the panel and in the bot. Optional.", "Кто это или какое устройство: видно на сайте и в боте. Можно не заполнять."},
 	"web.add.note.long":    {"The note is too long: %d characters at most.", "Заметка слишком длинная: не больше %d символов."},
 	"web.add.tg.hint":      {"Link the client to a Telegram account the bot knows.", "Привязать клиента к аккаунту Telegram, который уже знает бот."},
