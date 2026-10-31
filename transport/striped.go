@@ -63,6 +63,12 @@ type StripedTransport struct {
 	watched map[string]bool
 	watchAt time.Time
 
+	// peerGot is what the far side says it has taken off each lane, by lane
+	// index; it rides its acks (see withLaneCounts) and reviveLoop compares
+	// it with what this side put there.
+	peerGotMu sync.Mutex
+	peerGot   []uint32
+
 	snd sender
 	asm []byte // frame being reassembled (delivery goroutine only)
 
@@ -428,6 +434,7 @@ func (s *StripedTransport) Start() error {
 	go s.ackLoop()
 	go s.lossLoop()
 	go s.statsLoop()
+	go s.reviveLoop(newReviveSettings())
 	if _, ok := s.src.(WatchSource); ok {
 		go s.watchLoop()
 	}
@@ -558,6 +565,7 @@ func (s *StripedTransport) onLane(lane int, b []byte) {
 	}
 	if len(b) >= ackHeader && b[0] == stripeAckMagic {
 		s.ackRecv.Add(1)
+		s.takeLaneCounts(b)
 		if s.snd.onAck(b, time.Now()) {
 			s.wakePumps()
 		}
@@ -600,7 +608,7 @@ func (s *StripedTransport) ackLoop() {
 				continue
 			}
 			lastGen, lastAt = gen, now
-			s.snd.setAck(s.ro.ackFrame())
+			s.snd.setAck(s.withLaneCounts(s.ro.ackFrame()))
 			s.ackSent.Add(1)
 			s.wakePumps()
 		}
