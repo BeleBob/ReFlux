@@ -8,6 +8,12 @@ name: ReFlux images
 #
 # Tags: "main" and "sha-<commit>" for pushes to main; "<version>" and
 # "latest" for a reflux-v<version> git tag.
+#
+# A push to main builds only the images whose content changed since the
+# commit the published one was built from (deploy/reflux/image-changed.sh):
+# a new digest is a server update the owner's bot offers, and a change to
+# the app or the host CLI alone must not offer one. Tags, pull requests and
+# manual runs always build.
 on:
   push:
     branches: [main]
@@ -48,15 +54,38 @@ jobs:
                 rc=0; reflux-egress bogus || rc=$?; test "$rc" -eq 2'
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-buildx-action@v3
+        with:
+          # The commit the published image was built from, for the diff.
+          fetch-depth: 0
 
       - name: Image name
         id: image
         # GHCR needs a lowercase repository path.
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reflux-${{ matrix.name }}" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-go@v5
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          go-version-file: go.mod
+
+      - name: Changed
+        id: changed
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          build=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            base=$(deploy/reflux/image-revision.sh "$IMAGE:main")
+            build=$(deploy/reflux/image-changed.sh ${{ matrix.name }} "${base:-none}" "$GITHUB_SHA")
+            [ "$build" = true ] || echo "::notice::$IMAGE:main stays at ${base}: nothing in it changed"
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.changed.outputs.build == 'true'
+
       - uses: docker/metadata-action@v5
+        if: steps.changed.outputs.build == 'true'
         id: meta
         with:
           images: ${{ steps.image.outputs.name }}
@@ -71,6 +100,7 @@ jobs:
             org.opencontainers.image.licenses=GPL-3.0-or-later
 
       - name: Build
+        if: steps.changed.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -82,19 +112,20 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
       - name: Smoke test
+        if: steps.changed.outputs.build == 'true'
         env:
           IMAGE: reflux-${{ matrix.name }}:ci
         run: ${{ matrix.smoke }}
 
       - uses: docker/login-action@v3
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.changed.outputs.build == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && steps.changed.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
