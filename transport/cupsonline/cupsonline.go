@@ -601,6 +601,10 @@ type cupsWS struct {
 
 	ctx       context.Context
 	connected atomic.Bool
+	// needRejoin asks run() to enter the room again (fresh tokens) instead of
+	// reconnecting with the ones it has: set when the room's subscription has
+	// gone one-way (see cupsLane.ReviveLane).
+	needRejoin atomic.Bool
 
 	// recvBufs reassemble each peer's byte stream across messages (one packet
 	// may be split over several), one buffer per room member: when two members
@@ -711,7 +715,7 @@ func (w *cupsWS) run() {
 		// it said so just by hanging up. A connection that was working and
 		// dropped just reconnects: a join is two page loads, and a reconnect
 		// storm of those is how an IP gets rate-limited.
-		needJoin = errors.Is(err, errRefused) || (!wasReady && fails%2 == 0)
+		needJoin = errors.Is(err, errRefused) || (!wasReady && fails%2 == 0) || w.needRejoin.Swap(false)
 		if !sleepCtx(w.ctx, w.retryDelay(delay)) {
 			return
 		}

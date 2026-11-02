@@ -101,6 +101,20 @@ func (l *cupsLane) Stats() transport.TransportStats {
 // SetFrameSource implements transport.FramePuller.
 func (l *cupsLane) SetFrameSource(src func(max int) [][]byte) { l.ws.pull.Store(&src) }
 
+// ReviveLane implements transport.LaneReviver. A room's subscription can go
+// one-way - the socket is up and takes what we publish, and nothing the peer
+// publishes there arrives any more - and only this side can tell, by what the
+// other rooms bring. Hanging up makes run() reconnect and subscribe again;
+// the hard way enters the room first, for fresh tokens.
+func (l *cupsLane) ReviveLane(hard bool) {
+	if hard {
+		l.ws.needRejoin.Store(true)
+	}
+	if c := l.ws.currentConn(); c != nil {
+		_ = c.Close()
+	}
+}
+
 // Wake implements transport.LaneWaker.
 func (l *cupsLane) Wake() {
 	select {
