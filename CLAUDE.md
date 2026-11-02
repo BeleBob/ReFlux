@@ -198,7 +198,9 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   `deploy/reflux/host/reflux-egress-route.service` (host `ip rule`, tied to awg0),
   `docs/reflux/SERVER.ru.md` (operator guide).
 - Workflows: `reflux-images.yml` (reflux-node + reflux-egress → GHCR; `main`,
-  and `<version>` + `latest` for a `reflux-v*` tag), `reflux-release.yml`
+  and `<version>` + `latest` for a `reflux-v*` tag; a push to main builds an
+  image only when `deploy/reflux/image-changed.sh` finds its inputs changed
+  since the published one's commit, so the bot offers no empty update), `reflux-release.yml`
   (`reflux-v*` tag → reflux binaries built with `-X main.releaseVersion=<v>
   -X main.imageTag=latest`, the installer, SHA256SUMS, notes from the version's
   section of `docs/reflux/CHANGELOG.md`, which `TestChangelog` checks). Add
