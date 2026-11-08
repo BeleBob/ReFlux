@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 )
@@ -19,7 +18,8 @@ import (
 // all of its rooms are gone; nobody but its log learns their list.
 
 // CreateRooms creates n rooms and returns their packed list in the striped
-// format, what an exit started without --url prints, and how many rooms it
+// format with their session (v3), what an exit started without --url
+// prints, and how many rooms it
 // holds: fewer than n when cups.online refused some of them.
 func CreateRooms(ctx context.Context, n int) (list string, made int, err error) {
 	if n < 1 || n > transport.MaxLanes() {
@@ -29,25 +29,22 @@ func CreateRooms(ctx context.Context, n int) (list string, made int, err error) 
 	if err != nil {
 		return "", 0, err
 	}
-	ids := make([]string, len(auths))
-	for i, a := range auths {
-		ids[i] = a.roomUUID
-	}
-	return transport.PackRooms(ids, true), len(ids), nil
+	return packCreated(auths, baseRoomURL, true), len(auths), nil
 }
 
 // CheckRooms says how many rooms of a packed list are gone, of how many.
 // Only the server's word counts: a room page that answers 404 or 410, or
-// renders without the room or with another room in its place. A room that
+// that the list's session may not see (403), or renders without the room or
+// with another room in its place. A room that
 // could not be told (the network, a refusal) is not counted, and err says
 // why. It only loads each room's page and never joins the room's channel.
 func CheckRooms(ctx context.Context, list string) (gone, total int, err error) {
-	ids, _ := parseRooms(list)
-	if len(ids) == 0 {
+	l := parseRooms(list)
+	if len(l.ids) == 0 {
 		return 0, 0, errors.New("cups: not a room list")
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	for _, id := range ids {
+	client := sessionFor(baseRoomURL, l.sid)
+	for _, id := range l.ids {
 		g, e := roomGone(ctx, client, baseRoomURL, id)
 		switch {
 		case e != nil:
@@ -56,7 +53,7 @@ func CheckRooms(ctx context.Context, list string) (gone, total int, err error) {
 			gone++
 		}
 	}
-	return gone, len(ids), err
+	return gone, len(l.ids), err
 }
 
 // roomGone loads one room's page.
@@ -76,6 +73,8 @@ func roomGone(ctx context.Context, client *http.Client, baseURL, id string) (boo
 	resp.Body.Close()
 	switch {
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+		return true, nil
+	case noAccess(resp.StatusCode, body):
 		return true, nil
 	case resp.StatusCode != http.StatusOK:
 		return false, fmt.Errorf("room %s: status %d", shortRoom(id), resp.StatusCode)

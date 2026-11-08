@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"regexp"
@@ -188,6 +187,9 @@ type cupsAuth struct {
 	channel    string
 	httpClient *http.Client
 	csrfToken  string
+	// sessionUntil is when the sessionid cookie this page set expires; zero
+	// when the page set none (the session was an earlier one).
+	sessionUntil time.Time
 }
 
 // authorize loads a room page and collects what it takes to join the room's
@@ -196,17 +198,7 @@ type cupsAuth struct {
 func authorize(ctx context.Context, roomURL string, session *http.Client) (*cupsAuth, error) {
 	client := session
 	if client == nil {
-		jar, _ := cookiejar.New(nil)
-		client = &http.Client{
-			Jar:     jar,
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		}
+		client = newHTTPSession()
 	}
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", roomURL, nil)
@@ -223,6 +215,11 @@ func authorize(ctx context.Context, roomURL string, session *http.Client) (*cups
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return nil, fmt.Errorf("%w: GET room status %d", errRoomGone, resp.StatusCode)
 	}
+	if noAccess(resp.StatusCode, body) {
+		// Not this room's creator, or its session has expired: as good as
+		// gone for us.
+		return nil, fmt.Errorf("%w: GET room status 403, нет доступа", errRoomGone)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("GET room status %d", resp.StatusCode)
 	}
@@ -235,6 +232,16 @@ func authorize(ctx context.Context, roomURL string, session *http.Client) (*cups
 		connURL:    firstMatch(reMetaConnURL, html),
 		subURL:     firstMatch(reMetaSubURL, html),
 		httpClient: client,
+	}
+	for _, c := range resp.Cookies() {
+		if c.Name != "sessionid" {
+			continue
+		}
+		if c.MaxAge > 0 {
+			a.sessionUntil = time.Now().Add(time.Duration(c.MaxAge) * time.Second)
+		} else if !c.Expires.IsZero() {
+			a.sessionUntil = c.Expires
+		}
 	}
 	for _, c := range client.Jar.Cookies(mustParseURL(roomURL)) {
 		if c.Name == "csrftoken" {
@@ -409,31 +416,31 @@ func fmtUptime(d time.Duration) string {
 // parseRoomList pulls room uuids out of --url: the packed base64 list the
 // exit node prints, bare or as ?rooms=, or a single ?room=.
 func parseRoomList(rawURL string) []string {
-	ids, _ := parseRooms(rawURL)
-	return ids
+	return parseRooms(rawURL).ids
 }
 
 // parseRooms is parseRoomList plus whether the list is in the striped format
-// (transport.PackRooms): a single ?room= (a phpbox exit) never is.
-func parseRooms(rawURL string) ([]string, bool) {
+// (transport.PackRooms) and the session of a v3 list (session_rooms.go): a
+// single ?room= (a phpbox exit) has neither.
+func parseRooms(rawURL string) roomList {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
-		return nil, false
+		return roomList{}
 	}
 	if u, err := url.Parse(rawURL); err == nil {
 		q := u.Query()
 		if packed := q.Get("rooms"); packed != "" {
-			if ids, striped, err := transport.UnpackRooms(packed); err == nil {
-				return ids, striped
+			if l, err := unpackRoomList(packed); err == nil {
+				return l
 			}
 		} else if single := q.Get("room"); single != "" {
-			return []string{single}, false
+			return roomList{ids: []string{single}}
 		}
 	}
-	if ids, striped, err := transport.UnpackRooms(rawURL); err == nil {
-		return ids, striped
+	if l, err := unpackRoomList(rawURL); err == nil {
+		return l
 	}
-	return nil, false
+	return roomList{}
 }
 
 func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration) ([]*cupsAuth, error) {
@@ -446,10 +453,13 @@ func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration
 		delay = 150 * time.Millisecond
 	}
 	var lastErr error
+	// All the rooms are made in one session, so one cookie enters them all
+	// (see session_rooms.go).
+	var session *http.Client
 	for i := 0; i < n; i++ {
 		var a *cupsAuth
 		for attempt := 0; attempt < 6; attempt++ {
-			a, lastErr = authorize(ctx, baseURL, nil)
+			a, lastErr = authorize(ctx, baseURL, session)
 			if lastErr == nil {
 				break
 			}
@@ -472,6 +482,7 @@ func createRooms(ctx context.Context, baseURL string, n int, pause time.Duration
 			utils.Debugf("[CUPS] room %d skipped: %v", i+1, lastErr)
 			continue
 		}
+		session = a.httpClient
 		out = append(out, a)
 		utils.Debugf("[CUPS] created room %d/%d: %s", i+1, n, a.roomUUID)
 		if i < n-1 && !sleepCtx(ctx, delay) {
@@ -497,11 +508,22 @@ func CreateRoomList(ctx context.Context) (string, error) {
 		}
 		return "", err
 	}
+	return packCreated(auths, baseRoomURL, stripeNewRooms()), nil
+}
+
+// packCreated packs the list of rooms createRooms made: a striped list
+// carries their session (v3).
+func packCreated(auths []*cupsAuth, baseURL string, striped bool) string {
 	ids := make([]string, len(auths))
 	for i, a := range auths {
 		ids[i] = a.roomUUID
 	}
-	return transport.PackRooms(ids, stripeNewRooms()), nil
+	if striped {
+		if sid, until := sessionOf(auths[0], baseURL); sid != "" {
+			return packSessionRooms(ids, sid, until)
+		}
+	}
+	return transport.PackRooms(ids, striped)
 }
 
 // CreateRoom creates one room and returns its uuid: what a phpbox exit, which
@@ -584,6 +606,11 @@ type cupsWS struct {
 	authPtr atomic.Pointer[cupsAuth]
 	// session keeps the cookies between joins (run's goroutine only).
 	session *http.Client
+	// sid is the session of a v3 list that a fresh session starts from.
+	sid string
+	// tag marks this end's messages on the v3 wire (session_rooms.go); nil
+	// on the older wires, where the sender's user uuid tells them apart.
+	tag []byte
 
 	// dead is set while the room looks closed; onRoomState reports the
 	// change so the operator can see when (and after how long) it happened.
@@ -741,6 +768,9 @@ func (w *cupsWS) backoff(delay time.Duration) time.Duration {
 // join enters the room for fresh tokens, in the same session as before. This
 // is also where a closed room shows itself.
 func (w *cupsWS) join() error {
+	if w.session == nil && w.sid != "" {
+		w.session = sessionFor(w.baseURL, w.sid)
+	}
 	a, err := joinRoom(w.ctx, w.baseURL, w.roomUUID, w.session)
 	if err != nil {
 		// Next time from a clean session, in case this one is what's broken.
@@ -1134,9 +1164,10 @@ func (w *cupsWS) sendChunk(chunk []byte) error {
 // sendChunkID is sendChunk with the command id chosen by the caller, so the
 // striped puller can track the id it just put in flight.
 func (w *cupsWS) sendChunkID(chunk []byte, id int64) error {
-	payload := make([]byte, 2+len(chunk))
-	binary.BigEndian.PutUint16(payload[:2], uint16(len(chunk)))
-	copy(payload[2:], chunk)
+	payload := make([]byte, 2+len(w.tag)+len(chunk))
+	binary.BigEndian.PutUint16(payload[:2], uint16(len(w.tag)+len(chunk)))
+	copy(payload[2:], w.tag)
+	copy(payload[2+len(w.tag):], chunk)
 
 	msg := map[string]interface{}{
 		"rpc": map[string]interface{}{
@@ -1274,7 +1305,7 @@ func (w *cupsWS) handleReply(raw []byte) {
 		return
 	}
 	sender, _ := payload["user_uuid"].(string)
-	if sender == w.auth().userUUID {
+	if w.tag == nil && sender == w.auth().userUUID {
 		return
 	}
 	cursors, _ := payload["cursors"].([]interface{})
@@ -1306,6 +1337,14 @@ func (w *cupsWS) handleReply(raw []byte) {
 		return
 	}
 	chunk := decoded[2 : 2+dataLen]
+	if w.tag != nil {
+		// Both ends are one participant here: our own messages come back
+		// too, and only the tag tells them from the peer's.
+		if len(chunk) < senderTagLen || bytes.Equal(chunk[:senderTagLen], w.tag) {
+			return
+		}
+		chunk = chunk[senderTagLen:]
+	}
 	if w.framed {
 		w.readWhole(chunk)
 		return
@@ -1418,7 +1457,11 @@ type CupsonlineTransport struct {
 	baseURL string
 	// roomIDs are the rooms to join, from --url. Empty on an exit node
 	// means "create new ones"; a client can't start without them.
-	roomIDs   []string
+	roomIDs []string
+	// sid is the session the rooms are entered with (a v3 list, or the
+	// rooms an exit created); "" enters each room in a fresh one.
+	sid       string
+	until     time.Time
 	config    CupsonlineConfig
 	isClient  bool
 	clientErr error
@@ -1484,7 +1527,8 @@ func NewCupsonlineTransport(rawURL string, cfg transport.TransportConfig, isClie
 	// Both roles accept a room list: the client always needs one, and an
 	// exit node given one re-joins those rooms instead of creating new
 	// ones, so a restart doesn't hand the phone a new string every time.
-	t.roomIDs, t.striped = parseRooms(rawURL)
+	l := parseRooms(rawURL)
+	t.roomIDs, t.striped, t.sid, t.until = l.ids, l.striped, l.sid, l.until
 	if len(t.roomIDs) == 0 && !isClient {
 		t.striped = stripeNewRooms()
 	}
@@ -1518,6 +1562,10 @@ func (t *CupsonlineTransport) Start() error {
 	}
 
 	joinedAt := time.Now()
+	var tag []byte
+	if t.sid != "" {
+		tag = newSenderTag(t.isClient)
+	}
 	wss := make([]*cupsWS, len(slots))
 	for i, s := range slots {
 		ws := &cupsWS{
@@ -1533,6 +1581,8 @@ func (t *CupsonlineTransport) Start() error {
 			wake:        make(chan struct{}, 1),
 			window:      t.config.SendWindow,
 			framed:      t.striped,
+			sid:         t.sid,
+			tag:         tag,
 			stats:       &channelStats{idx: i, roomUUID: s.id},
 		}
 		// Command ids 1 and 2 are connect and subscribe.
@@ -1616,8 +1666,12 @@ func (t *CupsonlineTransport) enterRooms() ([]roomSlot, error) {
 		slots[i] = roomSlot{id: a.roomUUID, auth: a}
 		ids[i] = a.roomUUID
 	}
+	t.sid, t.until = "", time.Time{}
+	if t.striped {
+		t.sid, t.until = sessionOf(auths[0], t.baseURL)
+	}
 	fmt.Printf("\n=== COPY THIS TO CLIENT ===\n")
-	fmt.Printf("%s\n", transport.PackRooms(ids, t.striped))
+	fmt.Printf("%s\n", t.packList(ids))
 	fmt.Printf("===========================\n")
 	fmt.Printf("Save it and pass it back as --url to reuse these rooms after a restart.\n\n")
 	t.setRoomList(ids)
@@ -1642,7 +1696,7 @@ func (t *CupsonlineTransport) OnRoomList(f func(packed string)) {
 }
 
 func (t *CupsonlineTransport) setRoomList(ids []string) {
-	packed := transport.PackRooms(ids, t.striped)
+	packed := t.packList(ids)
 	t.roomsMu.Lock()
 	changed := packed != t.roomList
 	t.roomList = packed
@@ -1651,6 +1705,14 @@ func (t *CupsonlineTransport) setRoomList(ids []string) {
 	if changed && f != nil {
 		f(packed)
 	}
+}
+
+// packList packs ids the way this transport's rooms are entered.
+func (t *CupsonlineTransport) packList(ids []string) string {
+	if t.sid != "" {
+		return packSessionRooms(ids, t.sid, t.until)
+	}
+	return transport.PackRooms(ids, t.striped)
 }
 
 // joinListed enters all the listed rooms at once rather than one by one: on
@@ -1664,7 +1726,11 @@ func (t *CupsonlineTransport) joinListed() []roomSlot {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slots[i].auth, slots[i].err = joinRoom(t.ctx, t.baseURL, id, nil)
+			var session *http.Client
+			if t.sid != "" {
+				session = sessionFor(t.baseURL, t.sid)
+			}
+			slots[i].auth, slots[i].err = joinRoom(t.ctx, t.baseURL, id, session)
 		}()
 	}
 	wg.Wait()

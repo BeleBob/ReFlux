@@ -6,8 +6,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
 // startStripedPair is startPair on the striped wire: the exit creates the
@@ -17,8 +15,8 @@ func startStripedPair(t *testing.T, cfg CupsonlineConfig) (exit, client *peer) {
 	t.Setenv("CUPS_STRIPE", "")
 	exit = mustStart(t, "", false, cfg)
 	list := exit.RoomList()
-	if _, striped, err := transport.UnpackRooms(list); err != nil || !striped {
-		t.Fatalf("exit printed %q (striped=%v, %v), want a striped list", list, striped, err)
+	if l, err := unpackRoomList(list); err != nil || !l.striped || l.sid == "" {
+		t.Fatalf("exit printed %q (%+v, %v), want a striped list with its session", list, l, err)
 	}
 	client = mustStart(t, list, true, cfg)
 	if !client.striped {

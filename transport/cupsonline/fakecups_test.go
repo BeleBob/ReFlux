@@ -36,6 +36,11 @@ type fakeCups struct {
 	// redirectGone makes a closed room's page hand out a brand-new room, the
 	// way cups does, instead of a 404.
 	redirectGone bool
+	// owners is each room's creator session; with ownerOnly any other
+	// session gets 403 on the room's page, as cups.online has done since
+	// November 2026.
+	owners    map[string]string
+	ownerOnly bool
 	// pack sends a ping and the push in one frame, one per line.
 	pack bool
 	// stall makes page loads hang until it's closed, like a dead network.
@@ -67,6 +72,7 @@ func newFakeCups(t *testing.T) *fakeCups {
 		conns:     map[*fakeConn]bool{},
 		pageHits:  map[string]int{},
 		failPages: map[string]int{},
+		owners:    map[string]string{},
 	}
 	// These tests drive the round-robin wire; stripe_test.go turns the
 	// stripe back on for its own.
@@ -111,15 +117,15 @@ func (f *fakeCups) page(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	user := ""
+	user, session := "", ""
 	if c, err := r.Cookie("sessionid"); err == nil {
-		user = f.users[c.Value]
+		user, session = f.users[c.Value], c.Value
 	}
 	if user == "" {
-		session := newUUID()
+		session = newUUID()
 		user = newUUID()
 		f.users[session] = user
-		http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: session, Path: "/"})
+		http.SetCookie(w, &http.Cookie{Name: "sessionid", Value: session, Path: "/", MaxAge: 1209600})
 	}
 	http.SetCookie(w, &http.Cookie{Name: "csrftoken", Value: "csrf-" + user, Path: "/"})
 
@@ -136,9 +142,14 @@ func (f *fakeCups) page(w http.ResponseWriter, r *http.Request) {
 	case room == "" || (known && !open && f.redirectGone):
 		room = newUUID()
 		f.rooms[room] = true
+		f.owners[room] = session
 		f.created++
 	case !open:
 		http.NotFound(w, r)
+		return
+	case f.ownerOnly && f.owners[room] != session:
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `<html><body><p>Отсутствуют права доступа на эту страницу. Обратитесь к администратору.</p></body></html>`)
 		return
 	}
 	fmt.Fprintf(w, `<html><head>
