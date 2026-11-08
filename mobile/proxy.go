@@ -26,6 +26,8 @@ type proxyState struct {
 	transport transport.Transport
 	tun       *tunnel.TCPTunnel
 	server    *socks5.SOCKS5Server
+	// gen counts starts and stops, as packetClient.gen does.
+	gen uint64
 	// stream is the phpbox stream-mode proxy (StartStreamProxy) when that is what runs.
 	stream *streamproxy.Proxy
 }
@@ -63,7 +65,14 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 		proxy.mu.Unlock()
 		return ""
 	}
+	proxy.gen++
+	gen := proxy.gen
 	proxy.mu.Unlock()
+	current := func() bool {
+		proxy.mu.Lock()
+		defer proxy.mu.Unlock()
+		return proxy.gen == gen
+	}
 
 	utils.SetLevel(int(debugLevel.Load()))
 	utils.SetLogSink(appendLog)
@@ -78,9 +87,18 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 	}
 	if err := trans.Start(); err != nil {
 		appendLog(fmt.Sprintf("[ERROR] Ошибка запуска прокси: %v", err))
+		if !current() {
+			return err.Error()
+		}
 		detachCaptcha()
 		setAuthProxy(nil)
 		return err.Error()
+	}
+	// Stopped while the carriers were starting: the port is the next
+	// start's, and nobody would stop this transport later.
+	if !current() {
+		_ = trans.Stop()
+		return errStartStopped
 	}
 
 	tun := tunnel.NewTCPTunnel(trans, false)
@@ -103,6 +121,12 @@ func startProxyWith(build func() (transport.Transport, error), listenAddr, usern
 	}
 
 	proxy.mu.Lock()
+	if proxy.gen != gen {
+		proxy.mu.Unlock()
+		_ = server.Close()
+		_ = trans.Stop()
+		return errStartStopped
+	}
 	proxy.running = true
 	proxy.transport = trans
 	proxy.tun = tun
@@ -129,6 +153,7 @@ func StopProxy() {
 	trans := proxy.transport
 	stream := proxy.stream
 	proxy.running = false
+	proxy.gen++
 	proxy.transport = nil
 	proxy.tun = nil
 	proxy.server = nil

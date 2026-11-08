@@ -40,8 +40,11 @@ type packetClient struct {
 	mu        sync.Mutex
 	running   bool
 	transport transport.Transport
-	packets   [][]byte
-	logs      []string
+	// gen counts starts and stops: a start that Stop overtook while it
+	// was in Start stops its own transport.
+	gen     uint64
+	packets [][]byte
+	logs    []string
 	// arrived is signalled when a packet is queued, for ReadTimeout.
 	arrived chan struct{}
 }
@@ -106,6 +109,8 @@ func startPacket(build func() (transport.Transport, error)) string {
 		return ""
 	}
 	client.running = true
+	client.gen++
+	gen := client.gen
 	client.packets = nil
 	client.logs = nil
 	if client.arrived == nil {
@@ -119,8 +124,15 @@ func startPacket(build func() (transport.Transport, error)) string {
 	fail := func(err error) string {
 		appendLog(fmt.Sprintf("[ERROR] Ошибка запуска: %v", err))
 		client.mu.Lock()
-		client.running = false
+		current := client.gen == gen
+		if current {
+			client.running = false
+		}
 		client.mu.Unlock()
+		if !current {
+			// Stopped meanwhile: the captcha and proxy are the next start's.
+			return err.Error()
+		}
 		detachCaptcha()
 		setAuthProxy(nil)
 		return err.Error()
@@ -150,15 +162,28 @@ func startPacket(build func() (transport.Transport, error)) string {
 		}
 		return fail(err)
 	}
+
+	client.mu.Lock()
+	if client.gen != gen {
+		// Stop came while the carriers were starting; nobody would stop
+		// this transport later.
+		client.mu.Unlock()
+		if pr != nil {
+			pr.close()
+		}
+		_ = trans.Stop()
+		return errStartStopped
+	}
 	if pr != nil {
 		active.Store(pr)
 	}
-
-	client.mu.Lock()
 	client.transport = trans
 	client.mu.Unlock()
 	return ""
 }
+
+// errStartStopped is what a start returns when Stop came before it finished.
+const errStartStopped = "Запуск прерван: транспорт остановлен"
 
 // queuePacket hands a packet to the device (Read).
 func queuePacket(packet []byte) {
@@ -266,6 +291,7 @@ func Stop() {
 	client.mu.Lock()
 	trans := client.transport
 	client.running = false
+	client.gen++
 	client.transport = nil
 	client.packets = nil
 	client.mu.Unlock()

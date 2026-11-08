@@ -24,6 +24,8 @@ var exitNode = struct {
 	// rooms are the transports whose client address exists only once they
 	// run (cupsonline's rooms), by name, filled in by ExitShareLink.
 	rooms map[string]roomLister
+	// gen counts starts and stops, as packetClient.gen does.
+	gen uint64
 }{}
 
 type roomLister interface{ RoomList() string }
@@ -75,6 +77,8 @@ func startExitWith(build func() (transport.Transport, error), shareCfg *share.Co
 		return ""
 	}
 	exitNode.rooms = nil
+	exitNode.gen++
+	gen := exitNode.gen
 	exitNode.mu.Unlock()
 
 	utils.SetLevel(int(debugLevel.Load()))
@@ -104,6 +108,13 @@ func startExitWith(build func() (transport.Transport, error), shareCfg *share.Co
 	}
 
 	exitNode.mu.Lock()
+	if exitNode.gen != gen {
+		// Stopped while the carriers were starting.
+		exitNode.mu.Unlock()
+		_ = node.Stop()
+		_ = trans.Stop()
+		return errStartStopped
+	}
 	exitNode.running, exitNode.transport, exitNode.node, exitNode.share = true, trans, node, shareCfg
 	exitNode.mu.Unlock()
 	appendLog("[SUCCESS] Выходная нода запущена (l4)")
@@ -115,6 +126,7 @@ func StopExit() {
 	trans, node := exitNode.transport, exitNode.node
 	exitNode.running, exitNode.transport, exitNode.node, exitNode.share = false, nil, nil, nil
 	exitNode.rooms = nil
+	exitNode.gen++
 	exitNode.mu.Unlock()
 	detachCaptcha()
 	CancelCaptcha()
