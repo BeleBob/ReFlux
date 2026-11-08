@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -105,5 +107,26 @@ func TestBackupSkipsKeptLogs(t *testing.T) {
 		if got := backupSkip(rel, mode); got != want {
 			t.Errorf("backupSkip(%q) = %v, want %v", rel, got, want)
 		}
+	}
+}
+
+// A missing container (an expired client's node) is left out quietly:
+// docker's "no such object" must not reach the output of doctor or update.
+func TestContainerStartsQuietAboutMissing(t *testing.T) {
+	old, oldErr := runDocker, dockerStderr
+	t.Cleanup(func() { runDocker, dockerStderr = old, oldErr })
+	var errOut strings.Builder
+	dockerStderr = &errOut
+	runDocker = func(stdout io.Writer, args ...string) error {
+		fmt.Fprintln(stdout, "/reflux-egress true 2026-11-08T12:39:35.1Z")
+		fmt.Fprintln(dockerStderr, "error: no such object: reflux-node-gone")
+		return errors.New("exit status 1")
+	}
+	got := containerStarts([]string{"reflux-egress", "reflux-node-gone"})
+	if _, ok := got["reflux-egress"]; !ok || len(got) != 1 {
+		t.Fatalf("starts %v", got)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("docker's complaint reached the output: %q", errOut.String())
 	}
 }
