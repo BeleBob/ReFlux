@@ -120,7 +120,12 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   type `cupsonline` whose URL is a packed list of 4 rooms the egress makes
   (`reflux-egress create-rooms`, `cupsonline.CreateRooms`); rooms take
   priority 100 and the mail.ru documents next to them 50 (`docPriority`),
-  so mail.ru stands by and brings the app new rooms (ConfigOffer). The
+  so mail.ru stands by and brings the app new rooms (ConfigOffer). Since
+  2026-11 cups.online admits only a room's creator: the list is v3
+  (`transport/cupsonline/session_rooms.go`, the creator's `sessionid` +
+  expiry; a 4-byte sender tag per message replaces the user-uuid echo
+  filter), and `renewCups` replaces lists `cupsRenewBefore` their expiry or
+  without a session. The
   document check gives one client without rooms per round, replaces a list
   with a gone room by new rooms (never the pool or the dead list), waits
   `cupsRetry` after cups.online refuses (doctor `cups.failing`); rooms the

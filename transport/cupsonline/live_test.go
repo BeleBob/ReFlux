@@ -32,9 +32,14 @@ func TestLiveCups(t *testing.T) {
 	cfg := DefaultCupsonlineConfig()
 	cfg.StatsInterval = time.Hour
 
+	// As in ReFlux: the egress makes the rooms (one session, the list
+	// carries it), and the exit and the client both join from the list.
 	start := time.Now()
-	exit := mustStart(t, "", false, cfg)
-	packed := packRooms(exit.RoomUUIDs())
+	packed, _, err := CreateRooms(context.Background(), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := mustStart(t, packed, false, cfg)
 	client := mustStart(t, packed, true, cfg)
 	waitFor(t, 60*time.Second, "all channels up", func() bool {
 		return allConnected(exit) && allConnected(client)

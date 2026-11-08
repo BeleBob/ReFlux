@@ -215,6 +215,9 @@ func (s Store) checkTargets(now time.Time, only []string) ([]docChange, bool, er
 	// Rooms between the rounds too: a list just replaced without new rooms
 	// gets them as soon as cups.online makes them.
 	added, err := s.ensureCups(&st, now)
+	if err == nil && len(added) == 0 {
+		added, err = s.renewCups(&st, now)
+	}
 	changes = append(changes, added...)
 	for _, ch := range added {
 		changed = changed || ch.Err == nil

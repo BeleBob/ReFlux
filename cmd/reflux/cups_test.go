@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 )
 
 // roomsMaker makes room lists for fakeEgressCheck, numbered, until fail.
@@ -23,7 +24,7 @@ func roomsMaker(t *testing.T) (made *int, fail *error) {
 		for i := range ids {
 			ids[i] = fmt.Sprintf("%08d-0000-4000-8000-%012d", n, i)
 		}
-		return transport.PackRooms(ids, true), nil
+		return cupsonline.PackRoomList(ids, fmt.Sprintf("sid-%d", n), time.Now().Add(14*24*time.Hour)), nil
 	}
 	t.Cleanup(func() { fakeRooms = nil })
 	return &n, &err
@@ -246,5 +247,113 @@ func TestBackupsBesideRooms(t *testing.T) {
 	// A pool with plenty to spare: still no third document beside rooms.
 	if changes, _, _ := s.checkDocs(time.Now()); len(changes) != 0 {
 		t.Errorf("a third document beside rooms: %+v", changes)
+	}
+}
+
+// clientWithRooms is an active client with a document and the rooms list.
+func clientWithRooms(t *testing.T, s Store, list string) {
+	t.Helper()
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.addCups("phone", Doc{cupsType, list}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func cupsURL(t *testing.T, s Store) string {
+	t.Helper()
+	c, err := s.Get("phone")
+	if err != nil || c.cupsIndex() < 0 {
+		t.Fatalf("client %+v %v", c, err)
+	}
+	return c.Docs()[c.cupsIndex()].URL
+}
+
+var testRooms = []string{"00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"}
+
+// Rooms get new ones while their session still works, cupsRenewBefore it
+// expires; until then they are left alone, and when cups.online makes none
+// the old ones stay.
+func TestRoomsRenewedBeforeTheirSessionExpires(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	now := time.Now()
+	list := cupsonline.PackRoomList(testRooms, "old", now.Add(cupsRenewBefore+time.Hour))
+	clientWithRooms(t, s, list)
+	writeFile(t, s.poolPath(), "mailru "+docB+"\n")
+	fakeEgressCheck(t)
+	made, fail := roomsMaker(t)
+
+	s.checkDocs(now) // gives the client its backup
+	if changes, _, err := s.checkDocs(now); len(changes) != 0 || err != nil || *made != 0 {
+		t.Fatalf("session good for longer: %+v %v, %d made", changes, err, *made)
+	}
+	later := now.Add(2 * time.Hour)
+	*fail = errors.New("cups.online said no")
+	if changes, _, _ := s.checkDocs(later); len(changes) != 0 || cupsURL(t, s) != list {
+		t.Fatalf("no new rooms: %+v, the list is now %q", changes, cupsURL(t, s))
+	}
+	*fail = nil
+	later = later.Add(cupsRetry)
+	changes, changed, err := s.checkDocs(later)
+	if err != nil || !changed || len(changes) != 1 {
+		t.Fatalf("renewal: %+v %v %v", changes, changed, err)
+	}
+	ch := changes[0]
+	if !ch.Cups || ch.Doc.URL != list || ch.New == nil || ch.Err != nil || !strings.Contains(ch.Reason, "expires") {
+		t.Fatalf("change %+v", ch)
+	}
+	if id, _ := docChangeMessage(ch); id != "docs.cups.replaced" {
+		t.Errorf("message %s", id)
+	}
+	if got := cupsURL(t, s); got != ch.New.URL {
+		t.Fatalf("the client has %q, want the new list", got)
+	}
+	if changes, _, _ := s.checkDocs(later); len(changes) != 0 {
+		t.Fatalf("renewed twice: %+v", changes)
+	}
+}
+
+// A list from before sessions can't get anyone in: it gets new rooms.
+func TestRoomsWithoutSessionAreRenewed(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	list := transport.PackRooms(testRooms, true)
+	clientWithRooms(t, s, list)
+	fakeEgressCheck(t)
+	roomsMaker(t)
+	changes, _, err := s.checkDocs(time.Now())
+	var renewed *docChange
+	for i := range changes {
+		if changes[i].Cups {
+			renewed = &changes[i]
+		}
+	}
+	if err != nil || renewed == nil || renewed.Doc.URL != list || renewed.New == nil || !strings.Contains(renewed.Reason, "no session") {
+		t.Fatalf("changes %+v %v", changes, err)
+	}
+	if roomCount(cupsURL(t, s)) != cupsRooms {
+		t.Fatalf("the client has %q", cupsURL(t, s))
+	}
+}
+
+// An egress too old to give its rooms' session makes rooms nobody can
+// enter: they are not handed out, and the doctor says to update.
+func TestOldEgressRoomsAreRefused(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	if _, err := s.Add("phone", "mailru", testURL); err != nil {
+		t.Fatal(err)
+	}
+	fakeEgressCheck(t)
+	fakeRooms = func(n int) (string, error) { return transport.PackRooms(testRooms[:1], true), nil }
+	t.Cleanup(func() { fakeRooms = nil })
+	if changes, _, _ := s.checkDocs(time.Now()); len(changes) != 0 {
+		t.Fatalf("changes %+v", changes)
+	}
+	if c, _ := s.Get("phone"); c.cupsIndex() >= 0 {
+		t.Fatalf("the client got rooms without a session: %+v", c)
+	}
+	st, _ := s.loadDocsState()
+	if !strings.Contains(st.Cups.Error, "update the images") {
+		t.Fatalf("cups state %+v", st.Cups)
 	}
 }

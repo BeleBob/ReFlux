@@ -8,18 +8,32 @@ import (
 	"github.com/p1neappleXpress/OpenFlux/transport"
 )
 
-func TestCreateRoomsMakesAStripedList(t *testing.T) {
+func TestCreateRoomsMakesASessionList(t *testing.T) {
 	f := newFakeCups(t)
 	list, made, err := CreateRooms(context.Background(), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids, striped, err := transport.UnpackRooms(list)
-	if err != nil || !striped || len(ids) != 3 || made != 3 {
-		t.Fatalf("list %q: ids %v striped %v made %d err %v", list, ids, striped, made, err)
+	l, err := unpackRoomList(list)
+	if err != nil || !l.striped || len(l.ids) != 3 || made != 3 {
+		t.Fatalf("list %q: %+v made %d err %v", list, l, made, err)
 	}
 	if f.roomsCreated() != 3 {
 		t.Fatalf("server created %d rooms, want 3", f.roomsCreated())
+	}
+	// One session made all three, and the list carries it and its expiry.
+	f.locked(func() {
+		for _, id := range l.ids {
+			if f.owners[id] != l.sid {
+				t.Errorf("room %s made by another session than the list's", id)
+			}
+		}
+	})
+	if left := time.Until(l.until); left < 13*24*time.Hour || left > 15*24*time.Hour {
+		t.Fatalf("session until %v, want ~14 days ahead", l.until)
+	}
+	if p, err := ParseRoomList(list); err != nil || p.Rooms != 3 || !p.Until.Equal(l.until) {
+		t.Fatalf("ParseRoomList: %+v %v", p, err)
 	}
 	if _, _, err := CreateRooms(context.Background(), 0); err == nil {
 		t.Fatal("0 rooms: want an error")
@@ -32,7 +46,8 @@ func TestCheckRoomsCountsOnlyTheServersWord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids, _, _ := transport.UnpackRooms(list)
+	f.locked(func() { f.ownerOnly = true })
+	ids := parseRoomList(list)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -56,5 +71,10 @@ func TestCheckRoomsCountsOnlyTheServersWord(t *testing.T) {
 	}
 	if _, _, err := CheckRooms(ctx, "not a list"); err == nil {
 		t.Fatal("garbage: want an error")
+	}
+	// A list without the session: cups.online lets nobody else in, so its
+	// rooms are as good as gone.
+	if gone, total, err := CheckRooms(ctx, transport.PackRooms(ids, true)); gone != 4 || total != 4 || err != nil {
+		t.Fatalf("list without its session: gone %d of %d, err %v", gone, total, err)
 	}
 }

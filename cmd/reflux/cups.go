@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/cmd/reflux/internal/telegram"
-	"github.com/p1neappleXpress/OpenFlux/transport"
+	"github.com/p1neappleXpress/OpenFlux/transport/cupsonline"
 )
 
 // cups.online rooms. Next to its mail.ru documents a client gets a list of
@@ -31,6 +31,13 @@ import (
 // refuses rooms made too fast), unless cups.json turns rooms off or the
 // owner took a client's rooms away (Client.NoCups). When cups.online makes
 // no rooms, it is asked again after cupsRetry and the doctor says so.
+//
+// Since November 2026 cups.online lets only a room's creator in, so a list
+// carries the session that made its rooms, and the node and the app both
+// enter with it. The session expires two weeks after it was made; a list
+// gets new rooms cupsRenewBefore that, while it still works and can bring
+// the app the new ones itself (renewCups). A list without a session is of
+// no use any more and is replaced the same way.
 
 const (
 	cupsType = "cupsonline"
@@ -42,6 +49,8 @@ const (
 	cupsPriority = 100
 	docsPriority = 50
 	cupsRetry    = time.Hour
+	// cupsRenewBefore: rooms whose session expires sooner get new ones.
+	cupsRenewBefore = 3 * 24 * time.Hour
 )
 
 func isCups(d Doc) bool { return d.Transport == cupsType }
@@ -58,11 +67,26 @@ func (c Client) cupsIndex() int {
 
 // roomCount is how many rooms a list holds, 0 when it is not one.
 func roomCount(list string) int {
-	ids, _, err := transport.UnpackRooms(list)
+	l, err := cupsonline.ParseRoomList(list)
 	if err != nil {
 		return 0
 	}
-	return len(ids)
+	return l.Rooms
+}
+
+// cupsRenewal says why rooms that are all there still need new ones: their
+// session expires soon, or they have none. "" when they don't.
+func cupsRenewal(d Doc, now time.Time) string {
+	l, err := cupsonline.ParseRoomList(d.URL)
+	switch {
+	case err != nil:
+		return ""
+	case l.Until.IsZero():
+		return "the rooms have no session, and cups.online lets only their creator in"
+	case l.Until.Sub(now) < cupsRenewBefore:
+		return "the rooms' session expires " + l.Until.Local().Format("02.01 15:04")
+	}
+	return ""
 }
 
 // cupsSettings is cups.json; without it rooms are on.
@@ -93,7 +117,12 @@ type cupsState struct {
 	Made   time.Time `json:"made,omitzero"`   // the last rooms made
 }
 
-var errCupsWait = errors.New("cups.online made no rooms a while ago; asked again after an hour")
+var (
+	errCupsWait = errors.New("cups.online made no rooms a while ago; asked again after an hour")
+	// errCupsNoSession: an egress image from before session lists made
+	// rooms that nobody but it can enter.
+	errCupsNoSession = errors.New("the egress made rooms without their session; update the images (reflux update)")
+)
 
 // createRoomsInEgress has the egress make n rooms.
 func (s Store) createRoomsInEgress(n int) (string, int, error) {
@@ -114,6 +143,9 @@ func (s Store) createRoomsInEgress(n int) (string, int, error) {
 		return "", 0, errors.New(r.Error)
 	case r.Rooms == 0 || validURL(r.List) != nil:
 		return "", 0, errors.New("the egress made no usable room list")
+	}
+	if l, err := cupsonline.ParseRoomList(r.List); err != nil || l.Until.IsZero() {
+		return "", 0, errCupsNoSession
 	}
 	return r.List, r.Rooms, nil
 }
@@ -208,12 +240,48 @@ func (s Store) replaceCups(name string, dead Doc, st *docsState, now time.Time) 
 		}
 		return nil, true, err
 	}
+	c.setDoc(i, d)
+	return &d, true, s.Save(c)
+}
+
+// setDoc puts d in place of c's document i.
+func (c *Client) setDoc(i int, d Doc) {
 	if i == 0 {
 		c.URL = d.URL
 	} else {
 		c.Backups[i-1] = d
 	}
-	return &d, true, s.Save(c)
+}
+
+// renewCups gives new rooms to the first active client whose rooms need
+// them before any is gone (cupsRenewal), one client per check. Unlike gone
+// rooms, the old list stays when cups.online makes none: it still works.
+func (s Store) renewCups(st *docsState, now time.Time) ([]docChange, error) {
+	if s.cupsOff() {
+		return nil, nil
+	}
+	clients, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range clients {
+		i := c.cupsIndex()
+		if i < 0 || !c.Active(now) {
+			continue
+		}
+		old := c.Docs()[i]
+		why := cupsRenewal(old, now)
+		if why == "" {
+			continue
+		}
+		d, err := s.makeRooms(st, now, false)
+		if err != nil {
+			return nil, nil // the doctor tells; asked again after cupsRetry
+		}
+		c.setDoc(i, d)
+		return []docChange{{Cups: true, Doc: old, Reason: why, Client: c.Name, New: &d, Err: s.Save(c)}}, nil
+	}
+	return nil, nil
 }
 
 // ---- the owner's side ----
