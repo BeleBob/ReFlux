@@ -704,8 +704,9 @@ func startTimes(clients []Client) map[string]time.Time {
 func containerStarts(names []string) map[string]time.Time {
 	var out strings.Builder
 	args := append([]string{"inspect", "--format", "{{.Name}} {{.State.Running}} {{.State.StartedAt}}"}, names...)
-	// inspect fails when a container is missing; what it printed still counts.
-	runDocker(&out, args...)
+	// inspect fails when a container is missing (an expired client's node);
+	// what it printed still counts, and its complaint is no news.
+	quiet(&out, args...)
 	started := map[string]time.Time{}
 	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 		f := strings.Fields(line)
