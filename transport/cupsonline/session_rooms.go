@@ -54,6 +54,11 @@ type roomList struct {
 	until   time.Time
 }
 
+// PackRoomList packs rooms entered with session sid into a v3 list.
+func PackRoomList(ids []string, sid string, until time.Time) string {
+	return packSessionRooms(ids, sid, until)
+}
+
 // packSessionRooms packs a v3 list.
 func packSessionRooms(ids []string, sid string, until time.Time) string {
 	raw, _ := json.Marshal(roomListV3{V: sessionRoomsVersion, Rooms: ids, SID: sid, Until: until.Unix()})
