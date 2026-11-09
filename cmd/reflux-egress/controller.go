@@ -72,16 +72,17 @@ type controller struct {
 	confDir  string // the configs, and the owner's choice of world server
 	stateDir string // kept across restarts: the last world server that held
 
-	ru         awgConf
-	ruDirect   bool // Russia leaves through the uplink, never a tunnel
-	ruFallback bool // Russia leaves through the uplink while its tunnel is down
-	world      []awgConf
-	cur        int          // index into world of the active tunnel
-	picked     string       // the world server choice last acted on
-	remembered string       // the world server last saved as the one that held
-	guests     []netip.Addr // the guests applied (guests.go)
-	guestsSet  bool
-	gw         netip.Addr
+	ru           awgConf
+	ruDirect     bool // Russia leaves through the uplink, never a tunnel
+	ruFallback   bool // Russia leaves through the uplink while its tunnel is down
+	world        []awgConf
+	cur          int     // index into world of the active tunnel
+	picked       string  // the world server choice last acted on
+	remembered   string  // the world server last saved as the one that held
+	guests       []guest // the guests applied (guests.go)
+	guestsSet    bool
+	guestsDirect bool // ruDirect when they were applied
+	gw           netip.Addr
 
 	// carrierHosts, when set (carrierFile), are routed out of the uplink
 	// by address; carriers holds those addresses and when each was last
