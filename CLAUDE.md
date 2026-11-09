@@ -182,7 +182,7 @@ Android (OpenFluxAndroid, отдельный репозиторий, форк п
   the owner's world server choice in `egress/world-select` (`reflux gateway`,
   applied once per change, failover still moves on), world failover in file order without automatic
   return; after a restart it starts with the owner's choice, else the last world
-  server that held `rememberAfter` (`world-last` in the `egress-state` volume). Guests (`guests.go`, `egress/guests`: IPv4 per line, reread each round): containers on the egress network routed (table 200, `ip rule` per guest) and NATed only into `awg-world`; nft table `reflux_guests` drops all other forwarding, so `ip_forward=1` in compose is safe. Never exits on errors: nodes share its netns; after an egress
+  server that held `rememberAfter` (`world-last` in the `egress-state` volume). Guests (`guests.go`, `egress/guests`: IPv4 + optional `world`/`russia` per line, reread each round): containers on the egress network routed (table 200 world / 201 russia, `ip rule` per guest) and NATed only into their tunnel (with `ru-direct` russia guests get only a blackhole); nft table `reflux_guests` drops all other forwarding, so `ip_forward=1` in compose is safe. Never exits on errors: nodes share its netns; after an egress
   restart `reflux heal` (cron) recreates the stranded nodes.
 - `routing/` + `mobile/routing*.go` — the app's routing (ReFlux): `routing`
   decides direct / tunnel / block per connection over category lists in one
