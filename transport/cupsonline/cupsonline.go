@@ -99,6 +99,15 @@ type CupsonlineConfig struct {
 
 	SendQueueSize int
 
+	// MsgRate is how many messages a second all the rooms of the process
+	// send together, MsgBurst how many may go at once after a quiet spell:
+	// cups.online limits the messages from one address (budget.go). 0 turns
+	// the limit off. RateLimitPause is how long every room holds its messages
+	// after the server answers one with 429.
+	MsgRate        float64
+	MsgBurst       int
+	RateLimitPause time.Duration
+
 	// Буферы сокета, а не лимит на сообщение: gorilla выделяет их целиком на
 	// каждое соединение. MaxMessageBytes — сколько может прийти одним фреймом.
 	ReadBufferSize  int
@@ -152,6 +161,13 @@ func DefaultCupsonlineConfig() CupsonlineConfig {
 		// В очереди кадры кодека (до ~8 KB), а не IP-пакеты: очередь длиннее
 		// — это уже не буфер, а секунды задержки.
 		SendQueueSize: 1024,
+
+		// Under the ~12/s measured to hold for minutes, with room left for the
+		// keepalives. A message carries up to MaxMessageData, so this is
+		// still ~120 KB/s when the queue is full.
+		MsgRate:        10,
+		MsgBurst:       20,
+		RateLimitPause: 5 * time.Second,
 
 		ReadBufferSize:  64 << 10,
 		WriteBufferSize: 64 << 10,
@@ -1064,6 +1080,11 @@ func (w *cupsWS) pullLoop(src func(max int) [][]byte) {
 				return
 			}
 		}
+		// Taken before pulling, so what waits for the budget waits in the
+		// stripe's queue, and the message that leaves is as full as it gets.
+		if !msgBudget.take(w.ctx, w.config.MsgRate, w.config.MsgBurst) {
+			return
+		}
 		buf = buf[:0]
 		if next != nil && add(next) {
 			next = nil
@@ -1142,6 +1163,9 @@ const lanePollIdle = 50 * time.Millisecond
 // channel never floods the server. Returns errStopped if the transport is
 // stopped while waiting.
 func (w *cupsWS) pace() error {
+	if !msgBudget.take(w.ctx, w.config.MsgRate, w.config.MsgBurst) {
+		return errStopped
+	}
 	if w.config.SendInterval <= 0 {
 		return nil
 	}
@@ -1283,7 +1307,14 @@ func (w *cupsWS) handleReply(raw []byte) {
 	if e, ok := obj["error"]; ok {
 		// A message of ours the server would not take (it never reached the
 		// peer): the stripe resends its pieces; worth seeing when it happens.
-		if n := w.stats.rpcErrors.Add(1); n == 1 || n%100 == 0 {
+		n := w.stats.rpcErrors.Add(1)
+		if isRateLimited(e) && w.config.RateLimitPause > 0 {
+			if msgBudget.pause(w.config.RateLimitPause) {
+				utils.Infof("[CUPS] cups.online refuses messages from this address (429, too many): every room waits %v", w.config.RateLimitPause)
+			}
+			return
+		}
+		if n == 1 || n%100 == 0 {
 			utils.Debugf("[CUPS] room %s turned down a message (%d so far): %v", shortRoom(w.roomUUID), n, e)
 		}
 		return
@@ -1415,6 +1446,14 @@ func (w *cupsWS) handleReply(raw []byte) {
 		w.stats.bytesRecv.Add(uint64(total))
 		w.stats.batchesRecv.Add(1)
 	}
+}
+
+// isRateLimited says an RPC error is cups.online's 429: too many messages
+// from this address.
+func isRateLimited(e interface{}) bool {
+	m, _ := e.(map[string]interface{})
+	code, _ := m["code"].(float64)
+	return code == 429
 }
 
 // readWhole hands on the packets of one message on the striped wire, where a

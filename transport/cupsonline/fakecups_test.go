@@ -51,6 +51,33 @@ type fakeCups struct {
 	// relaying it, as the real server does to a room sending near its limit.
 	dropEvery int
 	relayed   int
+	// rateLimit > 0 takes that many cursor messages per rateWindow (all
+	// rooms, all connections: the real limit is per address) and answers the
+	// rest with 429, as cups.online has done since November 2026.
+	rateLimit  int
+	rateWindow time.Duration
+	rateStart  time.Time
+	rateCount  int
+	refused    int
+}
+
+// overLimit counts a cursor message against rateLimit and says whether it is
+// over.
+func (f *fakeCups) overLimit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.rateLimit <= 0 {
+		return false
+	}
+	if now := time.Now(); now.Sub(f.rateStart) >= f.rateWindow {
+		f.rateStart, f.rateCount = now, 0
+	}
+	if f.rateCount >= f.rateLimit {
+		f.refused++
+		return true
+	}
+	f.rateCount++
+	return false
 }
 
 type fakeConn struct {
@@ -241,6 +268,10 @@ func (f *fakeCups) centrifugo(w http.ResponseWriter, r *http.Request) {
 			}
 			c.send(fmt.Sprintf(`{"id":%d,"subscribe":{}}`, cmd.ID))
 		case cmd.RPC != nil:
+			if cmd.RPC.Method == "shared_editor_change_cursors" && f.overLimit() {
+				c.send(fmt.Sprintf(`{"id":%d,"error":{"code":429,"message":"Превышено допустимое число отправок запроса."}}`, cmd.ID))
+				continue
+			}
 			c.send(fmt.Sprintf(`{"id":%d,"rpc":{}}`, cmd.ID))
 			if d := cmd.RPC.Data; cmd.RPC.Method == "shared_editor_change_cursors" && len(d.Cursors) > 0 {
 				// Model the real server: a non-numeric row/column is rejected,
@@ -354,6 +385,7 @@ func fastConfig() CupsonlineConfig {
 	c.WSHandshakeTimeout = 2 * time.Second
 	c.StatsInterval = time.Hour
 	c.SendInterval = 0 // no throttling against the in-process fake
+	c.MsgRate = 0
 	return c
 }
 
