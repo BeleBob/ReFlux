@@ -215,6 +215,8 @@ func composeYAML(root string, clients []Client, o Options) ([]byte, error) {
 	// it needs: NET_ADMIN (tunnels, routes, nftables), NET_RAW (probes)
 	// and DAC_READ_SEARCH (reading the owner's 0600 tunnel configs, never
 	// writing them). IPv6 is off: the tunnels and the kill switch are IPv4.
+	// Forwarding is on for the guests (egress/guests); the egress's
+	// forward chain drops everything else.
 	f.Services["egress"] = composeService{
 		Image:         o.EgressImage,
 		ContainerName: "reflux-egress",
@@ -225,6 +227,7 @@ func composeYAML(root string, clients []Client, o Options) ([]byte, error) {
 		Environment:   noProxy,
 		Sysctls: map[string]string{
 			"net.ipv4.conf.all.src_valid_mark":   "1",
+			"net.ipv4.ip_forward":                "1",
 			"net.ipv6.conf.all.disable_ipv6":     "1",
 			"net.ipv6.conf.default.disable_ipv6": "1",
 		},

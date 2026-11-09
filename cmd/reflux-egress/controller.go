@@ -76,9 +76,11 @@ type controller struct {
 	ruDirect   bool // Russia leaves through the uplink, never a tunnel
 	ruFallback bool // Russia leaves through the uplink while its tunnel is down
 	world      []awgConf
-	cur        int    // index into world of the active tunnel
-	picked     string // the world server choice last acted on
-	remembered string // the world server last saved as the one that held
+	cur        int          // index into world of the active tunnel
+	picked     string       // the world server choice last acted on
+	remembered string       // the world server last saved as the one that held
+	guests     []netip.Addr // the guests applied (guests.go)
+	guestsSet  bool
 	gw         netip.Addr
 
 	// carrierHosts, when set (carrierFile), are routed out of the uplink
@@ -377,7 +379,10 @@ func (c *controller) setup() error {
 	if err := c.up(worldIface, c.world[c.cur]); err != nil {
 		return err
 	}
-	return c.ip("route", "replace", "default", "dev", worldIface, "metric", "0")
+	if err := c.ip("route", "replace", "default", "dev", worldIface, "metric", "0"); err != nil {
+		return err
+	}
+	return c.setGuests()
 }
 
 // up creates iface for conf, or moves it to conf when it exists.
@@ -655,6 +660,10 @@ func (c *controller) watch(stop <-chan struct{}) {
 				log.Print(msg)
 			}
 			carrierErr = msg
+		}
+		if err := c.setGuests(); err != nil && errText == "" {
+			errText = "guests: " + err.Error()
+			log.Print(errText)
 		}
 		worldOK := c.probe(worldIface, worldProbes, worldTCP)
 		if worldOK {
