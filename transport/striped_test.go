@@ -269,3 +269,38 @@ func TestSenderGivesUpOnAGoneReceiver(t *testing.T) {
 		t.Fatalf("low=%d seq=%d gaveUp=%d: the stale pieces still hold the window", q.low, q.seq, q.gaveUp)
 	}
 }
+
+// A resent piece acked sooner than a round trip after the resend came in on
+// its earlier copy, so its lane is not credited with it - but it must still
+// leave the lane's window. A lane whose window filled with such pieces sent
+// nothing again, and a lane that sends nothing never counts as dead: the
+// exit's lanes stayed silent toward the phone for a day while they kept
+// bringing its data in.
+func TestSenderAckedResendsLeaveTheLaneWindow(t *testing.T) {
+	var q sender
+	q.init()
+	now := time.Now()
+	q.lane[0].start(now)
+	q.lane[0].winOn = true
+	q.lane[0].tokens = 1000
+	q.minRTT = time.Second
+	for i := 0; i < 2*laneWinInit; i++ {
+		q.enqueue([]byte{byte(i)})
+	}
+	first := q.seq + 1
+	if out := q.pull(0, 2*laneWinInit, now); len(out) != laneWinInit {
+		t.Fatalf("pulled %d, want a window of %d", len(out), laneWinInit)
+	}
+	r := newReorderBuffer(func([]byte, bool) {})
+	for d := uint32(0); d < laneWinInit; d++ {
+		q.ring[(first+d)%txRingSize].tries = 2 // resent on this lane
+		r.push(first+d, first, []byte{0})
+	}
+	q.onAck(r.ackFrame(), now.Add(10*time.Millisecond))
+	if q.low != first+laneWinInit {
+		t.Fatalf("low=%d want %d", q.low, first+laneWinInit)
+	}
+	if out := q.pull(0, 2*laneWinInit, now.Add(20*time.Millisecond)); len(out) == 0 {
+		t.Fatalf("the lane sends nothing: laneTx=%d laneAck=%d win=%v", q.laneTx[0], q.laneAck[0], q.lane[0].win)
+	}
+}
