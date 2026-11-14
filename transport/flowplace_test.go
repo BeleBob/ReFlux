@@ -23,7 +23,7 @@ func placeLinks(names ...string) []*transportLink {
 // backlog queues n bytes on l without sending them.
 func backlog(t *testing.T, l *transportLink, n int) {
 	t.Helper()
-	if !l.batched.pacing.admit(make([]byte, n)) {
+	if ok, _ := l.batched.pacing.admit(make([]byte, n)); !ok {
 		t.Fatalf("%s refused %d bytes", l.name, n)
 	}
 }

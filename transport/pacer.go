@@ -39,36 +39,59 @@ const smallPacket = 300
 type pacing struct {
 	pacer Pacer
 	limit int64
+	// urgent is the queue of the packets of flows that had nearly nothing
+	// queued (see admit); batches take from it first.
+	urgent chan []byte
 
 	mu sync.Mutex
 	// queued counts the bytes of packets queued and not yet batched, in
 	// all and by flow.
 	queued int64
-	flows  map[uint64]int64
+	flows  map[uint64]flowQueued
 }
+
+// flowQueued is what one flow has queued: bytes in all, and of them in the
+// urgent queue.
+type flowQueued struct{ bytes, urgent int64 }
+
+// urgentBytes is how much a flow may have in the urgent queue: a keystroke
+// over ssh, a chat message, a DNS answer, the first packets of a page. A
+// flow that sends more goes behind the bulk; its packets queued urgent leave
+// first, so its order holds.
+const urgentBytes = 4096
 
 // pace sets the carrier's pacer; call it before the layer starts.
 func (p *pacing) pace(pacer Pacer) {
 	p.pacer = pacer
 	p.limit = int64(pacer.QueueBytes())
-	p.flows = make(map[uint64]int64)
+	p.flows = make(map[uint64]flowQueued)
+	p.urgent = make(chan []byte, batchQueueDepth)
 }
 
 // admit reports whether pkt may join the queue, and counts it if so; a
-// caller that then fails to queue it calls done(pkt).
-func (p *pacing) admit(pkt []byte) bool {
+// caller that then fails to queue it calls done(pkt). urgent says the packet
+// goes into the urgent queue: its flow has no bulk queued and little urgent,
+// so it is not the download the bulk queue waits for - an ssh session, a
+// chat, a page being opened - and it need not wait behind it.
+func (p *pacing) admit(pkt []byte) (ok, urgent bool) {
 	if p.pacer == nil {
-		return true
+		return true, false
 	}
 	n, flow := int64(len(pkt)), flowOf(pkt)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if n > smallPacket && (p.flows[flow]+n > p.limit/2 || p.queued+n > p.limit) {
-		return false
+	f := p.flows[flow]
+	if n > smallPacket && (f.bytes+n > p.limit/2 || p.queued+n > p.limit) {
+		return false, false
 	}
+	urgent = f.bytes == f.urgent && f.urgent+n <= urgentBytes
 	p.queued += n
-	p.flows[flow] += n
-	return true
+	f.bytes += n
+	if urgent {
+		f.urgent += n
+	}
+	p.flows[flow] = f
+	return true, urgent
 }
 
 // done uncounts packets that left the queue.
@@ -81,8 +104,14 @@ func (p *pacing) done(packets ...[]byte) {
 	for _, pkt := range packets {
 		n, flow := int64(len(pkt)), flowOf(pkt)
 		p.queued -= n
-		if p.flows[flow] -= n; p.flows[flow] <= 0 {
+		// A flow's urgent packets leave before its bulk ones.
+		f := p.flows[flow]
+		f.bytes -= n
+		f.urgent = max(f.urgent-n, 0)
+		if f.bytes <= 0 {
 			delete(p.flows, flow)
+		} else {
+			p.flows[flow] = f
 		}
 	}
 }
@@ -108,6 +137,26 @@ func flowOf(pkt []byte) uint64 {
 		return 0
 	}
 	return flowHashBytes(extractFlowKeyBytes(pkt))
+}
+
+// next takes the next packet to batch, an urgent one first; false means
+// stop. A flow's urgent packet and the bulk one queued right after it may
+// both be waiting here and come out in either order: rare, and TCP takes a
+// packet that overtakes another as no loss.
+func (p *pacing) next(queue <-chan []byte, stop <-chan struct{}) ([]byte, bool) {
+	select {
+	case pkt := <-p.urgent:
+		return pkt, true
+	default:
+	}
+	select {
+	case <-stop:
+		return nil, false
+	case pkt := <-p.urgent:
+		return pkt, true
+	case pkt := <-queue:
+		return pkt, true
+	}
 }
 
 // wait blocks until the carrier can send; false means stop.

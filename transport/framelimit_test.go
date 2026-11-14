@@ -14,7 +14,7 @@ func TestFillBatchStopsBeforeThePacketPastTheLimit(t *testing.T) {
 		queue <- make([]byte, n)
 	}
 	// 2+400 for each packet: two fit in 1000 bytes, the third is carried.
-	batch, size, carry, stopped := fillBatch(queue, nil, make([]byte, 100), 8192, 64, 0, 1000)
+	batch, size, carry, stopped := fillBatch(nil, queue, nil, make([]byte, 100), 8192, 64, 0, 1000)
 	if stopped || len(batch) != 3 || size != 102+2*402 {
 		t.Fatalf("batch of %d packets, %d bytes (stopped %v), want 3 packets, %d bytes", len(batch), size, stopped, 102+2*402)
 	}
@@ -29,7 +29,7 @@ func TestFillBatchStopsBeforeThePacketPastTheLimit(t *testing.T) {
 	for _, n := range []int{400, 400, 400} {
 		queue <- make([]byte, n)
 	}
-	batch, _, carry, _ = fillBatch(queue, nil, make([]byte, 100), 8192, 64, 0, 0)
+	batch, _, carry, _ = fillBatch(nil, queue, nil, make([]byte, 100), 8192, 64, 0, 0)
 	if len(batch) != 4 || carry != nil {
 		t.Fatalf("no limit: batch of %d packets, carry %d bytes, want 4 and none", len(batch), len(carry))
 	}

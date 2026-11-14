@@ -25,11 +25,11 @@ func batchBudget(raw Transport) int {
 }
 
 // fillBatch collects a batch after first: what is queued already, then what
-// arrives within lingerMs. It stops at maxBytes or maxCount, and before a
+// arrives within lingerMs, the urgent queue (pacing) before the other. It stops at maxBytes or maxCount, and before a
 // packet that would take the batch past limit (0: no limit), which comes back
 // as carry to start the next batch. stopped reports a close of stop while
 // lingering; the batch is then dropped, as before.
-func fillBatch(queue <-chan []byte, stop <-chan struct{}, first []byte, maxBytes, maxCount, lingerMs, limit int) (batch [][]byte, size int, carry []byte, stopped bool) {
+func fillBatch(urgent, queue <-chan []byte, stop <-chan struct{}, first []byte, maxBytes, maxCount, lingerMs, limit int) (batch [][]byte, size int, carry []byte, stopped bool) {
 	batch = [][]byte{first}
 	size = 2 + len(first)
 	add := func(p []byte) bool {
@@ -45,6 +45,14 @@ func fillBatch(queue <-chan []byte, stop <-chan struct{}, first []byte, maxBytes
 
 drain:
 	for !full() {
+		select {
+		case p := <-urgent:
+			if !add(p) {
+				break drain
+			}
+			continue
+		default:
+		}
 		select {
 		case p := <-queue:
 			if !add(p) {
@@ -62,6 +70,10 @@ drain:
 			select {
 			case <-stop:
 				return batch, size, carry, true
+			case p := <-urgent:
+				if !add(p) {
+					break linger
+				}
 			case p := <-queue:
 				if !add(p) {
 					break linger
