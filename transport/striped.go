@@ -1292,10 +1292,9 @@ func (q *sender) onAck(b []byte, now time.Time) bool {
 		original := e.dups == 0 || now.Sub(e.dupAt) < q.minRTT*7/8
 		if original && (e.tries == 1 || d >= q.minRTT*7/8) {
 			q.lane[e.lane].got(now)
-			if e.laneIdx > q.laneAck[e.lane] {
-				q.laneAck[e.lane] = e.laneIdx
-			}
 		}
+		// Credited or not, an acked piece no longer holds its lane's window.
+		q.leftLaneLocked(e)
 		if e.tries == 1 && original && (sample == 0 || d < sample) {
 			sample = d
 		}
