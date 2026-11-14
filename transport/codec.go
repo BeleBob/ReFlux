@@ -157,13 +157,18 @@ func (c *CodecTransport) Send(data []byte) error {
 	if len(data) > 65535 {
 		return fmt.Errorf("packet too large for a frame: %d bytes", len(data))
 	}
-	if !c.pacing.admit(data) {
+	ok, urgent := c.pacing.admit(data)
+	if !ok {
 		utils.Debugf("[CODEC] Send: paced queue full, dropped %d bytes", len(data))
 		return fmt.Errorf("codec queue full")
 	}
 	p := append([]byte(nil), data...)
+	queue := c.queue
+	if urgent {
+		queue = c.pacing.urgent
+	}
 	select {
-	case c.queue <- p:
+	case queue <- p:
 		return nil
 	default:
 		c.pacing.done(p)
@@ -291,10 +296,9 @@ func (c *CodecTransport) flushLoop() {
 		first := carry
 		carry = nil
 		if first == nil {
-			select {
-			case <-c.stopCh:
+			var ok bool
+			if first, ok = c.pacing.next(c.queue, c.stopCh); !ok {
 				return
-			case first = <-c.queue:
 			}
 		}
 		if !c.pacing.wait(c.stopCh) {
@@ -305,7 +309,7 @@ func (c *CodecTransport) flushLoop() {
 			c.write(compress(first))
 			continue
 		}
-		batch, _, next, stopped := fillBatch(c.queue, c.stopCh, first,
+		batch, _, next, stopped := fillBatch(c.pacing.urgent, c.queue, c.stopCh, first,
 			c.maxBatchBytes, c.maxBatchCount, c.lingerMs, int(c.frameLimit.Load()))
 		if stopped {
 			return

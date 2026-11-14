@@ -155,16 +155,21 @@ func (b *BatchedTransport) Send(data []byte) error {
 		utils.Debugf("[BATCH] Send: packet too large %d", len(data))
 		return fmt.Errorf("packet too large for batch record: %d bytes", len(data))
 	}
-	if !b.pacing.admit(data) {
+	ok, urgent := b.pacing.admit(data)
+	if !ok {
 		utils.Debugf("[BATCH] Send: paced queue full, dropped %d bytes", len(data))
 		return fmt.Errorf("batch queue full")
 	}
 	p := make([]byte, len(data))
 	copy(p, data)
+	queue := b.queue
+	if urgent {
+		queue = b.pacing.urgent
+	}
 	select {
 	case <-b.stopCh:
 		return fmt.Errorf("batched transport is stopped")
-	case b.queue <- p:
+	case queue <- p:
 	default:
 		// Full: wait for room rather than lose the packet (backpressure);
 		// a paced carrier's own queue was already bounded by admit.
@@ -173,7 +178,7 @@ func (b *BatchedTransport) Send(data []byte) error {
 		case <-b.stopCh:
 			b.pacing.done(p)
 			return fmt.Errorf("batched transport is stopped")
-		case b.queue <- p:
+		case queue <- p:
 		}
 	}
 	if !b.running.Load() {
@@ -248,14 +253,13 @@ func (b *BatchedTransport) flushLoop() {
 		first := carry
 		carry = nil
 		if first == nil {
-			select {
-			case <-b.stopCh:
+			var ok bool
+			if first, ok = b.pacing.next(b.queue, b.stopCh); !ok {
 				utils.Debugf("[BATCH] flushLoop: stop signal, exiting")
 				return
-			case first = <-b.queue:
-				utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
-					len(first), len(b.queue), cap(b.queue))
 			}
+			utils.Debugf("[BATCH] flushLoop: dequeued first packet size=%d (queue %d/%d)",
+				len(first), len(b.queue), cap(b.queue))
 		}
 
 		// A paced carrier first: what queues while it cannot send joins
@@ -267,7 +271,7 @@ func (b *BatchedTransport) flushLoop() {
 		// Everything already queued (burst coalescing), then a brief linger
 		// for stragglers: negligible next to the channel RTT, but it fills
 		// batches during steady bulk transfer.
-		batch, size, next, stopped := fillBatch(b.queue, b.stopCh, first,
+		batch, size, next, stopped := fillBatch(b.pacing.urgent, b.queue, b.stopCh, first,
 			b.maxBatchBytes, b.maxBatchCount, b.lingerMs, int(b.frameLimit.Load()))
 		if stopped {
 			utils.Debugf("[BATCH] flushLoop: stop during linger, exiting")
