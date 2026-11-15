@@ -81,13 +81,22 @@ func TestSessionClientHandshakesAgainWhenTheExitSpeaksForAnotherSession(t *testi
 	client.peerKeepalive, client.keepaliveProbes = false, keepaliveProbeMax
 	client.mu.Unlock()
 
-	eventually(t, "the two sides to share a session again", func() bool {
+	// Silence for the link timeout, then a handshake that waits out the
+	// exit's candidate pace: seconds under -race on a loaded runner.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
 		client.mu.Lock()
 		cl, cp, cr := client.local, client.peer, client.ready
 		client.mu.Unlock()
 		exit.mu.Lock()
 		el, ep, er := exit.local, exit.peer, exit.ready
 		exit.mu.Unlock()
-		return cr && er && cp == el && ep == cl
-	})
+		if cr && er && cp == el && ep == cl {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the two sides never shared a session again")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
