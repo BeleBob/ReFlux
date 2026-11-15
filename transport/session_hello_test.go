@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"crypto/rand"
 	"testing"
 	"time"
 )
@@ -53,3 +54,40 @@ func TestSessionExitAnswersAgainWhenItsAnswerWasLost(t *testing.T) {
 	}
 }
 
+// A client can take a challenge the exit has dropped meanwhile: offers that
+// waited on a carrier for longer than candidateTTL arrive all at once, the
+// client answers the first, and the exit, on a newer challenge or none,
+// refuses the answer. The client is ready, the exit is not with it, and
+// each drops the other's frames as another session's. A client that has
+// just handshaken again does not know yet that its exit answers pings, so
+// silence alone does not move it; what it hears from the exit for another
+// session must.
+func TestSessionClientHandshakesAgainWhenTheExitSpeaksForAnotherSession(t *testing.T) {
+	client, exit, _, _ := sessionPair(t)
+	fastKeepalive(client, exit)
+	if err := exit.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	exit.mu.Lock()
+	if _, err := rand.Read(exit.local[:]); err != nil {
+		t.Fatal(err)
+	}
+	exit.mu.Unlock()
+	client.mu.Lock()
+	client.peerKeepalive, client.keepaliveProbes = false, keepaliveProbeMax
+	client.mu.Unlock()
+
+	eventually(t, "the two sides to share a session again", func() bool {
+		client.mu.Lock()
+		cl, cp, cr := client.local, client.peer, client.ready
+		client.mu.Unlock()
+		exit.mu.Lock()
+		el, ep, er := exit.local, exit.peer, exit.ready
+		exit.mu.Unlock()
+		return cr && er && cp == el && ep == cl
+	})
+}

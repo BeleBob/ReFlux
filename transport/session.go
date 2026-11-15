@@ -62,6 +62,9 @@ type Session struct {
 	// peerHeard: the last time anything came from the peer on any carrier
 	// (PeerHeard). Not cleared when a carrier is marked stalled.
 	peerHeard time.Time
+	// otherSession: the last time a client got a frame from its exit for
+	// a session it is not in (challenge mismatch).
+	otherSession time.Time
 
 	candidate     *candidatePeer
 	candidateLast time.Time
@@ -737,6 +740,13 @@ func (s *Session) keepaliveLoop() {
 		if !s.exit && s.ready && s.peerKeepalive && s.peerSilentLocked() {
 			s.resetLocked()
 			utils.Infof("[SESSION] exit silent on every carrier for %v: handshaking again", timeout)
+		} else if !s.exit && s.ready && s.otherSession.After(s.peerHeard) && s.peerSilentLocked() {
+			// The exit talks, only not to this session: the client took a
+			// challenge the exit had dropped (it came late). Silence alone
+			// would not tell a client that does not know yet whether its
+			// exit answers pings.
+			s.resetLocked()
+			utils.Infof("[SESSION] the exit answers for another session for %v: handshaking again", timeout)
 		}
 		// A client learns that its exit answers pings from the first
 		// pong, and only then takes the exit's silence for a restart.
@@ -1665,6 +1675,9 @@ func (s *Session) receiveIPv4(link *transportLink, p []byte, env *control.Envelo
 	}
 	if env.Local != s.peer || env.Peer != s.local {
 		s.cntDataDrop.Add(1)
+		if !s.exit {
+			s.otherSession = time.Now()
+		}
 		s.mu.Unlock()
 		utils.Debugf("[SESSION] IPv4 from %q dropped: challenge mismatch", link.name)
 		return
@@ -1714,6 +1727,9 @@ func (s *Session) receiveControl(link *transportLink, p []byte, env *control.Env
 		return
 	}
 	if env.Local != s.peer || env.Peer != s.local {
+		if !s.exit {
+			s.otherSession = time.Now()
+		}
 		s.mu.Unlock()
 		utils.Debugf("[SESSION] control from %q dropped: challenge mismatch", link.name)
 		return
