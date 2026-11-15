@@ -311,15 +311,18 @@ func (t *TelemostTransport) Stop() error {
 	return t.BaseTransport.Stop()
 }
 
+// telemostAPI is the conference API; a test points it at a fake.
+var telemostAPI = "https://cloud-api.yandex.ru/telemost_front/v2/telemost"
+
 func (t *TelemostTransport) getConnectionInfo() error {
 	client := &http.Client{Timeout: 15 * time.Second}
 	var apiURL, method string
 	if t.conferenceURL != "" {
 		encodedURL := url.QueryEscape(t.conferenceURL)
-		apiURL = fmt.Sprintf("https://cloud-api.yandex.ru/telemost_front/v2/telemost/conferences/%s/connection?next_gen_media_platform_allowed=true&waiting_room_supported=true", encodedURL)
+		apiURL = fmt.Sprintf("%s/conferences/%s/connection?next_gen_media_platform_allowed=true&waiting_room_supported=true", telemostAPI, encodedURL)
 		method = "GET"
 	} else {
-		apiURL = "https://cloud-api.yandex.ru/telemost_front/v2/telemost/conferences?next_gen_media_platform_allowed=true"
+		apiURL = telemostAPI + "/conferences?next_gen_media_platform_allowed=true"
 		method = "POST"
 	}
 	var reqBody io.Reader
@@ -439,6 +442,9 @@ func (t *TelemostTransport) connectWS(attempt int) {
 }
 
 func (t *TelemostTransport) scheduleReconnect(attempt int) {
+	if t.lane != nil && t.lane.group.rejoin(t) {
+		return
+	}
 	next := attempt + 1
 	if !t.IsRunning() || next >= t.GetConfig().MaxReconnectAttempts {
 		return
