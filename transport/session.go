@@ -1523,6 +1523,10 @@ func (s *Session) receiveHello(link *transportLink, env *control.Envelope) {
 	var names []string
 	if changed || (!wasReady && echo) || (wasReady && env.Hello.Ready == 0) {
 		names = append(names, s.order...)
+	} else if zero {
+		// The peer has not heard our answer yet: it was lost (an exit sends
+		// hellos only in answer). Answer again where this one came from.
+		names = append(names, link.name)
 	}
 	peer := s.peer
 	s.mu.Unlock()
