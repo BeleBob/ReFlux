@@ -372,6 +372,9 @@ func (s *StripedTransport) pump(idx int, l Transport, wake chan struct{}) {
 		case <-wake:
 		case <-t.C:
 		}
+		if s.laneAt(idx) != l {
+			return // replaced (SwapLane): the new lane has a pump of its own
+		}
 		for {
 			frames := s.pull(idx, 64)
 			for _, f := range frames {

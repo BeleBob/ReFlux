@@ -13,7 +13,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/p1neappleXpress/OpenFlux/transport"
 	"github.com/p1neappleXpress/OpenFlux/transport/avito"
@@ -172,7 +171,10 @@ func newTelemost(url string, params map[string]interface{}, o Options) transport
 	}
 	g := yandex.NewTelemostGroup(str("cookies"), url, n, o.IsExit, o.Base)
 	stripe := transport.NewStripedTransportAuto(g.Lanes(), g, maxLanes, auto)
-	stripe.SetHealthDeadline(60 * time.Second)
+	// A lane that drops joins the room again as a new participant in its
+	// place (TelemostGroup.rejoin), so the stripe never closes itself when
+	// every lane is down: in a Session nobody would start it again.
+	g.SetSwapHook(stripe.SwapLane)
 	return stripe
 }
 

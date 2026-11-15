@@ -54,6 +54,7 @@ type TelemostGroup struct {
 	mu      sync.Mutex
 	lanes   []*TelemostTransport
 	grow    func()
+	swap    func(int, transport.Transport) // SetSwapHook
 	growing atomic.Bool
 	silent  map[string]time.Time // peers a lane watched and got nothing from
 
@@ -189,16 +190,23 @@ func (g *TelemostGroup) Lanes() []transport.Transport {
 }
 
 func (g *TelemostGroup) newLane() *TelemostTransport {
+	g.mu.Lock()
+	t := g.laneAt(len(g.lanes))
+	g.lanes = append(g.lanes, t)
+	g.mu.Unlock()
+	return t
+}
+
+// laneAt builds lane idx of the group: a participant named with the
+// group's tag for that index.
+func (g *TelemostGroup) laneAt(idx int) *TelemostTransport {
 	t := NewTelemostTransport(g.cookies, g.url, g.isExit, g.config)
 	if os.Getenv("TELEMOST_PUBLISH_KIND") == "" {
 		t.publishKind = kindCamera // a room has one screen share; lanes are many
 	}
-	g.mu.Lock()
-	t.lane = &stripeLane{group: g, index: len(g.lanes), parts: map[string]tmPart{}, lastReq: -1}
-	tag := laneTag{role: roleName(g.isExit), group: g.id, start: g.start, index: len(g.lanes)}
+	t.lane = &stripeLane{group: g, index: idx, parts: map[string]tmPart{}, lastReq: -1}
+	tag := laneTag{role: roleName(g.isExit), group: g.id, start: g.start, index: idx}
 	t.laneName = participantName + tag.hidden()
-	g.lanes = append(g.lanes, t)
-	g.mu.Unlock()
 	return t
 }
 
