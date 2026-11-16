@@ -6,6 +6,7 @@ package mobile
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,7 +45,7 @@ type packetClient struct {
 	// was in Start stops its own transport.
 	gen     uint64
 	packets [][]byte
-	logs    []string
+	logs    []logLine
 	// arrived is signalled when a packet is queued, for ReadTimeout.
 	arrived chan struct{}
 }
@@ -68,13 +69,34 @@ func SetLowMemory(on bool) {
 // and with packet logs on (hundreds of lines a second) that held them up.
 const keptLogs = 500
 
+// logLine is a pending log line with the time it was written: the app
+// reads the lines in batches - not at all while its service is stopped -
+// and stamping them when read put a stop at the time of the next start.
+type logLine struct {
+	at   time.Time
+	text string
+}
+
 func appendLog(message string) {
+	now := time.Now()
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	client.logs = append(client.logs, message)
+	client.logs = append(client.logs, logLine{now, message})
 	if len(client.logs) > 2*keptLogs {
-		client.logs = append([]string(nil), client.logs[len(client.logs)-keptLogs:]...)
+		client.logs = append([]logLine(nil), client.logs[len(client.logs)-keptLogs:]...)
 	}
+}
+
+// takeLogs returns and clears the newest keptLogs pending lines.
+func takeLogs() []logLine {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	lines := client.logs
+	if len(lines) > keptLogs {
+		lines = lines[len(lines)-keptLogs:]
+	}
+	client.logs = nil
+	return lines
 }
 
 // Start connects the packet transport in classic single-transport mode.
@@ -290,6 +312,7 @@ func newRawTransport(typ, url string, params map[string]interface{}, config tran
 func Stop() {
 	client.mu.Lock()
 	trans := client.transport
+	wasRunning := client.running || trans != nil
 	client.running = false
 	client.gen++
 	client.transport = nil
@@ -303,7 +326,11 @@ func Stop() {
 	if pr := active.Swap(nil); pr != nil {
 		pr.close()
 	}
-	appendLog("[ANDROID] Остановка транспорта")
+	// The app stops the core more than once on the way down (the stop, then
+	// the service's onDestroy): say it once.
+	if wasRunning {
+		appendLog("[ANDROID] Остановка транспорта")
+	}
 	if trans != nil {
 		_ = trans.Stop()
 	}
@@ -371,13 +398,34 @@ func ReadTimeout(timeoutMs int) []byte {
 
 // ReadLogs returns and clears the pending log lines.
 func ReadLogs() string {
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	lines := client.logs
-	if len(lines) > keptLogs {
-		lines = lines[len(lines)-keptLogs:]
+	var b strings.Builder
+	for i, l := range takeLogs() {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(l.text)
 	}
-	logs := strings.Join(lines, "\n")
-	client.logs = nil
-	return logs
+	return b.String()
+}
+
+// logRecordSeparator (ASCII RS) separates the records ReadTimedLogs
+// returns. Not exported: gomobile writes a "\x1e" constant into Java as is,
+// an escape javac rejects.
+const logRecordSeparator = "\x1e"
+
+// ReadTimedLogs returns and clears the pending log lines with the time each
+// was written: records "<unix milliseconds>\t<line>" separated by the
+// ASCII record separator, U+001E (a line may span several text lines: a
+// hexdump under its packet).
+func ReadTimedLogs() string {
+	var b strings.Builder
+	for i, l := range takeLogs() {
+		if i > 0 {
+			b.WriteString(logRecordSeparator)
+		}
+		b.WriteString(strconv.FormatInt(l.at.UnixMilli(), 10))
+		b.WriteByte('\t')
+		b.WriteString(l.text)
+	}
+	return b.String()
 }
