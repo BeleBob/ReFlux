@@ -312,6 +312,7 @@ func newRawTransport(typ, url string, params map[string]interface{}, config tran
 func Stop() {
 	client.mu.Lock()
 	trans := client.transport
+	wasRunning := client.running || trans != nil
 	client.running = false
 	client.gen++
 	client.transport = nil
@@ -325,7 +326,11 @@ func Stop() {
 	if pr := active.Swap(nil); pr != nil {
 		pr.close()
 	}
-	appendLog("[ANDROID] Остановка транспорта")
+	// The app stops the core more than once on the way down (the stop, then
+	// the service's onDestroy): say it once.
+	if wasRunning {
+		appendLog("[ANDROID] Остановка транспорта")
+	}
 	if trans != nil {
 		_ = trans.Stop()
 	}

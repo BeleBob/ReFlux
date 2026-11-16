@@ -64,3 +64,18 @@ func TestReadTimedLogsKeepsTheWriteTime(t *testing.T) {
 		t.Error("lines left after reading")
 	}
 }
+
+// A second Stop with nothing running logs nothing: the app stops the core
+// on the stop and again in its service's onDestroy, and the log said
+// "stopping" twice.
+func TestStopLogsOnce(t *testing.T) {
+	ReadLogs()
+	client.mu.Lock()
+	client.running = true
+	client.mu.Unlock()
+	Stop()
+	Stop()
+	if n := strings.Count(ReadLogs(), "Остановка транспорта"); n != 1 {
+		t.Fatalf("logged the stop %d times, want once", n)
+	}
+}
