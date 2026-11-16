@@ -934,6 +934,11 @@ type sender struct {
 	codelTarget             time.Duration // 0: codelTarget
 	codelInterval           time.Duration // 0: codelInterval
 	giveUp                  time.Duration // 0: giveUpAfter
+
+	// unheardSince is the first send since the far end last acked anything
+	// (zero: nothing sent since); see farSilentAfter.
+	unheardSince time.Time
+	silentLogged bool
 }
 
 // piece is the most one piece carries on this stripe.
@@ -1166,6 +1171,9 @@ func (q *sender) othersAlive(i int, now time.Time) bool {
 }
 
 func (q *sender) stamp(e *txEntry, lane int, now time.Time) {
+	if q.unheardSince.IsZero() {
+		q.unheardSince = now
+	}
 	q.laneTx[lane]++
 	e.lane, e.laneIdx, e.at = uint8(lane), q.laneTx[lane], now
 }
@@ -1276,6 +1284,7 @@ func (q *sender) onAck(b []byte, now time.Time) bool {
 	if d := int64(int32(hi - q.low)); d < -txRingSize-1 || d >= inflight {
 		return false
 	}
+	q.unheardSince, q.silentLogged = time.Time{}, false
 	var sample time.Duration
 	acked := func(sq uint32) {
 		e := &q.ring[sq%txRingSize]
@@ -1387,6 +1396,7 @@ func (q *sender) detectLoss(now time.Time) bool {
 func (q *sender) detectLocked(now time.Time) bool {
 	rto := q.rto()
 	added := false
+	silent := q.farSilent(now)
 	for x := q.low; seqBefore(x, q.seq+1); x++ {
 		e := &q.ring[x%txRingSize]
 		if !e.ok || e.seq != x {
@@ -1413,6 +1423,13 @@ func (q *sender) detectLocked(now time.Time) bool {
 			q.rtxTime++
 			q.leftLaneLocked(e)
 		}
+		if silent {
+			// Lost, but nobody is there to resend it to: give it up now.
+			e.ok, e.buf, e.queued = false, nil, false
+			q.gaveUp++
+			q.leftLaneLocked(e)
+			continue
+		}
 		q.lane[e.lane].lostOne()
 		e.queued = true
 		q.rtxQ = append(q.rtxQ, x)
@@ -1437,6 +1454,27 @@ func (q *sender) leftLaneLocked(e *txEntry) {
 	if e.laneIdx > q.laneAck[e.lane] {
 		q.laneAck[e.lane] = e.laneIdx
 	}
+}
+
+// farSilentAfter is how long the far end may ack nothing of what was sent
+// before the sender stops resending: it is gone (the phone handed the VPN to
+// another app, the app stopped), and resends only spend the carriers'
+// message budget - cups.online counts messages per IP, for every client of
+// the server - for hours. New pieces still go out once each, and the first
+// ack brings the resends back.
+var farSilentAfter = 2 * time.Minute
+
+// farSilent reports whether the far end has acked nothing for farSilentAfter
+// while pieces went out.
+func (q *sender) farSilent(now time.Time) bool {
+	if q.unheardSince.IsZero() || now.Sub(q.unheardSince) < farSilentAfter {
+		return false
+	}
+	if !q.silentLogged {
+		q.silentLogged = true
+		utils.Debugf("[STRIPE] the far end has acked nothing for %s: no resends until it does", now.Sub(q.unheardSince).Round(time.Second))
+	}
+	return true
 }
 
 // giveUpAfter is how long the sender keeps resending a piece: longer than the

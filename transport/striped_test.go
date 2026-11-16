@@ -270,6 +270,59 @@ func TestSenderGivesUpOnAGoneReceiver(t *testing.T) {
 	}
 }
 
+// A far end that acks nothing for farSilentAfter is gone: the sender stops
+// resending (the exit resent to a phone that had switched to another VPN for
+// hours, spending cups.online's per-IP message budget), sends new pieces
+// once, and resends again after the first ack.
+func TestSenderStopsResendingToASilentPeer(t *testing.T) {
+	var q sender
+	q.init()
+	now := time.Now()
+	q.lane[0].start(now)
+	q.lane[0].tokens = 100
+	send := func(at time.Time) uint32 {
+		q.enqueue([]byte{1})
+		if out := q.pull(0, 1, at); len(out) != 1 {
+			t.Fatalf("pulled %d", len(out))
+		}
+		return q.seq
+	}
+	lost := func(at time.Time) time.Time { return at.Add(2 * q.rto()) }
+
+	// Within the window a lost piece is resent.
+	send(now)
+	q.detectLoss(lost(now))
+	if len(q.rtxQ) != 1 || q.gaveUp != 0 {
+		t.Fatalf("rtxQ=%v gaveUp=%d: a lost piece of a fresh run must be resent", q.rtxQ, q.gaveUp)
+	}
+
+	// Past it, a lost piece is given up at once.
+	later := now.Add(farSilentAfter + time.Second)
+	q.lane[0].tokens = 100
+	q.pull(0, 1, later) // the queued resend goes out
+	sq := send(later)
+	gave := q.gaveUp
+	q.detectLoss(lost(later))
+	if len(q.rtxQ) != 0 || q.gaveUp != gave+2 {
+		t.Fatalf("rtxQ=%v gaveUp=%d (was %d): a silent peer still gets resends", q.rtxQ, q.gaveUp, gave)
+	}
+	if q.low != q.seq+1 {
+		t.Fatalf("low=%d seq=%d: given-up pieces still hold the window", q.low, q.seq)
+	}
+
+	// The first ack brings resends back.
+	r := newReorderBuffer(func([]byte, bool) {})
+	r.push(sq, sq, []byte{0})
+	back := later.Add(time.Minute)
+	q.onAck(r.ackFrame(), back)
+	q.lane[0].tokens = 100
+	send(back)
+	q.detectLoss(lost(back))
+	if len(q.rtxQ) != 1 {
+		t.Fatalf("rtxQ=%v: resends did not come back after an ack", q.rtxQ)
+	}
+}
+
 // A resent piece acked sooner than a round trip after the resend came in on
 // its earlier copy, so its lane is not credited with it - but it must still
 // leave the lane's window. A lane whose window filled with such pieces sent
