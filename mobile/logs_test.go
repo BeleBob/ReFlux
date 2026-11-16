@@ -43,7 +43,7 @@ func TestReadTimedLogsKeepsTheWriteTime(t *testing.T) {
 	appendLog("second\n  0000 45 00")
 	written := time.Now()
 	time.Sleep(300 * time.Millisecond)
-	records := strings.Split(ReadTimedLogs(), LogRecordSeparator)
+	records := strings.Split(ReadTimedLogs(), logRecordSeparator)
 	if len(records) != 2 {
 		t.Fatalf("%d records: %q", len(records), records)
 	}

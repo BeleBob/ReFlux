@@ -403,18 +403,20 @@ func ReadLogs() string {
 	return b.String()
 }
 
-// LogRecordSeparator separates the records ReadTimedLogs returns.
-const LogRecordSeparator = "\x1e"
+// logRecordSeparator (ASCII RS) separates the records ReadTimedLogs
+// returns. Not exported: gomobile writes a "\x1e" constant into Java as is,
+// an escape javac rejects.
+const logRecordSeparator = "\x1e"
 
 // ReadTimedLogs returns and clears the pending log lines with the time each
-// was written: records "<unix milliseconds>\t<line>" separated by
-// LogRecordSeparator (a line may span several text lines: a hexdump under
-// its packet).
+// was written: records "<unix milliseconds>\t<line>" separated by the
+// ASCII record separator, U+001E (a line may span several text lines: a
+// hexdump under its packet).
 func ReadTimedLogs() string {
 	var b strings.Builder
 	for i, l := range takeLogs() {
 		if i > 0 {
-			b.WriteString(LogRecordSeparator)
+			b.WriteString(logRecordSeparator)
 		}
 		b.WriteString(strconv.FormatInt(l.at.UnixMilli(), 10))
 		b.WriteByte('\t')
